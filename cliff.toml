@@ -2,7 +2,10 @@
 # See README "Releasing" section for how this is invoked.
 
 [git]
-conventional_commits = false
+conventional_commits = true
+# Keep legacy / non-conventional PR titles instead of dropping them — they
+# still match the catch-all parser below and land under "Changes".
+filter_unconventional = false
 # Drop unmatched commits → keeps only the merge commits we transform below
 # (effectively `git log --first-parent main`).
 filter_commits = true
@@ -12,13 +15,31 @@ commit_preprocessors = [
   { pattern = '\s*https://claude\.ai/code/\S+', replace = "" },
   # "Merge pull request #48 from foo\n\nAdd track preview" → "Add track preview (#48)"
   { pattern = '^Merge pull request #(\d+) from \S+\s+(.+)', replace = '${2} (#${1})' },
+  # GitHub escapes ampersands etc. in PR titles when generating the merge body.
+  { pattern = '&amp;',  replace = '&' },
+  { pattern = '&lt;',   replace = '<' },
+  { pattern = '&gt;',   replace = '>' },
+  { pattern = '&quot;', replace = '"' },
+  { pattern = '&#39;',  replace = "'" },
 ]
 
-# First match wins. Anything not ending in "(#N)" is a non-merge commit → skip.
+# First match wins. Each conventional-commit parser also requires "(#N)$" so
+# non-merge commits on the branch (e.g. individual `feat(...)` commits inside
+# a PR) drop out — only the squashed merge commit reaches the changelog.
+# Group prefixes "<!-- N -->" sort sections deterministically in
+# `group_by(attribute="group")` and are stripped at render time. The numbers
+# also enforce order: Features above Bug Fixes above Other, etc.
 commit_parsers = [
   { message = '\[skip-changelog\]', skip = true },
   { message = '^(chore|ci|docs)(\(|:|\b)', skip = true },
-  { message = '\(#\d+\)$', group = 'Changes' },
+  { message = '^feat.*\(#\d+\)$',     group = '<!-- 0 -->Features' },
+  { message = '^fix.*\(#\d+\)$',      group = '<!-- 1 -->Bug Fixes' },
+  { message = '^perf.*\(#\d+\)$',     group = '<!-- 2 -->Performance' },
+  { message = '^refactor.*\(#\d+\)$', group = '<!-- 3 -->Refactoring' },
+  { message = '^test.*\(#\d+\)$',     group = '<!-- 4 -->Tests' },
+  # Catch-all for legacy / non-conventional PR titles that still ended in (#N)
+  # (everything merged before the conventional-commit migration).
+  { message = '\(#\d+\)$', group = '<!-- 5 -->Changes' },
   { message = '.*', skip = true },
 ]
 
@@ -29,9 +50,10 @@ commit_parsers = [
 [changelog]
 body = """
 ## {% if version %}{{ version }} — {{ timestamp | date(format="%Y-%m-%d") }}{% else %}Unreleased{% endif %}
-
-{% for commit in commits %}- {{ commit.message | upper_first }}
-{% endfor %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | replace(from="<!-- 0 -->", to="") | replace(from="<!-- 1 -->", to="") | replace(from="<!-- 2 -->", to="") | replace(from="<!-- 3 -->", to="") | replace(from="<!-- 4 -->", to="") | replace(from="<!-- 5 -->", to="") }}
+{% for commit in commits %}- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.conv.description | default(value=commit.message) | upper_first }}
+{% endfor %}{% endfor %}
 """
 # trim=false keeps the trailing blank line so consecutive --prepend runs
 # don't glue the last bullet of the new section to the next "## v..." header.
