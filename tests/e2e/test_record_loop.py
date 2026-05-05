@@ -7,13 +7,11 @@ This is the only test that exercises the real ffmpeg pipeline
 FLAC). The compose stack itself is brought up by the session-scoped
 `stack` fixture in conftest.py.
 """
-import json
-import subprocess
 import time
 
 import pytest
 
-from .conftest import RECORDER_URL, STREAM_URL, http_json
+from .conftest import RECORDER_URL, STREAM_URL, ffprobe, http_json
 
 pytestmark = pytest.mark.e2e
 
@@ -54,11 +52,7 @@ def test_record_3s_from_loop(stack):
 
     # Probe the FLAC — confirms ffmpeg actually finalized the file rather
     # than leaving a 0-byte stub on a SIGINT race.
-    info = json.loads(subprocess.check_output(
-        ["ffprobe", "-v", "error", "-print_format", "json",
-         "-show_streams", "-show_format", str(fpath)],
-        text=True,
-    ))
+    info = ffprobe(fpath)
     s = info["streams"][0]
     assert s["codec_name"] == "flac"
     assert int(s["sample_rate"]) == 96000

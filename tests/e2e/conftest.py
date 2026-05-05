@@ -71,6 +71,24 @@ def wait_for_upstream_connected(timeout: float = 45.0) -> dict:
     )
 
 
+def ffprobe(host_path: Path) -> dict:
+    """Probe a FLAC using ffprobe inside the vinyl-recorder container.
+
+    The container mounts ./output:/output, so host paths under REPO_ROOT/output
+    map directly to /output/... inside the container. This avoids any host-side
+    ffmpeg dependency.
+    """
+    rel = Path(host_path).relative_to(REPO_ROOT / "output")
+    container_path = f"/output/{rel}"
+    r = subprocess.run(
+        ["docker", "exec", "vinyl-recorder",
+         "ffprobe", "-v", "error", "-print_format", "json",
+         "-show_streams", "-show_format", container_path],
+        capture_output=True, text=True, check=True,
+    )
+    return json.loads(r.stdout)
+
+
 @pytest.fixture(scope="session")
 def stack():
     """Bring the full vinyl-recorder + test-streams compose stack up

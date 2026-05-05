@@ -6,13 +6,11 @@ test_crash_recovery.py.
 This is one of PR #36's unchecked "60-second duration limit" test items.
 We use a 5 s duration here instead of 60 — same code path, faster CI.
 """
-import json
-import subprocess
 import time
 
 import pytest
 
-from .conftest import RECORDER_URL, STREAM_URL, http_json
+from .conftest import RECORDER_URL, STREAM_URL, ffprobe, http_json
 
 pytestmark = pytest.mark.e2e
 
@@ -62,11 +60,7 @@ def test_duration_limit_auto_stops(stack):
     assert fpath.exists(), f"FLAC missing at {fpath}"
     assert fpath.stat().st_size > 0
 
-    info = json.loads(subprocess.check_output(
-        ["ffprobe", "-v", "error", "-print_format", "json",
-         "-show_streams", "-show_format", str(fpath)],
-        text=True,
-    ))
+    info = ffprobe(fpath)
     assert info["streams"][0]["codec_name"] == "flac"
     duration = float(info["format"]["duration"])
     # ffmpeg's `-t 3` produces ~3 s; allow some slack on slow runners but

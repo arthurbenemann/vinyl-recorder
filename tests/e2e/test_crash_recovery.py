@@ -19,7 +19,6 @@ This test mutates the compose stack (stops `test-streams`); it restores
 it in the cleanup so subsequent tests in the session see a healthy
 stack again.
 """
-import json
 import subprocess
 import time
 
@@ -29,6 +28,7 @@ from .conftest import (
     RECORDER_URL,
     STREAM_URL,
     compose,
+    ffprobe,
     http_json,
     wait_for_upstream_connected,
 )
@@ -101,11 +101,7 @@ def test_kill_upstream_mid_recording_reaps_session(stack):
         assert fpath not in pre_files
         assert fpath.stat().st_size > 0, "FLAC is 0 bytes — finalize didn't flush"
 
-        info = json.loads(subprocess.check_output(
-            ["ffprobe", "-v", "error", "-print_format", "json",
-             "-show_streams", "-show_format", str(fpath)],
-            text=True,
-        ))
+        info = ffprobe(fpath)
         s = info["streams"][0]
         assert s["codec_name"] == "flac"
         # ~2 s of recording before kill + watcher latency. The upper bound is
