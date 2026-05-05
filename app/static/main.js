@@ -732,7 +732,7 @@ async function bulkDelete() {
       body: JSON.stringify({filenames: names})
     });
     const d = await r.json();
-    toast(`✕ Deleted ${d.deleted.length} file${d.deleted.length===1?'':'s'}`,
+    toast(`✓ Deleted ${d.deleted.length} file${d.deleted.length===1?'':'s'}`,
           d.missing?.length ? 'err' : 'ok');
     selected.clear();
     refreshLib();
@@ -824,10 +824,13 @@ function refreshLibRender() {
 }
 
 async function deleteFile(fname) {
-  if (!confirm(`Delete ${fname}?`)) return;
-  await fetch(`/api/recordings/${encodeURIComponent(fname)}`, { method: 'DELETE' });
-  selected.delete(fname);
-  refreshLib();
+  if (!confirm(`Delete ${fname}? This cannot be undone.`)) return;
+  try {
+    const r = await fetch(`/api/recordings/${encodeURIComponent(fname)}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error(await parseError(r));
+    selected.delete(fname);
+    refreshLib();
+  } catch (e) { toast('✗ delete failed: ' + e.message, 'err'); }
 }
 
 // Inline rename for untagged rows. Double-clicking the title swaps it for an
@@ -913,7 +916,7 @@ function toggleAlbumRow(fname, checked) {
 function toggleAllAlbums(checked) {
   if (checked) Object.keys(albumsByName).forEach(fn => albumsSelected.add(fn));
   else albumsSelected.clear();
-  refreshAlbums();
+  document.querySelectorAll('.album-row-check').forEach(cb => { cb.checked = checked; });
   updateAlbumsBulkBar();
 }
 
@@ -931,7 +934,7 @@ async function bulkDeleteAlbums() {
     try { await fetch(`/api/albums/${encodeURIComponent(fn)}`, { method: 'DELETE' }); }
     catch (e) { console.error(e); }
   }
-  log(`✕ Deleted ${names.length} album(s)`, 'ok');
+  toast(`✓ Deleted ${names.length} album${names.length === 1 ? '' : 's'}`, 'ok');
   albumsSelected.clear();
   refreshAlbums();
 }
@@ -961,8 +964,8 @@ function refreshAlbumsRender() {
   const countEl = document.getElementById('albums-count');
   if (countEl) {
     countEl.textContent = filterActive
-      ? `${shown} of ${total}`
-      : `${total}`;
+      ? `${shown} of ${total} album${total === 1 ? '' : 's'}`
+      : `${total} album${total === 1 ? '' : 's'}`;
   }
   const tbody = document.getElementById('albums-tbody');
   if (!tbody) return;
@@ -1024,7 +1027,7 @@ async function deleteAlbum(fname) {
   if (!confirm(`Delete album ${fname}? Sides remain in the library.`)) return;
   const r = await fetch(`/api/albums/${encodeURIComponent(fname)}`, { method: 'DELETE' });
   if (r.ok) {
-    toast(`✕ Album deleted — ${fname}`, 'ok');
+    toast(`✓ Album deleted — ${fname}`, 'ok');
     refreshAlbums();
   } else {
     toast('✗ delete failed', 'err');
