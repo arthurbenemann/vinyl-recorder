@@ -42,6 +42,13 @@ try:
 except ValueError:
     PRE_ROLL_SECONDS = 5
 
+# Discogs collection-aware tagging. When set, the auto-tag candidate panel
+# surfaces matches from the user's Discogs collection in a separate section
+# above the MusicBrainz results. DISCOGS_TOKEN is optional but raises rate
+# limits and is required if the collection is private.
+DISCOGS_USERNAME = os.getenv("DISCOGS_USERNAME", "").strip()
+DISCOGS_TOKEN    = os.getenv("DISCOGS_TOKEN",    "").strip()
+
 DEFAULT_SPLIT_NORMALIZE = os.getenv("DEFAULT_SPLIT_NORMALIZE", "true").strip().lower() in ("1", "true", "yes", "on")
 DEFAULT_SPLIT_TARGET_PEAK_DB = float(os.getenv("DEFAULT_SPLIT_TARGET_PEAK_DB", "-1.0"))
 DEFAULT_SPLIT_BIT_DEPTH = int(os.getenv("DEFAULT_SPLIT_BIT_DEPTH", "0"))
@@ -89,6 +96,7 @@ class ApplyRequest(BaseModel):
     filename: str
     fields: TagEdit
     mbid: Optional[str] = None  # if set, fetch + embed cover art via CAA / Discogs
+    discogs_release_id: Optional[int] = None  # persisted as DISCOGS_RELEASE_ID
 
 
 class CombineRequest(BaseModel):

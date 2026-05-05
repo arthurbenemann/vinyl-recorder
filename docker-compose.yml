@@ -33,4 +33,10 @@ services:
       # Output bit depth for split tracks. 0 = keep source (24-bit from the Pi),
       # 16 = downconvert to 16-bit (≈30% smaller files, plenty for vinyl), 24 = force 24-bit.
       - DEFAULT_SPLIT_BIT_DEPTH=0
+      # Discogs collection-aware tagging. When DISCOGS_USERNAME is set, the auto-tag
+      # candidate panel surfaces matches from your owned collection above the
+      # MusicBrainz results. DISCOGS_TOKEN is optional — it raises Discogs API rate
+      # limits and is required for private collections. Leave both blank to disable.
+      - DISCOGS_USERNAME=
+      - DISCOGS_TOKEN=
     restart: unless-stopped

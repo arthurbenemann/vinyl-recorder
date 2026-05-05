@@ -1293,6 +1293,7 @@ async function runPromote() {
 
 // ── Tag panel ─────────────────────────────────────────────────────────────
 let tagPanelMbid = null;        // mbid of currently-picked candidate (drives cover embed on apply)
+let tagPanelDiscogsId = null;   // Discogs release id — persisted so the wave editor can auto-load tracks later
 let tagPanelCandidates = [];
 
 function setLeft(fields) {
@@ -1324,6 +1325,7 @@ function openTag(fname) {
   const f = filesByName[fname];
   if (!f) return;
   tagPanelMbid = null;
+  tagPanelDiscogsId = null;
   tagPanelCandidates = [];
   document.getElementById('tag-filename').textContent = fname;
   setLeft({
@@ -1363,6 +1365,56 @@ function parseQuery(q) {
   return { artist: q.trim(), album: q.trim() };
 }
 
+// Tag-panel candidate state — collection matches live alongside MB matches
+// in two parallel arrays. `pickCandidate(i)` indexes into MB; collection
+// picks go through `pickCollectionCandidate(release_id)` instead.
+let tagPanelCollectionCandidates = [];
+
+function _renderMbCard(c, i) {
+  return `
+    <div class="candidate" data-i="${i}" onclick="pickCandidate(${i})">
+      <div class="candidate-thumb"><img src="/api/cover/${c.mbid}" loading="lazy" onerror="this.remove()"></div>
+      <div class="candidate-body">
+        <div class="candidate-title">
+          <span class="ct-text">${htmlEscape(c.title)}</span>
+          ${c.score != null ? `<span class="score">${c.score}%</span>` : ''}
+        </div>
+        <div class="candidate-sub">
+          ${htmlEscape(c.artist)} · ${htmlEscape(c.year || '?')}
+          ${c.label ? '· ' + htmlEscape(c.label) : ''}
+          ${c.catalog_number ? '<span class="pill">' + htmlEscape(c.catalog_number) + '</span>' : ''}
+          ${c.country ? '<span class="pill">' + htmlEscape(c.country) + '</span>' : ''}
+          ${c.format ? '<span class="pill">' + htmlEscape(c.format) + '</span>' : ''}
+          <a class="ext-link" href="https://musicbrainz.org/release/${c.mbid}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on MusicBrainz">↗ MB</a>
+        </div>
+      </div>
+    </div>`;
+}
+
+function _renderCollectionCard(c) {
+  // External cover image straight from Discogs CDN — no /api/cover proxy
+  // path because we only have that for MB releases. The thumb fails open.
+  const img = c.cover_url ? `<img src="${htmlEscape(c.cover_url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : '';
+  const dUrl = `https://www.discogs.com/release/${c.discogs_release_id}`;
+  return `
+    <div class="candidate collection-cand" data-rid="${c.discogs_release_id}" onclick="pickCollectionCandidate(${c.discogs_release_id})">
+      <div class="candidate-thumb">${img}</div>
+      <div class="candidate-body">
+        <div class="candidate-title">
+          <span class="ct-text">${htmlEscape(c.title)}</span>
+          ${c.score != null ? `<span class="score">${c.score}%</span>` : ''}
+        </div>
+        <div class="candidate-sub">
+          ${htmlEscape(c.artist)} · ${htmlEscape(c.year || '?')}
+          ${c.label ? '· ' + htmlEscape(c.label) : ''}
+          ${c.catno ? '<span class="pill">' + htmlEscape(c.catno) + '</span>' : ''}
+          ${c.format ? '<span class="pill">' + htmlEscape(c.format) + '</span>' : ''}
+          <a class="ext-link" href="${dUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on Discogs">↗ Discogs</a>
+        </div>
+      </div>
+    </div>`;
+}
+
 async function runSearch() {
   const q = document.getElementById('t-search-q').value.trim();
   if (!q) return;
@@ -1381,35 +1433,81 @@ async function runSearch() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     tagPanelCandidates = d.candidates || [];
-    if (!tagPanelCandidates.length) {
+    tagPanelCollectionCandidates = d.collection_candidates || [];
+    const mbN = tagPanelCandidates.length;
+    const colN = tagPanelCollectionCandidates.length;
+    if (!mbN && !colN) {
       list.innerHTML = '<div class="empty-results">No matches. Try editing the search above.</div>';
       document.getElementById('t-search-status').textContent = '';
       return;
     }
-    document.getElementById('t-search-status').textContent =
-      `${tagPanelCandidates.length} match${tagPanelCandidates.length===1?'':'es'} — click to load details`;
-    list.innerHTML = tagPanelCandidates.map((c, i) => `
-      <div class="candidate" data-i="${i}" onclick="pickCandidate(${i})">
-        <div class="candidate-thumb"><img src="/api/cover/${c.mbid}" loading="lazy" onerror="this.remove()"></div>
-        <div class="candidate-body">
-          <div class="candidate-title">
-            <span class="ct-text">${htmlEscape(c.title)}</span>
-            ${c.score != null ? `<span class="score">${c.score}%</span>` : ''}
-          </div>
-          <div class="candidate-sub">
-            ${htmlEscape(c.artist)} · ${htmlEscape(c.year || '?')}
-            ${c.label ? '· ' + htmlEscape(c.label) : ''}
-            ${c.catalog_number ? '<span class="pill">' + htmlEscape(c.catalog_number) + '</span>' : ''}
-            ${c.country ? '<span class="pill">' + htmlEscape(c.country) + '</span>' : ''}
-            ${c.format ? '<span class="pill">' + htmlEscape(c.format) + '</span>' : ''}
-            <a class="ext-link" href="https://musicbrainz.org/release/${c.mbid}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on MusicBrainz">↗ MB</a>
-          </div>
-        </div>
-      </div>
-    `).join('');
+    const status =
+      (colN ? `${colN} from your collection` : '') +
+      (colN && mbN ? ' · ' : '') +
+      (mbN ? `${mbN} from MusicBrainz` : '') +
+      ' — click to load details';
+    document.getElementById('t-search-status').textContent = status;
+    let html = '';
+    if (colN) {
+      html += '<div class="cand-section-header">From your collection</div>';
+      html += tagPanelCollectionCandidates.map(_renderCollectionCard).join('');
+    }
+    if (mbN) {
+      if (colN) html += '<div class="cand-section-header">MusicBrainz results</div>';
+      html += tagPanelCandidates.map((c, i) => _renderMbCard(c, i)).join('');
+    }
+    list.innerHTML = html;
   } catch (e) {
     list.innerHTML = `<div class="empty-results err">search failed: ${htmlEscape(e.message)}</div>`;
     document.getElementById('t-search-status').textContent = '';
+  }
+}
+
+async function pickCollectionCandidate(releaseId) {
+  const c = tagPanelCollectionCandidates.find(x => x.discogs_release_id === releaseId);
+  if (!c) return;
+  document.querySelectorAll('.candidate').forEach(el =>
+    el.classList.toggle('active', Number(el.dataset.rid) === releaseId));
+  document.getElementById('t-search-status').textContent = `loading ${c.title}…`;
+  try {
+    const r = await fetch(`/api/release/discogs/${releaseId}`);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    // Picking a Discogs-only candidate means we don't have an MBID to pass
+    // to /api/apply (which uses the MBID to fetch CAA cover art). Clear the
+    // panel-level mbid so apply doesn't try to embed a stale cover.
+    tagPanelMbid = null;
+    tagPanelDiscogsId = releaseId;
+    setLeft({
+      album: d.title, artist: d.artist, year: d.year, genre: d.genre,
+      label: d.label, catalog_number: d.catalog_number, country: d.country,
+      format: d.format, tracks: d.tracks,
+    });
+    if (d.cover_url) setCover(d.cover_url);
+    const links = d.discogs_url
+      ? `<a class="ext-link" href="${d.discogs_url}" target="_blank" rel="noopener">↗ Discogs</a>`
+      : '';
+    document.getElementById('t-search-status').innerHTML =
+      `loaded · from your collection · ${links}`;
+  } catch (e) {
+    document.getElementById('t-search-status').textContent = 'load failed: ' + e.message;
+  }
+}
+
+async function refreshCollection() {
+  const btn = document.getElementById('t-collection-refresh');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch('/api/collection/refresh', { method: 'POST' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    toast(`✓ Discogs collection refreshed (${d.count} releases)`, 'ok');
+    // Re-run the current search so the new cache is reflected immediately.
+    if (document.getElementById('t-search-q').value.trim()) runSearch();
+  } catch (e) {
+    toast('✗ ' + e.message, 'err');
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1423,6 +1521,7 @@ async function pickCandidate(i) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     tagPanelMbid = d.mbid;
+    tagPanelDiscogsId = d.discogs_id || null;
     setLeft({
       album: d.title, artist: d.artist, year: d.year, genre: d.genre,
       label: d.label, catalog_number: d.catalog_number, country: d.country,
@@ -1463,13 +1562,18 @@ async function applyTagPanel() {
   try {
     const r = await fetch('/api/apply', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ filename: fname, fields, mbid: tagPanelMbid })
+      body: JSON.stringify({
+        filename: fname, fields,
+        mbid: tagPanelMbid,
+        discogs_release_id: tagPanelDiscogsId,
+      })
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     toast(`✓ Tagged → ${d.filename}`, 'ok');
     closeTag();
-    refreshLib();
+    if (d.album) refreshAlbums();
+    else         refreshLib();
   } catch (e) { toast('✗ ' + e.message, 'err'); }
 }
 
@@ -1521,6 +1625,14 @@ async function applyConfig() {
       const sel = document.getElementById('we-bitdepth');
       const v = String(c.default_split_bit_depth);
       if ([...sel.options].some(o => o.value === v)) sel.value = v;
+    }
+    // Surface the "↻ collection" refresh button only when the server has
+    // a Discogs username configured. The collection section itself is
+    // server-driven (empty array → no header rendered) so no UI flag is
+    // needed for that.
+    if (c.discogs_collection_enabled) {
+      const btn = document.getElementById('t-collection-refresh');
+      if (btn) btn.hidden = false;
     }
     // auto_connect is now handled server-side at app startup; nothing to do
     // here besides letting the WS hello replay tell us the current state.

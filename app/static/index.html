@@ -271,9 +271,9 @@
       </span>
       <span class="grow"></span>
       <div class="we-suggest">
-        <button class="btn-small" onclick="weToggleSuggest('discogs')">suggest from Discogs ▾</button>
+        <button class="btn-small" onclick="weToggleSuggest('discogs')">suggested tracklist ▾</button>
         <div class="we-suggest-pop" id="we-pop-discogs" hidden>
-          <div class="col-label">Discogs / MusicBrainz tracklist</div>
+          <div class="col-label">Suggested tracklist</div>
           <div class="search-row">
             <input id="we-search-q" placeholder="artist + album" onkeydown="if(event.key==='Enter')weRunSearch()" />
             <button class="btn-small" onclick="weRunSearch()">search</button>
@@ -417,6 +417,7 @@
           <input id="t-search-q" placeholder="artist + album, e.g. Miles Davis Kind of Blue"
                  onkeydown="if(event.key==='Enter')runSearch()" />
           <button class="btn-small" onclick="runSearch()">search</button>
+          <button class="btn-small" id="t-collection-refresh" hidden onclick="refreshCollection()" title="Re-fetch your Discogs collection">↻ collection</button>
         </div>
         <div class="search-status" id="t-search-status"></div>
         <div class="candidates" id="t-candidates">

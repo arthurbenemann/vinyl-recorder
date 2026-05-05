@@ -164,7 +164,9 @@ function openWaveEditor(fname) {
   } else {
     // No draft — fall back to recreating cuts from the on-disk track list, so
     // a previously-split album can be re-edited rather than redone from scratch.
-    weLoadExistingSplit(fname);
+    // If neither source produced cuts, try the saved Discogs / MB id as a
+    // last resort so the user doesn't have to run the search manually.
+    weLoadExistingSplit(fname).then(() => _weAutoLoadFromIds(a));
   }
 }
 
@@ -807,7 +809,7 @@ async function weRunSearch() {
   body.album = (body.album || '').replace(/\s*\(\d{4}\)\s*$/, '').trim();
   const status = document.getElementById('we-search-status');
   const list   = document.getElementById('we-candidates');
-  status.textContent = 'searching MusicBrainz…';
+  status.textContent = 'searching MusicBrainz + your collection…';
   list.innerHTML = '';
   try {
     const r = await fetch('/api/search', {
@@ -816,34 +818,107 @@ async function weRunSearch() {
     });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
-    we.candidates = d.candidates || [];
-    if (!we.candidates.length) {
+    we.candidates           = d.candidates || [];
+    we.collectionCandidates = d.collection_candidates || [];
+    const mbN  = we.candidates.length;
+    const colN = we.collectionCandidates.length;
+    if (!mbN && !colN) {
       list.innerHTML = '<div class="empty-results" style="padding:14px;font-size:11px">No matches.</div>';
       status.textContent = '';
       return;
     }
-    status.textContent = `${we.candidates.length} match${we.candidates.length===1?'':'es'} — click to apply track durations`;
-    list.innerHTML = we.candidates.map((c, i) => `
-      <div class="candidate" onclick="wePickCandidate(${i})">
-        <div class="candidate-thumb"><img src="/api/cover/${c.mbid}" loading="lazy" onerror="this.remove()"></div>
-        <div class="candidate-body">
-          <div class="candidate-title">
-            <span class="ct-text">${htmlEscape(c.title)}</span>
-            ${c.score != null ? `<span class="score">${c.score}%</span>` : ''}
+    const summary =
+      (colN ? `${colN} from your collection` : '') +
+      (colN && mbN ? ' · ' : '') +
+      (mbN ? `${mbN} from MusicBrainz` : '') +
+      ' — click to apply track durations';
+    status.textContent = summary;
+    let html = '';
+    if (colN) {
+      html += '<div class="cand-section-header">From your collection</div>';
+      html += we.collectionCandidates.map(c => {
+        const img = c.cover_url
+          ? `<img src="${htmlEscape(c.cover_url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`
+          : '';
+        const dUrl = `https://www.discogs.com/release/${c.discogs_release_id}`;
+        return `
+          <div class="candidate collection-cand" onclick="wePickCollectionCandidate(${c.discogs_release_id})">
+            <div class="candidate-thumb">${img}</div>
+            <div class="candidate-body">
+              <div class="candidate-title">
+                <span class="ct-text">${htmlEscape(c.title)}</span>
+                ${c.score != null ? `<span class="score">${c.score}%</span>` : ''}
+              </div>
+              <div class="candidate-sub">
+                ${htmlEscape(c.artist)} · ${htmlEscape(c.year || '?')}
+                ${c.label ? '· ' + htmlEscape(c.label) : ''}
+                ${c.catno ? '<span class="pill">' + htmlEscape(c.catno) + '</span>' : ''}
+                ${c.format ? '<span class="pill">' + htmlEscape(c.format) + '</span>' : ''}
+                <a class="ext-link" href="${dUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on Discogs">↗ Discogs</a>
+              </div>
+            </div>
+          </div>`;
+      }).join('');
+    }
+    if (mbN) {
+      if (colN) html += '<div class="cand-section-header">MusicBrainz results</div>';
+      html += we.candidates.map((c, i) => `
+        <div class="candidate" onclick="wePickCandidate(${i})">
+          <div class="candidate-thumb"><img src="/api/cover/${c.mbid}" loading="lazy" onerror="this.remove()"></div>
+          <div class="candidate-body">
+            <div class="candidate-title">
+              <span class="ct-text">${htmlEscape(c.title)}</span>
+              ${c.score != null ? `<span class="score">${c.score}%</span>` : ''}
+            </div>
+            <div class="candidate-sub">
+              ${htmlEscape(c.artist)} · ${htmlEscape(c.year || '?')}
+              ${c.label ? '· ' + htmlEscape(c.label) : ''}
+              ${c.catalog_number ? '<span class="pill">' + htmlEscape(c.catalog_number) + '</span>' : ''}
+              ${c.country ? '<span class="pill">' + htmlEscape(c.country) + '</span>' : ''}
+              <a class="ext-link" href="https://musicbrainz.org/release/${c.mbid}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on MusicBrainz">↗ MB</a>
+            </div>
           </div>
-          <div class="candidate-sub">
-            ${htmlEscape(c.artist)} · ${htmlEscape(c.year || '?')}
-            ${c.label ? '· ' + htmlEscape(c.label) : ''}
-            ${c.catalog_number ? '<span class="pill">' + htmlEscape(c.catalog_number) + '</span>' : ''}
-            ${c.country ? '<span class="pill">' + htmlEscape(c.country) + '</span>' : ''}
-            <a class="ext-link" href="https://musicbrainz.org/release/${c.mbid}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on MusicBrainz">↗ MB</a>
-          </div>
-        </div>
-      </div>`).join('');
+        </div>`).join('');
+    }
+    list.innerHTML = html;
   } catch (e) {
     list.innerHTML = `<div class="empty-results" style="padding:14px;font-size:11px">search failed: ${htmlEscape(e.message)}</div>`;
     status.textContent = '';
   }
+}
+
+// Apply cumulative track durations as cut positions. The last fitting track
+// absorbs slack. Cuts past the recording's end are clamped to we.total, which
+// produces zero-length trailing regions — surfaced in the track list as
+// "doesn't fit" so the user can see what was truncated rather than having
+// titles silently dropped. weApplySplit filters those out before exporting.
+function _weApplyTracklist(track_details, sourceLabel) {
+  const td = (track_details || []).filter(t => t && t.title);
+  if (!td.length) {
+    document.getElementById('we-search-status').textContent = 'no tracklist on this candidate';
+    return false;
+  }
+  const newCuts = [];
+  let cursor = 0;
+  let overflow = 0;
+  for (let j = 0; j < td.length - 1; j++) {
+    cursor += (td[j].duration_seconds || 0);
+    if (cursor >= we.total) {
+      newCuts.push(we.total);
+      overflow += 1;
+    } else if (cursor > 0) {
+      newCuts.push(cursor);
+    }
+  }
+  we.cuts    = newCuts;
+  we.titles  = td.map(t => t.title);
+  we.skipped = we.titles.map(() => false);
+  invalidateMeasure();
+  document.getElementById('we-search-status').textContent = overflow
+    ? `${td.length} tracks · ${sourceLabel} · ${overflow} don't fit recording`
+    : `${td.length} tracks · ${sourceLabel}`;
+  drawAll();
+  return true;
 }
 
 async function wePickCandidate(i) {
@@ -855,39 +930,51 @@ async function wePickCandidate(i) {
     const r = await fetch(`/api/release/${c.mbid}`);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
-    const td = (d.track_details || []).filter(t => t && t.title);
-    if (!td.length) {
-      status.textContent = 'no tracklist on this candidate';
-      return;
-    }
-    // Apply cumulative durations as cuts. The last fitting track absorbs
-    // slack. Cuts past the recording's end are clamped to we.total, which
-    // produces zero-length trailing regions — surfaced in the track list as
-    // "doesn't fit" so the user can see what was truncated rather than having
-    // titles silently dropped. weApplySplit filters those out before exporting.
-    const newCuts = [];
-    let cursor = 0;
-    let overflow = 0;
-    for (let j = 0; j < td.length - 1; j++) {
-      cursor += (td[j].duration_seconds || 0);
-      if (cursor >= we.total) {
-        newCuts.push(we.total);
-        overflow += 1;
-      } else if (cursor > 0) {
-        newCuts.push(cursor);
-      }
-    }
-    we.cuts    = newCuts;
-    we.titles  = td.map(t => t.title);
-    we.skipped = we.titles.map(() => false);
-    invalidateMeasure();
-    const src = d.discogs_id ? 'enriched from Discogs' : 'MB only';
-    status.textContent = overflow
-      ? `${td.length} tracks · ${src} · ${overflow} don't fit recording`
-      : `${td.length} tracks · ${src}`;
-    drawAll();
+    _weApplyTracklist(d.track_details, d.discogs_id ? 'enriched from Discogs' : 'MB only');
   } catch (e) {
     status.textContent = 'load failed: ' + e.message;
+  }
+}
+
+async function wePickCollectionCandidate(releaseId) {
+  const status = document.getElementById('we-search-status');
+  status.textContent = `loading tracklist from your collection…`;
+  try {
+    const r = await fetch(`/api/release/discogs/${releaseId}`);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    _weApplyTracklist(d.track_details, 'from your collection');
+  } catch (e) {
+    status.textContent = 'load failed: ' + e.message;
+  }
+}
+
+// Auto-load the tracklist from a Discogs release id or MBID stored on the
+// file. Only called when the editor has no existing cuts (no draft, no
+// previous split). The user can still run a manual search to override.
+async function _weAutoLoadFromIds(a) {
+  if (we.filename !== a.filename) return;     // editor moved on
+  if (we.cuts.length) return;                  // draft / existing split won
+  if (a.discogs_release_id) {
+    try {
+      const r = await fetch(`/api/release/discogs/${a.discogs_release_id}`);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      if (we.filename === a.filename && !we.cuts.length) {
+        _weApplyTracklist(d.track_details, 'auto-loaded from saved Discogs id');
+      }
+      return;
+    } catch (e) { /* fall through to MB */ }
+  }
+  if (a.musicbrainz_albumid) {
+    try {
+      const r = await fetch(`/api/release/${a.musicbrainz_albumid}`);
+      if (!r.ok) return;
+      const d = await r.json();
+      if (we.filename === a.filename && !we.cuts.length) {
+        _weApplyTracklist(d.track_details, 'auto-loaded from saved MBID');
+      }
+    } catch (e) { /* nothing more to try */ }
   }
 }
 

@@ -256,8 +256,10 @@ def list_recordings() -> list[dict]:
                 "label":          tags.get("LABEL", ""),
                 "catalog_number": tags.get("CATALOGNUMBER", ""),
                 "country":        tags.get("RELEASECOUNTRY", ""),
-                "tracks":         tags.get("TRACKLIST", ""),
-                "tagged":         is_tagged,
+                "tracks":             tags.get("TRACKLIST", ""),
+                "musicbrainz_albumid": tags.get("MUSICBRAINZ_ALBUMID", ""),
+                "discogs_release_id":  int(tags.get("DISCOGS_RELEASE_ID") or 0) or None,
+                "tagged":             is_tagged,
             })
     files.sort(key=lambda x: x["mtime"], reverse=True)
     return files
@@ -284,9 +286,11 @@ def list_albums() -> list[dict]:
             "label":            tags.get("LABEL", ""),
             "catalog_number":   tags.get("CATALOGNUMBER", ""),
             "country":          tags.get("RELEASECOUNTRY", ""),
-            "tracks":           tags.get("TRACKLIST", ""),
-            "side_count":       int(tags.get("SIDECOUNT", "0") or 0),
-            "track_count":      len(list((ALBUMS_DIR / f.stem).glob("*.flac"))) if (ALBUMS_DIR / f.stem).is_dir() else 0,
+            "tracks":             tags.get("TRACKLIST", ""),
+            "musicbrainz_albumid": tags.get("MUSICBRAINZ_ALBUMID", ""),
+            "discogs_release_id":  int(tags.get("DISCOGS_RELEASE_ID") or 0) or None,
+            "side_count":         int(tags.get("SIDECOUNT", "0") or 0),
+            "track_count":        len(list((ALBUMS_DIR / f.stem).glob("*.flac"))) if (ALBUMS_DIR / f.stem).is_dir() else 0,
         })
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return out

@@ -17,7 +17,7 @@ from services.jobs import get_job
 from state import (
     AUTO_CONNECT, ConnectRequest, DEFAULT_GAIN_DB, DEFAULT_SPLIT_BIT_DEPTH,
     DEFAULT_SPLIT_NORMALIZE, DEFAULT_SPLIT_TARGET_PEAK_DB, DEFAULT_STREAM_URL,
-    PRE_ROLL_SECONDS, active, upstream,
+    DISCOGS_USERNAME, PRE_ROLL_SECONDS, active, upstream,
 )
 from version import VERSION
 
@@ -68,6 +68,9 @@ async def get_config():
         "default_split_target_peak_db": DEFAULT_SPLIT_TARGET_PEAK_DB,
         "default_split_bit_depth":      DEFAULT_SPLIT_BIT_DEPTH,
         "pre_roll_seconds":             PRE_ROLL_SECONDS,
+        # Boolean flag only — never leak the actual username/token to the
+        # frontend; the UI just needs to know whether to show the section.
+        "discogs_collection_enabled":   bool(DISCOGS_USERNAME),
     }
 
 

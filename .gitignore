@@ -6,3 +6,4 @@ __pycache__/
 .coverage
 coverage.xml
 .pytest_cache/
+docker-compose.override.yml
