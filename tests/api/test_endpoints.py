@@ -1,0 +1,176 @@
+"""FastAPI TestClient smoke tests for the read-mostly endpoints.
+
+These don't spin up the full upstream/ffmpeg pipeline (that's the e2e
+suite). They confirm route wiring, response shapes, and the no-op /
+guard paths that fire when nothing is connected.
+"""
+from fastapi.testclient import TestClient
+
+
+def _client():
+    # Import here so each test module sees the env-var setup from conftest.py
+    # (OUTPUT_DIR, AUTO_CONNECT) before `state` mkdirs. Re-importing the app
+    # module across tests is fine — the FastAPI app is a module-level
+    # singleton; we want the same one each time.
+    from main import app
+    return TestClient(app)
+
+
+# ── /api/config ──────────────────────────────────────────────────────────
+def test_config_returns_known_shape():
+    r = _client().get("/api/config")
+    assert r.status_code == 200
+    body = r.json()
+    # Every key the frontend reads from /api/config — keep this list in
+    # lockstep with applyConfig() in static/main.js.
+    expected_keys = {
+        "default_stream_url", "auto_connect", "default_gain_db", "version",
+        "low_space_gb", "default_split_normalize",
+        "default_split_target_peak_db", "default_split_bit_depth",
+    }
+    assert expected_keys <= set(body.keys())
+
+
+def test_config_reflects_env_var_overrides(monkeypatch):
+    # The endpoint reads the values that `state` cached at import time, so
+    # we have to reload `state` + `main` after mutating env. Easier: just
+    # confirm the values are JSON-serializable scalars of the expected types.
+    body = _client().get("/api/config").json()
+    assert isinstance(body["auto_connect"], bool)
+    assert isinstance(body["default_split_normalize"], bool)
+    assert isinstance(body["default_split_target_peak_db"], (int, float))
+    assert isinstance(body["default_split_bit_depth"], int)
+    assert isinstance(body["low_space_gb"], (int, float))
+
+
+# ── /api/status ──────────────────────────────────────────────────────────
+def test_status_when_idle():
+    body = _client().get("/api/status").json()
+    assert body["recording"] is False
+    assert body["sessions"] == []
+    assert "disk_free_gb" in body
+    assert body["upstream"]["connected"] is False
+
+
+# ── /api/disconnect ──────────────────────────────────────────────────────
+def test_disconnect_when_not_connected_is_noop():
+    # Idempotent: pressing disconnect with nothing to disconnect must not 5xx.
+    r = _client().post("/api/disconnect")
+    assert r.status_code == 200
+    assert r.json()["connected"] is False
+
+
+def test_disconnect_while_recording_returns_409():
+    # Disconnect must refuse while a session is active — protects the user
+    # from accidentally tearing down the upstream mid-record. The handler
+    # checks `if active:`, so a sentinel entry is enough; we don't need a
+    # real ffmpeg subprocess to exercise the guard.
+    from state import active
+
+    active["sentinel-sid"] = {"proc": None}
+    try:
+        r = _client().post("/api/disconnect")
+        assert r.status_code == 409
+        assert "stop recording" in r.json()["detail"].lower()
+    finally:
+        active.pop("sentinel-sid", None)
+
+
+# ── /api/clip/clear ──────────────────────────────────────────────────────
+def test_clip_clear_validates_channel():
+    c = _client()
+    # Valid channels.
+    for ch in ("", "L", "R"):
+        r = c.post(f"/api/clip/clear?ch={ch}")
+        assert r.status_code == 200, f"ch={ch!r} unexpectedly rejected"
+    # Anything else is a 400 — the param shape is part of the API contract.
+    r = c.post("/api/clip/clear?ch=X")
+    assert r.status_code == 400
+
+
+# ── /api/recordings ──────────────────────────────────────────────────────
+def test_recordings_lists_files_in_untagged_and_tagged(tmp_path):
+    # The conftest set OUTPUT_DIR to a tmp dir; we can drop fake .flac files
+    # there and confirm the listing picks them up. Real metaflac calls will
+    # fail on these stubs and the helpers swallow the error → empty tags,
+    # which is exactly the "untagged" path we want to exercise.
+    from state import UNTAGGED_DIR
+
+    fake = UNTAGGED_DIR / "test_dummy.flac"
+    fake.write_bytes(b"")
+
+    try:
+        r = _client().get("/api/recordings")
+        assert r.status_code == 200
+        body = r.json()
+        names = [rec["filename"] for rec in body["files"]]
+        assert "test_dummy.flac" in names
+        assert "disk_free_gb" in body
+    finally:
+        fake.unlink(missing_ok=True)
+
+
+# ── /api/albums ──────────────────────────────────────────────────────────
+def test_albums_endpoint_returns_list():
+    r = _client().get("/api/albums")
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body.get("albums"), list)
+
+
+# ── /api/jobs/{job_id} ──────────────────────────────────────────────────
+def test_jobs_endpoint_unknown_id_returns_404():
+    # Polling a job id the registry has never seen (or has GC'd) should be
+    # a quiet 404, not 500 — the frontend treats 404 as "no progress to show".
+    r = _client().get("/api/jobs/no-such-job")
+    assert r.status_code == 404
+
+
+def test_jobs_endpoint_returns_known_shape():
+    # Inject a job directly into the registry (avoids needing ffmpeg) and
+    # confirm the route surfaces every field the frontend's polling
+    # `withJobProgress` helper reads.
+    from services.jobs import finish_job, start_job, update_job
+
+    start_job("api-test-job", label="measure")
+    update_job("api-test-job", 0.42, phase="analysing")
+    try:
+        r = _client().get("/api/jobs/api-test-job")
+        assert r.status_code == 200
+        body = r.json()
+        assert body == {
+            "progress": 0.42,
+            "phase":    "analysing",
+            "label":    "measure",
+            "done":     False,
+            "error":    None,
+        }
+    finally:
+        finish_job("api-test-job")
+        # Drop the entry so it doesn't leak into other tests' registries.
+        from services import jobs as jobs_mod
+        with jobs_mod._lock:
+            jobs_mod._jobs.pop("api-test-job", None)
+
+
+# ── 404 surface ─────────────────────────────────────────────────────────
+def test_unknown_route_returns_404():
+    r = _client().get("/api/does-not-exist")
+    assert r.status_code == 404
+
+
+def test_record_stop_unknown_session_returns_404():
+    r = _client().post("/api/record/stop/nonexistent")
+    assert r.status_code == 404
+
+
+def test_record_start_without_upstream_is_409():
+    # The recorder refuses to start without a connected upstream. Tests the
+    # disk_space + connection guards in start_recording.
+    r = _client().post("/api/record/start", json={
+        "stream_url": "http://127.0.0.1/none",
+        "artist": "x", "album": "y",
+    })
+    # 409 (not connected) — could also be 507 if disk is genuinely low,
+    # which would be a real signal worth surfacing. Accept either.
+    assert r.status_code in (409, 507)

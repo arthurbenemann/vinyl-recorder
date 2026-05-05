@@ -1,0 +1,9 @@
+output/*
+.claude/*
+__pycache__/
+*.pyc
+*.log
+.coverage
+coverage.xml
+.pytest_cache/
+docker-compose.override.yml
