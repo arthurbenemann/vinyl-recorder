@@ -98,14 +98,10 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install ffmpeg + test deps
-        # ffmpeg is needed for the ffprobe assertion at the end of the e2e
-        # test (verifying the captured FLAC's format). pytest-playwright
-        # drives the headless-chromium frontend smoke tests.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
-          pip install pytest pytest-playwright
+      - name: Install test deps
+        # ffmpeg is pre-installed on ubuntu-latest runners; no apt needed.
+        # pytest-playwright drives the headless-chromium frontend smoke tests.
+        run: pip install pytest pytest-playwright
 
       - name: Cache Playwright browsers
         # Chromium + Linux deps are ~150 MB; cache survives across runs so
