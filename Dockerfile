@@ -13,19 +13,15 @@ RUN (git update-index --refresh >/dev/null 2>&1 || true) \
     || echo "dev" > /VERSION
 
 
-FROM python:3.12-slim-bookworm
+FROM python:3.12-alpine
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONUNBUFFERED=1 \
+ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-# --no-install-recommends prevents apt from pulling X11, mesa, doc, and audio
-# server packages that ffmpeg's transitively-recommended deps drag in but the
-# app never uses. flac is for `metaflac` (used by services/ffmpeg.py).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    flac \
-    && rm -rf /var/lib/apt/lists/*
+# Alpine's ffmpeg is built with --enable-libmp3lame and ships every filter
+# the app uses (showwavespic, silencedetect, astats, aformat, volume, atrim,
+# asetpts, concat). flac provides metaflac.
+RUN apk add --no-cache ffmpeg flac
 
 RUN pip install --no-cache-dir \
     fastapi \
