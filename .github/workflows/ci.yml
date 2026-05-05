@@ -70,6 +70,14 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Image size
+        # Surfaces the final image size in the build log so PRs that change
+        # the Dockerfile (e.g. base swap) can be evaluated against `main`
+        # without pulling locally.
+        run: |
+          docker images vinyl-recorder:ci --format 'IMAGE SIZE: {{.Size}}'
+          docker history vinyl-recorder:ci --no-trunc --format 'table {{.Size}}\t{{.CreatedBy}}'
+
       - name: Validate docker-compose
         run: docker compose -f docker-compose.yml config --quiet
 
