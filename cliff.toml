@@ -1,0 +1,38 @@
+# git-cliff config — https://git-cliff.org/docs/configuration
+# See README "Releasing" section for how this is invoked.
+
+[git]
+conventional_commits = false
+# Drop unmatched commits → keeps only the merge commits we transform below
+# (effectively `git log --first-parent main`).
+filter_commits = true
+topo_order = true
+
+commit_preprocessors = [
+  { pattern = '\s*https://claude\.ai/code/\S+', replace = "" },
+  # "Merge pull request #48 from foo\n\nAdd track preview" → "Add track preview (#48)"
+  { pattern = '^Merge pull request #(\d+) from \S+\s+(.+)', replace = '${2} (#${1})' },
+]
+
+# First match wins. Anything not ending in "(#N)" is a non-merge commit → skip.
+commit_parsers = [
+  { message = '\[skip-changelog\]', skip = true },
+  { message = '^(chore|ci|docs)(\(|:|\b)', skip = true },
+  { message = '\(#\d+\)$', group = 'Changes' },
+  { message = '.*', skip = true },
+]
+
+# No `header` config: CHANGELOG.md is just a sequence of `## v...` sections,
+# no top-level "# Changelog" heading. This sidesteps git-cliff's --prepend
+# matching its `header` string against the file byte-for-byte (any drift
+# leaves a duplicate header behind). Filename is the title.
+[changelog]
+body = """
+## {% if version %}{{ version }} — {{ timestamp | date(format="%Y-%m-%d") }}{% else %}Unreleased{% endif %}
+
+{% for commit in commits %}- {{ commit.message | upper_first }}
+{% endfor %}
+"""
+# trim=false keeps the trailing blank line so consecutive --prepend runs
+# don't glue the last bullet of the new section to the next "## v..." header.
+trim = false

@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vinyl Recorder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Playfair+Display:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">Vinyl Recorder <sub>PCM → FLAC</sub></div>
+  <div class="header-right">
+    <span id="disk-free">— GB free</span>
+    <span class="version-tag" id="version-tag" hidden></span>
+    <div class="status-indicator" id="status-indicator" onclick="toggleHealthPanel()" title="Stream health">
+      <div class="dot" id="sdot"></div>
+      <span id="stext">idle</span>
+      <span class="health-chevron" id="health-chevron" hidden>▼</span>
+    </div>
+    <div class="health-panel" id="health-panel" hidden>
+      <div class="health-row"><span class="health-label">level</span><span id="hp-level">—</span></div>
+      <div class="health-row"><span class="health-label">bytes/sec</span><span id="hp-bps">—</span></div>
+      <div class="health-row"><span class="health-label">expected</span><span id="hp-expected">—</span></div>
+      <div class="health-row"><span class="health-label">gaps (5 s)</span><span id="hp-gaps">0</span></div>
+      <div class="health-row"><span class="health-label">total gaps</span><span id="hp-gap-total">0</span></div>
+      <div class="health-row"><span class="health-label">since last frame</span><span id="hp-since">—</span></div>
+      <div class="health-row"><span class="health-label">reconnects</span><span id="hp-reconnects">0</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- SIDEBAR: capture controls -->
+  <div class="sidebar">
+    <div>
+      <div class="label">Stream source</div>
+      <div class="stream-row">
+        <input id="stream-url" value="https://ice1.somafm.com/groovesalad-256-mp3" placeholder="http://host:port/stream" />
+        <button class="btn-small" id="connect-btn" onclick="toggleConnect()" title="Server-side: pulls the upstream stream — shared across all tabs.">connect</button>
+        <button class="btn-small" id="mute-btn" onclick="toggleMute()" title="Local playback only. The VU meter keeps working when muted.">🔈 unmute</button>
+      </div>
+      <div class="gain-row" id="gain-row" hidden>
+        <span class="gain-label">ADC gain</span>
+        <input type="range" id="gain-slider" min="-12" max="40" step="0.5" value="0">
+        <span class="gain-db" id="gain-db">0.0 dB</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="label">Input levels</div>
+      <div class="vu-wrap">
+        <div class="vu-channel">
+          <span class="vu-label">L</span>
+          <div class="vu-track">
+            <div class="vu-mask" id="mask-L" style="width:100%"></div>
+            <div class="vu-peak" id="peak-L" style="left:0%"></div>
+          </div>
+          <span class="vu-db" id="db-L">−∞</span>
+          <button class="vu-clip" id="clip-L" hidden onclick="clearClip('L')" title="Click to clear — clipping detected on L">CLIP</button>
+        </div>
+        <div class="vu-channel">
+          <span class="vu-label">R</span>
+          <div class="vu-track">
+            <div class="vu-mask" id="mask-R" style="width:100%"></div>
+            <div class="vu-peak" id="peak-R" style="left:0%"></div>
+          </div>
+          <span class="vu-db" id="db-R">−∞</span>
+          <button class="vu-clip" id="clip-R" hidden onclick="clearClip('R')" title="Click to clear — clipping detected on R">CLIP</button>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="transport-head">
+        <div class="label">Transport</div>
+        <select class="dur" id="dur-sel" title="Max recording length">
+          <option value="1200">20 min</option>
+          <option value="2700" selected>45 min</option>
+          <option value="3600">60 min</option>
+          <option value="5400">90 min</option>
+          <option value="0">∞ unlimited</option>
+        </select>
+      </div>
+      <div class="transport">
+        <button class="rec-btn" id="recbtn" onclick="toggleRec()" title="Record / Stop">
+          <div class="rec-btn-dot"></div>
+        </button>
+        <button class="pause-btn" id="pausebtn" onclick="togglePause()" title="Pause / resume" hidden>‖</button>
+        <div class="timer-block">
+          <div class="timer" id="timer">00:00:00</div>
+          <div class="timer-hint" id="timer-hint">click ● to start recording</div>
+        </div>
+      </div>
+      <div class="prog-wrap" style="margin-top:10px">
+        <div class="prog-fill" id="prog" style="width:0%"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="label">Log</div>
+      <div class="log" id="log">Ready.</div>
+    </div>
+  </div>
+
+  <!-- MAIN: library -->
+  <div class="content">
+    <div class="action-row">
+      <button class="btn" onclick="refreshLib()">↻ refresh</button>
+      <input id="lib-search" class="lib-search" placeholder="search artist / album / year / label / genre …"
+             oninput="onLibSearchInput(this.value)" />
+      <button class="btn-small" id="lib-filter-clear" onclick="clearLibFilter()" hidden>clear</button>
+    </div>
+
+    <div>
+      <div class="label" style="margin-bottom:12px">Library — <span id="lib-count">loading…</span></div>
+      <div style="background:var(--surface);border:0.5px solid var(--border);border-radius:8px">
+        <div class="bulk-bar hidden" id="bulk-bar">
+          <span><span id="bulk-count">0</span> selected</span>
+          <span class="grow"></span>
+          <button class="btn-small" onclick="clearSelection()">clear</button>
+          <button class="btn-small" id="combine-btn" onclick="openCombine()" disabled
+                  title="Select 2+ sides to combine into an album">combine into album</button>
+          <button class="btn-small" style="color:var(--accent);border-color:rgba(226,75,74,0.35)" onclick="bulkDelete()">delete selected</button>
+        </div>
+        <table class="lib-table">
+          <colgroup>
+            <col class="c-check"><col class="c-album"><col class="c-artist"><col class="c-year">
+            <col class="c-recorded"><col class="c-length"><col class="c-size">
+            <col class="c-fmt"><col class="c-status"><col class="c-actions">
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="check-all" onclick="toggleAll(this.checked)"></th>
+              <th class="sortable" data-sort="album"  onclick="setSort('album')">Album<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="artist" onclick="setSort('artist')">Artist<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="year"   onclick="setSort('year')">Year<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="date"   onclick="setSort('date')">Recorded<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="length" onclick="setSort('length')">Length<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="size"   onclick="setSort('size')">Size<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')" title="Source bit depth / sample rate (kHz)">Fmt<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="status" onclick="setSort('status')">Status<span class="sort-arrow"></span></th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="lib-tbody">
+            <tr><td colspan="10" class="empty-lib">No recordings yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="albums-section" hidden>
+      <div class="label" style="margin-bottom:12px">Albums — <span id="albums-count">0</span></div>
+      <div style="background:var(--surface);border:0.5px solid var(--border);border-radius:8px">
+        <div class="bulk-bar hidden" id="albums-bulk-bar">
+          <span><span id="albums-bulk-count">0</span> selected</span>
+          <span class="grow"></span>
+          <button class="btn-small" onclick="clearAlbumsSelection()">clear</button>
+          <button class="btn-small" style="color:var(--accent);border-color:rgba(226,75,74,0.35)" onclick="bulkDeleteAlbums()">delete selected</button>
+        </div>
+        <table class="lib-table">
+          <colgroup>
+            <col class="c-check"><col class="c-album"><col class="c-artist"><col class="c-year">
+            <col class="c-recorded"><col class="c-length"><col class="c-size">
+            <col class="c-fmt"><col class="c-status"><col class="c-actions">
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="albums-check-all" onclick="toggleAllAlbums(this.checked)"></th>
+              <th>Album</th>
+              <th>Artist</th>
+              <th>Year</th>
+              <th>Recorded</th>
+              <th>Length</th>
+              <th>Size</th>
+              <th title="Source bit depth / sample rate (kHz)">Fmt</th>
+              <th>Sides</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="albums-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Combine into album modal -->
+<div class="modal-backdrop" id="combine-modal" hidden onclick="if(event.target===this)closeCombine()">
+  <div class="modal" style="width:560px">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">Combine into album</div>
+        <div class="modal-sub">Concatenates the selected sides losslessly into a single FLAC in <code>albums/</code>.</div>
+      </div>
+      <button class="btn-small" onclick="closeCombine()">close</button>
+    </div>
+
+    <div class="col-label" style="margin-top:6px">Sides (in playback order)</div>
+    <div id="combine-sides" class="candidates" style="max-height:none"></div>
+
+    <div class="col-label" style="margin-top:14px">Album metadata</div>
+    <div class="meta-grid">
+      <div class="field span2"><label>Album</label><input id="c-album"/></div>
+      <div class="field"><label>Artist</label><input id="c-artist"/></div>
+      <div class="field"><label>Year</label><input id="c-year"/></div>
+      <div class="field"><label>Genre</label><input id="c-genre"/></div>
+      <div class="field"><label>Label</label><input id="c-label"/></div>
+    </div>
+
+    <div class="action-row" style="margin-top:14px">
+      <button class="btn primary" id="combine-go" onclick="runCombine()">combine</button>
+      <button class="btn" onclick="closeCombine()">cancel</button>
+    </div>
+    <div class="job-bar" id="combine-bar" hidden style="margin-top:10px">
+      <div class="job-bar-text"><span class="job-bar-phase">working…</span><span class="job-bar-pct">0%</span></div>
+      <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Promote single recording to album modal -->
+<div class="modal-backdrop" id="promote-modal" hidden onclick="if(event.target===this)closePromote()">
+  <div class="modal" style="width:520px">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">Promote to album</div>
+        <div class="modal-sub">Moves the recording into <code>albums/</code> as a one-side album. It will leave the library.</div>
+      </div>
+      <button class="btn-small" onclick="closePromote()">close</button>
+    </div>
+
+    <div class="col-label" style="margin-top:6px">Source</div>
+    <div id="promote-source" class="candidates" style="max-height:none"></div>
+
+    <div class="col-label" style="margin-top:14px">Album metadata</div>
+    <div class="meta-grid">
+      <div class="field span2"><label>Album</label><input id="p-album"/></div>
+      <div class="field"><label>Artist</label><input id="p-artist"/></div>
+      <div class="field"><label>Year</label><input id="p-year"/></div>
+      <div class="field"><label>Genre</label><input id="p-genre"/></div>
+      <div class="field"><label>Label</label><input id="p-label"/></div>
+    </div>
+
+    <div class="action-row" style="margin-top:14px">
+      <button class="btn primary" id="promote-go" onclick="runPromote()">promote</button>
+      <button class="btn" onclick="closePromote()">cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Wave-editor split modal -->
+<div class="modal-backdrop" id="we-modal" hidden onclick="if(event.target===this)closeWaveEditor()">
+  <div class="modal" style="width:1100px">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">Split into tracks</div>
+        <div class="modal-sub" id="we-filename">—</div>
+      </div>
+      <button class="btn-small" onclick="closeWaveEditor()">close</button>
+    </div>
+
+    <div class="we-toolbar">
+      <button class="play-btn" id="we-play" onclick="weTogglePlay()" title="Play / pause">▶</button>
+      <span class="readout">
+        <strong id="we-time">0:00</strong> / <span id="we-duration">—</span>
+      </span>
+      <span class="grow"></span>
+      <div class="we-suggest">
+        <button class="btn-small" onclick="weToggleSuggest('discogs')">suggest from Discogs ▾</button>
+        <div class="we-suggest-pop" id="we-pop-discogs" hidden>
+          <div class="col-label">Discogs / MusicBrainz tracklist</div>
+          <div class="search-row">
+            <input id="we-search-q" placeholder="artist + album" onkeydown="if(event.key==='Enter')weRunSearch()" />
+            <button class="btn-small" onclick="weRunSearch()">search</button>
+          </div>
+          <div class="search-status" id="we-search-status" style="margin:6px 0"></div>
+          <div class="candidates" id="we-candidates" style="max-height:220px"></div>
+        </div>
+      </div>
+      <div class="we-suggest">
+        <button class="btn-small" onclick="weToggleSuggest('silence')">suggest from silence ▾</button>
+        <div class="we-suggest-pop" id="we-pop-silence" hidden>
+          <div class="col-label">Silence detection</div>
+          <div class="threshold-row" style="margin-bottom:6px">
+            <label>Noise floor <input type="number" id="we-noise" value="-40" step="1" style="width:60px;background:var(--surface);border:0.5px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:11px;padding:3px 6px"> dB</label>
+            <label style="margin-left:8px">Min silence <input type="number" id="we-mindur" value="1.5" step="0.1" min="0.2" style="width:54px;background:var(--surface);border:0.5px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:11px;padding:3px 6px"> s</label>
+            <label style="margin-left:8px" title="Silences this long get a pair of cuts and the in-between region is auto-marked skip — typical for side flips and lead-in/out.">Auto-skip ≥ <input type="number" id="we-skiplong" value="15" step="1" min="2" style="width:54px;background:var(--surface);border:0.5px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:11px;padding:3px 6px"> s</label>
+          </div>
+          <div class="action-row">
+            <button class="btn primary" onclick="weDetectAndApply()">detect &amp; replace cuts</button>
+            <button class="btn" onclick="weDetectShowOnly()">just highlight</button>
+          </div>
+          <div class="search-status" id="we-silence-status" style="margin-top:6px"></div>
+          <div class="job-bar inline" id="we-silence-bar" hidden style="margin-top:6px">
+            <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
+            <div class="job-bar-text"><span class="job-bar-pct">0%</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="we-minimap" id="we-minimap-wrap"
+         onmousedown="weMinimapDown(event)">
+      <img class="we-minimap-img" id="we-minimap-img" alt="minimap">
+      <div class="we-minimap-cuts" id="we-minimap-cuts"></div>
+      <div class="we-minimap-vp" id="we-minimap-vp"></div>
+    </div>
+    <div class="we-minimap-axis"><span>0:00</span><span id="we-mini-end">—</span></div>
+
+    <div class="wave-wrap" id="we-wrap"
+         onwheel="weWheel(event)">
+      <img class="wave-img" id="we-img" alt="album waveform">
+      <div class="wave-overlay" id="we-overlay"
+           onmousemove="weHoverMove(event)"
+           onmouseleave="weHoverLeave()"
+           onclick="weAddCutAtClick(event)"></div>
+      <div class="wave-readout" id="we-readout"></div>
+      <div class="wave-progress-overlay" id="we-wf-overlay" hidden>
+        <div class="wpo-text" id="we-wf-overlay-text">rendering waveform…</div>
+        <div class="wpo-track"><div class="wpo-fill" id="we-wf-overlay-fill"></div></div>
+      </div>
+    </div>
+    <div class="wave-axis"><span id="we-t0">0:00</span><span id="we-t1">—</span></div>
+    <div class="wave-help">
+      <strong>scroll</strong> zoom · <strong>shift+click</strong> add cut · drag handle to nudge (snaps to detected silences) · right-click delete · click waveform to seek.<br>
+      <strong>space</strong> play/pause · <strong>←/→</strong> nudge nearest cut ±0.1s (shift = ±1s) · <strong>j/k</strong> jump prev/next cut · <strong>s</strong> skip region at playhead · <strong>delete</strong> remove nearest cut · <strong>esc</strong> close.
+    </div>
+
+    <div class="col-label" style="margin-top:14px">Tracks</div>
+    <div class="wave-tracks" id="we-tracks"></div>
+
+    <div class="we-process">
+      <div class="we-process-stats" id="we-stats" title="Peak = loudest sample · Noise floor = lowest sustained RMS · DR = peak − noise floor · effective bits = DR / 6.02">
+        <span class="we-stats-label">album stats</span>
+        <span id="we-stats-text" class="we-stats-text">click measure or set cuts</span>
+        <div class="job-bar inline" id="we-measure-bar" hidden style="flex:1;max-width:260px;margin:0 8px">
+          <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
+          <div class="job-bar-text"><span class="job-bar-pct">0%</span></div>
+        </div>
+        <button class="btn-small" id="we-measure-btn" onclick="weMeasure()">measure</button>
+      </div>
+      <div class="we-process-row">
+        <label class="we-process-toggle">
+          <input type="checkbox" id="we-normalize"> normalize album
+        </label>
+        <label class="we-process-bits">
+          output bit depth
+          <select id="we-bitdepth">
+            <option value="0">keep source</option>
+            <option value="16">16-bit</option>
+            <option value="24">24-bit</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="action-row" style="margin-top:14px">
+      <button class="btn primary" id="we-go" onclick="weApplySplit()" disabled>apply split</button>
+      <button class="btn" onclick="weAddCutAtPlayhead()">+ add cut at playhead</button>
+      <button class="btn" onclick="weClearCuts()">clear cuts</button>
+      <button class="btn" onclick="closeWaveEditor()">cancel</button>
+    </div>
+    <div class="job-bar" id="we-split-bar" hidden style="margin-top:10px">
+      <div class="job-bar-text"><span class="job-bar-phase">working…</span><span class="job-bar-pct">0%</span></div>
+      <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
+    </div>
+
+    <audio id="we-audio" preload="auto"></audio>
+  </div>
+</div>
+
+<!-- Tag panel modal -->
+<div class="modal-backdrop" id="tag-modal" hidden onclick="if(event.target===this)closeTag()">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">Tag album</div>
+        <div class="modal-sub" id="tag-filename">—</div>
+      </div>
+      <button class="btn-small" onclick="closeTag()">close</button>
+    </div>
+
+    <div class="tag-grid">
+
+      <!-- Left column: editable fields + cover preview -->
+      <div class="tag-col">
+        <div class="col-label">Tags to write</div>
+        <div class="left-top">
+          <div class="cover-preview" id="cover-preview">no cover</div>
+          <div class="left-fields">
+            <div class="field span2"><label>Album</label><input id="t-album"/></div>
+            <div class="field span2"><label>Artist</label><input id="t-artist"/></div>
+            <div class="field"><label>Year</label><input id="t-year"/></div>
+            <div class="field"><label>Genre</label><input id="t-genre"/></div>
+            <div class="field"><label>Label</label><input id="t-label"/></div>
+            <div class="field"><label>Catalog #</label><input id="t-catno"/></div>
+            <div class="field"><label>Country</label><input id="t-country"/></div>
+            <div class="field"><label>Format</label><input id="t-format" placeholder="Vinyl, LP" /></div>
+          </div>
+        </div>
+        <div class="field"><label>Tracks (one per line)</label><textarea id="t-tracks" rows="6"></textarea></div>
+        <div class="action-row">
+          <button class="btn primary" onclick="applyTagPanel()">apply tags</button>
+          <button class="btn" onclick="closeTag()">cancel</button>
+        </div>
+      </div>
+
+      <!-- Right column: search + candidates -->
+      <div class="tag-col">
+        <div class="col-label">Search MusicBrainz <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— enriched with Discogs when linked</span></div>
+        <div class="search-row">
+          <input id="t-search-q" placeholder="artist + album, e.g. Miles Davis Kind of Blue"
+                 onkeydown="if(event.key==='Enter')runSearch()" />
+          <button class="btn-small" onclick="runSearch()">search</button>
+        </div>
+        <div class="search-status" id="t-search-status"></div>
+        <div class="candidates" id="t-candidates">
+          <div class="empty-results">Type artist + album above and hit search.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+<script src="/static/main.js"></script>
+<script src="/static/wave-editor.js"></script>
+</body>
+</html>

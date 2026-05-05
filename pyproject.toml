@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Default run skips e2e — those need a docker daemon and ~2 min. CI's
+# dedicated e2e job overrides with `-m e2e` to actually run them.
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-m", "not e2e",
+]
+markers = [
+    "e2e: end-to-end tests that boot the full docker compose stack (slow, ~2 min)",
+]
