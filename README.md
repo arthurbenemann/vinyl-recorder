@@ -106,23 +106,8 @@ WAVs on its `:8090`, looped forever, and `DEFAULT_STREAM_URL` is wired to
 | `/album` | 4 tones (30/25/30/25 s) with 2 s gaps + 20 s side break | Wave-editor split, silence detection, auto-skip ≥15 s rule |
 | `/clip`  | 50 s sine that intentionally clips for 5 s after a 20 s lead-in | CLIP latch, badge, log line, clip-during-record path |
 
-## Releasing
+## Contributing
 
-From a clean `main`, either bump the last tag:
+PR title conventions and the release flow live in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-```bash
-make release patch    # v0.1.0 → v0.1.1
-make release minor    # v0.1.0 → v0.2.0
-make release major    # v0.1.0 → v1.0.0
-```
-
-…or pin an explicit version: `make release VERSION=v0.2.0`.
-
-This renders every merge commit since the previous tag into a new section at
-the top of [CHANGELOG.md](CHANGELOG.md) (via [git-cliff](https://git-cliff.org)
-and [cliff.toml](cliff.toml)), commits it, creates an annotated tag on that
-commit, pushes both, and publishes a GitHub Release with the same notes (via
-[`gh`](https://cli.github.com)). PR title = changelog entry, so write PR
-titles as user-facing one-liners. Add `[skip-changelog]` anywhere in the PR
-title to omit it. Direct (non-PR) commits to `main` are skipped — open a doc
-PR if you need one in the changelog.
