@@ -74,8 +74,8 @@ def test_kill_upstream_mid_recording_reaps_session(stack):
     sid = started["session_id"]
     fname = started["filename"]
 
-    # Let a few seconds of audio accumulate so the FLAC has actual content.
-    time.sleep(3)
+    # Let a couple seconds of audio accumulate so the FLAC has actual content.
+    time.sleep(2)
 
     try:
         # Simulate upstream death. `kill` (vs `stop`) sends SIGKILL with no
@@ -108,11 +108,11 @@ def test_kill_upstream_mid_recording_reaps_session(stack):
         ))
         s = info["streams"][0]
         assert s["codec_name"] == "flac"
-        # ~3 s of recording before kill + watcher latency. The upper bound is
+        # ~2 s of recording before kill + watcher latency. The upper bound is
         # only a sanity check; widen it to absorb GHA jitter (kill itself is
         # instant but the watcher tick + ffmpeg flush can take a few seconds).
         duration = float(info["format"].get("duration", 0))
-        assert 1.0 <= duration <= 30.0, f"unexpected FLAC duration: {duration}"
+        assert 0.5 <= duration <= 30.0, f"unexpected FLAC duration: {duration}"
 
         # The status payload should advertise the recording in the library.
         recordings = http_json(f"{RECORDER_URL}/api/recordings")["files"]

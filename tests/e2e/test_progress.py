@@ -58,9 +58,9 @@ def _promote(filename: str, album: str) -> str:
 def test_silence_detect_progress_lifecycle(stack):
     """Real ffmpeg silencedetect run on a captured clip, with progress
     reporting. Asserts the job reaches done=true with no error."""
-    # /album opens with 5 s of silence + a 30 s tone — recording 10 s gives
-    # silencedetect at least one interval to surface.
-    rec_fname = _record_clip(seconds=10, album="progress-silence")
+    # /album opens with 5 s of silence then a tone at 5 s — recording 6 s
+    # gives silencedetect one complete interval (silence ends when tone starts).
+    rec_fname = _record_clip(seconds=6, album="progress-silence")
     album_fname = _promote(rec_fname, "progress-silence")
     job_id = "e2e-silence-1"
 
@@ -88,7 +88,7 @@ def test_silence_detect_progress_lifecycle(stack):
 def test_measure_progress_lifecycle(stack):
     """astats measure with job_id. Same shape as silence detect — confirms
     the progress wiring isn't endpoint-specific."""
-    rec_fname = _record_clip(seconds=8, album="progress-measure")
+    rec_fname = _record_clip(seconds=3, album="progress-measure")
     album_fname = _promote(rec_fname, "progress-measure")
     job_id = "e2e-measure-1"
 

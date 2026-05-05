@@ -41,15 +41,15 @@ def test_duration_limit_auto_stops(stack):
         body={
             "stream_url": STREAM_URL,
             "artist": "e2e", "album": "auto-stop", "year": "2026",
-            # ffmpeg `-t 5` exits cleanly after 5 s; watcher reaps and the
+            # ffmpeg `-t 3` exits cleanly after 3 s; watcher reaps and the
             # finalize path tags the session as reason="auto".
-            "duration": 5,
+            "duration": 3,
         },
     )
     sid = started["session_id"]
     fname = started["filename"]
 
-    # 5 s record + ~1 s ffmpeg flush + 1 Hz watcher tick → 7 s should be
+    # 3 s record + ~1 s ffmpeg flush + 1 Hz watcher tick → 5 s should be
     # plenty; budget 20 s to absorb GHA jitter.
     after = _wait_for_session_reaped(sid, timeout=20)
     assert after["recording"] is False
@@ -69,6 +69,6 @@ def test_duration_limit_auto_stops(stack):
     ))
     assert info["streams"][0]["codec_name"] == "flac"
     duration = float(info["format"]["duration"])
-    # ffmpeg's `-t 5` produces ~5 s; allow some slack on slow runners but
+    # ffmpeg's `-t 3` produces ~3 s; allow some slack on slow runners but
     # reject anything that strays too far in either direction.
-    assert 4.0 <= duration <= 7.0, f"unexpected duration: {duration}"
+    assert 2.5 <= duration <= 5.0, f"unexpected duration: {duration}"

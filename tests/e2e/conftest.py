@@ -65,7 +65,7 @@ def wait_for_upstream_connected(timeout: float = 45.0) -> dict:
                 return last
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             pass
-        time.sleep(1)
+        time.sleep(0.5)
     raise RuntimeError(
         f"upstream not connected within {timeout:.0f} s. last status: {last!r}"
     )
