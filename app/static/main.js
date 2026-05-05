@@ -358,7 +358,7 @@ document.getElementById('gain-slider').addEventListener('input', (e) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ db })
       });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) throw new Error(await parseError(r));
       const d = await r.json();
       document.getElementById('gain-db').textContent = d.gain_db.toFixed(1) + ' dB';
     } catch (err) { log('✗ gain set failed: ' + err.message, 'err'); }
@@ -411,7 +411,7 @@ async function togglePause() {
   const path = paused ? 'resume' : 'pause';
   try {
     const r = await fetch(`/api/record/${path}/${sessionId}`, { method: 'POST' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     // UI updates via the WS `record:pause`/`resume` event.
   } catch (e) { toast('✗ ' + e.message, 'err'); }
 }
@@ -639,6 +639,7 @@ function setSort(col) {
   localStorage.setItem('lib.sortBy',  sortBy);
   localStorage.setItem('lib.sortDir', sortDir);
   refreshLib();
+  refreshAlbumsRender();
 }
 
 function sortFiles(files) {
@@ -859,10 +860,7 @@ function startInlineRename(fname, el) {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ new_name: newName }),
       });
-      if (!r.ok) {
-        const text = await r.text();
-        throw new Error(text || ('HTTP ' + r.status));
-      }
+      if (!r.ok) throw new Error(await parseError(r));
       const d = await r.json();
       toast(`✓ Renamed → ${d.filename}`, 'ok');
       // The file moved — drop it from selection so we don't try to act on a
@@ -952,7 +950,7 @@ async function refreshAlbums() {
 
 function refreshAlbumsRender() {
   const all = Object.values(albumsByName);
-  const filtered = all.filter(rowMatches);
+  const filtered = sortFiles(all.filter(rowMatches));
   const total = all.length;
   const shown = filtered.length;
   const filterActive = !!libFilterText.trim();
@@ -1274,7 +1272,9 @@ async function runPromote() {
     return;
   }
   const btn = document.getElementById('promote-go');
+  const bar = document.getElementById('promote-bar');
   btn.disabled = true; btn.textContent = 'promoting…';
+  bar.hidden = false;
   try {
     const r = await fetch('/api/promote', {
       method: 'POST', headers: {'Content-Type':'application/json'},
@@ -1291,6 +1291,7 @@ async function runPromote() {
     toast('✗ promote failed: ' + e.message, 'err');
   } finally {
     btn.disabled = false; btn.textContent = 'promote';
+    bar.hidden = true;
   }
 }
 
@@ -1433,7 +1434,7 @@ async function runSearch() {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify(body)
     });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     tagPanelCandidates = d.candidates || [];
     tagPanelCollectionCandidates = d.collection_candidates || [];
@@ -1474,7 +1475,7 @@ async function pickCollectionCandidate(releaseId) {
   document.getElementById('t-search-status').textContent = `loading ${c.title}…`;
   try {
     const r = await fetch(`/api/release/discogs/${releaseId}`);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     // Picking a Discogs-only candidate means we don't have an MBID to pass
     // to /api/apply (which uses the MBID to fetch CAA cover art). Clear the
@@ -1502,7 +1503,7 @@ async function refreshCollection() {
   if (btn) btn.disabled = true;
   try {
     const r = await fetch('/api/collection/refresh', { method: 'POST' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     toast(`✓ Discogs collection refreshed (${d.count} releases)`, 'ok');
     // Re-run the current search so the new cache is reflected immediately.
@@ -1521,7 +1522,7 @@ async function pickCandidate(i) {
   document.getElementById('t-search-status').textContent = `loading ${c.title}…`;
   try {
     const r = await fetch(`/api/release/${c.mbid}`);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     tagPanelMbid = d.mbid;
     tagPanelDiscogsId = d.discogs_id || null;
@@ -1571,7 +1572,7 @@ async function applyTagPanel() {
         discogs_release_id: tagPanelDiscogsId,
       })
     });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     toast(`✓ Tagged → ${d.filename}`, 'ok');
     closeTag();

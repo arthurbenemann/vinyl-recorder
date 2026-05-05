@@ -816,7 +816,7 @@ async function weRunSearch() {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify(body),
     });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     we.candidates           = d.candidates || [];
     we.collectionCandidates = d.collection_candidates || [];
@@ -928,7 +928,7 @@ async function wePickCandidate(i) {
   status.textContent = `loading tracklist for ${c.title}…`;
   try {
     const r = await fetch(`/api/release/${c.mbid}`);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     _weApplyTracklist(d.track_details, d.discogs_id ? 'enriched from Discogs' : 'MB only');
   } catch (e) {
@@ -941,7 +941,7 @@ async function wePickCollectionCandidate(releaseId) {
   status.textContent = `loading tracklist from your collection…`;
   try {
     const r = await fetch(`/api/release/discogs/${releaseId}`);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     _weApplyTracklist(d.track_details, 'from your collection');
   } catch (e) {
@@ -958,7 +958,7 @@ async function _weAutoLoadFromIds(a) {
   if (a.discogs_release_id) {
     try {
       const r = await fetch(`/api/release/discogs/${a.discogs_release_id}`);
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) throw new Error(await parseError(r));
       const d = await r.json();
       if (we.filename === a.filename && !we.cuts.length) {
         _weApplyTracklist(d.track_details, 'auto-loaded from saved Discogs id');
@@ -1001,7 +1001,7 @@ async function weDetectInternal({ replace }) {
           filename: we.filename, noise_db: noise, min_silence: mindur, job_id: jobId,
         }),
       });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) throw new Error(await parseError(r));
       return r.json();
     });
     we.silences = (d.silences || []).slice().sort((a, b) => a.start - b.start);
@@ -1155,7 +1155,7 @@ async function weMeasure() {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify(body),
       });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) throw new Error(await parseError(r));
       return r.json();
     });
     we.measured = d;
