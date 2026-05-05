@@ -54,13 +54,13 @@ def test_auto_connect_lights_status_and_vu(stack, page):
     )
 
     # The /loop test stream is at -8 dBFS, so the VU mask (which shows
-    # `100% - level%`) should drop well below 100 within a second of WS
-    # frames. Read the inline style — it's the truth source for the bar.
-    page.wait_for_timeout(1500)  # let a few VU frames arrive
-    mask_l_width = page.locator("#mask-L").evaluate("el => el.style.width")
-    pct = float(mask_l_width.rstrip("%") or "100")
-    assert pct < 99, (
-        f"VU mask still at {pct}% (silent) — VU frames likely not reaching the UI"
+    # `100% - level%`) should drop well below 100 once a few WS frames
+    # arrive. Poll rather than sleep-then-check: a fixed 1.5 s wait
+    # flakes when the runner is slow to bring up ffmpeg + WS.
+    page.wait_for_function(
+        "() => { const w = document.querySelector('#mask-L').style.width;"
+        "        return w && parseFloat(w) < 99; }",
+        timeout=WS_SETTLE_MS,
     )
 
 
