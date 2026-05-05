@@ -7,19 +7,17 @@ This is the only test that exercises the real ffmpeg pipeline
 FLAC). The compose stack itself is brought up by the session-scoped
 `stack` fixture in conftest.py.
 """
-import json
-import subprocess
 import time
 
 import pytest
 
-from .conftest import RECORDER_URL, STREAM_URL, http_json
+from .conftest import RECORDER_URL, STREAM_URL, ffprobe, http_json
 
 pytestmark = pytest.mark.e2e
 
 
-def test_record_5s_from_loop(stack):
-    """Record 5 s of /loop, stop, verify a FLAC dropped with the right format."""
+def test_record_3s_from_loop(stack):
+    """Record 3 s of /loop, stop, verify a FLAC dropped with the right format."""
     untagged = stack["untagged"]
 
     # Snapshot files that already existed (e.g. from a developer's run) so
@@ -37,14 +35,14 @@ def test_record_5s_from_loop(stack):
     sid = started["session_id"]
     fname = started["filename"]
 
-    # Let ~5s of real-time audio accumulate in the FLAC.
-    time.sleep(5)
+    # Let ~3s of real-time audio accumulate in the FLAC.
+    time.sleep(3)
 
     stop = http_json(
         f"{RECORDER_URL}/api/record/stop/{sid}", method="POST",
     )
-    # Allow some slack for the SIGINT-flush window — anywhere in [4, 8] is fine.
-    assert 4 <= stop["elapsed"] <= 8, f"unexpected duration: {stop}"
+    # Allow some slack for the SIGINT-flush window — anywhere in [2, 6] is fine.
+    assert 2 <= stop["elapsed"] <= 6, f"unexpected duration: {stop}"
     assert stop["filename"] == fname
 
     # File should exist in untagged/ and be new (vs pre-snapshot).
@@ -54,17 +52,13 @@ def test_record_5s_from_loop(stack):
 
     # Probe the FLAC — confirms ffmpeg actually finalized the file rather
     # than leaving a 0-byte stub on a SIGINT race.
-    info = json.loads(subprocess.check_output(
-        ["ffprobe", "-v", "error", "-print_format", "json",
-         "-show_streams", "-show_format", str(fpath)],
-        text=True,
-    ))
+    info = ffprobe(fpath)
     s = info["streams"][0]
     assert s["codec_name"] == "flac"
     assert int(s["sample_rate"]) == 96000
     assert int(s["channels"]) == 2
     duration = float(info["format"]["duration"])
-    assert 4.0 <= duration <= 8.0, f"unexpected FLAC duration: {duration}"
+    assert 2.0 <= duration <= 6.0, f"unexpected FLAC duration: {duration}"
 
 
 def test_status_reflects_upstream_format(stack):
@@ -86,4 +80,4 @@ def test_recordings_lists_the_recording(stack):
     body = http_json(f"{RECORDER_URL}/api/recordings")
     files = body["files"]
     assert any(f["filename"].startswith("e2e - smoke") for f in files), \
-        f"recording not found: {[f['filename'] for f in files]}"
+        f"recording not in library: {[f['filename'] for f in files]}"

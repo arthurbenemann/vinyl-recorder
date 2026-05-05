@@ -83,8 +83,8 @@ def test_record_then_stop_creates_library_row(stack, page):
     expect(page.locator("#stext")).to_have_text("recording", timeout=5_000)
     expect(page.locator("#timer")).not_to_have_text("00:00:00", timeout=5_000)
 
-    # Three seconds of audio is plenty for a smoke test.
-    page.wait_for_timeout(3_000)
+    # Two seconds of audio is plenty for a smoke test.
+    page.wait_for_timeout(2_000)
 
     page.locator("#recbtn").click()
 

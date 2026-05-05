@@ -19,7 +19,6 @@ This test mutates the compose stack (stops `test-streams`); it restores
 it in the cleanup so subsequent tests in the session see a healthy
 stack again.
 """
-import json
 import subprocess
 import time
 
@@ -29,6 +28,7 @@ from .conftest import (
     RECORDER_URL,
     STREAM_URL,
     compose,
+    ffprobe,
     http_json,
     wait_for_upstream_connected,
 )
@@ -74,8 +74,8 @@ def test_kill_upstream_mid_recording_reaps_session(stack):
     sid = started["session_id"]
     fname = started["filename"]
 
-    # Let a few seconds of audio accumulate so the FLAC has actual content.
-    time.sleep(3)
+    # Let a couple seconds of audio accumulate so the FLAC has actual content.
+    time.sleep(2)
 
     try:
         # Simulate upstream death. `kill` (vs `stop`) sends SIGKILL with no
@@ -101,18 +101,14 @@ def test_kill_upstream_mid_recording_reaps_session(stack):
         assert fpath not in pre_files
         assert fpath.stat().st_size > 0, "FLAC is 0 bytes — finalize didn't flush"
 
-        info = json.loads(subprocess.check_output(
-            ["ffprobe", "-v", "error", "-print_format", "json",
-             "-show_streams", "-show_format", str(fpath)],
-            text=True,
-        ))
+        info = ffprobe(fpath)
         s = info["streams"][0]
         assert s["codec_name"] == "flac"
-        # ~3 s of recording before kill + watcher latency. The upper bound is
+        # ~2 s of recording before kill + watcher latency. The upper bound is
         # only a sanity check; widen it to absorb GHA jitter (kill itself is
         # instant but the watcher tick + ffmpeg flush can take a few seconds).
         duration = float(info["format"].get("duration", 0))
-        assert 1.0 <= duration <= 30.0, f"unexpected FLAC duration: {duration}"
+        assert 0.5 <= duration <= 30.0, f"unexpected FLAC duration: {duration}"
 
         # The status payload should advertise the recording in the library.
         recordings = http_json(f"{RECORDER_URL}/api/recordings")["files"]

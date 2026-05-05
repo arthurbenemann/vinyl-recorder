@@ -6,13 +6,11 @@ test_crash_recovery.py.
 This is one of PR #36's unchecked "60-second duration limit" test items.
 We use a 5 s duration here instead of 60 — same code path, faster CI.
 """
-import json
-import subprocess
 import time
 
 import pytest
 
-from .conftest import RECORDER_URL, STREAM_URL, http_json
+from .conftest import RECORDER_URL, STREAM_URL, ffprobe, http_json
 
 pytestmark = pytest.mark.e2e
 
@@ -41,15 +39,15 @@ def test_duration_limit_auto_stops(stack):
         body={
             "stream_url": STREAM_URL,
             "artist": "e2e", "album": "auto-stop", "year": "2026",
-            # ffmpeg `-t 5` exits cleanly after 5 s; watcher reaps and the
+            # ffmpeg `-t 3` exits cleanly after 3 s; watcher reaps and the
             # finalize path tags the session as reason="auto".
-            "duration": 5,
+            "duration": 3,
         },
     )
     sid = started["session_id"]
     fname = started["filename"]
 
-    # 5 s record + ~1 s ffmpeg flush + 1 Hz watcher tick → 7 s should be
+    # 3 s record + ~1 s ffmpeg flush + 1 Hz watcher tick → 5 s should be
     # plenty; budget 20 s to absorb GHA jitter.
     after = _wait_for_session_reaped(sid, timeout=20)
     assert after["recording"] is False
@@ -62,13 +60,9 @@ def test_duration_limit_auto_stops(stack):
     assert fpath.exists(), f"FLAC missing at {fpath}"
     assert fpath.stat().st_size > 0
 
-    info = json.loads(subprocess.check_output(
-        ["ffprobe", "-v", "error", "-print_format", "json",
-         "-show_streams", "-show_format", str(fpath)],
-        text=True,
-    ))
+    info = ffprobe(fpath)
     assert info["streams"][0]["codec_name"] == "flac"
     duration = float(info["format"]["duration"])
-    # ffmpeg's `-t 5` produces ~5 s; allow some slack on slow runners but
+    # ffmpeg's `-t 3` produces ~3 s; allow some slack on slow runners but
     # reject anything that strays too far in either direction.
-    assert 4.0 <= duration <= 7.0, f"unexpected duration: {duration}"
+    assert 2.5 <= duration <= 5.0, f"unexpected duration: {duration}"
