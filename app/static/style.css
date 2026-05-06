@@ -43,8 +43,54 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 .health-label { color: var(--muted); }
 
 /* Main grid */
-.main { display: grid; grid-template-columns: 340px 1fr; min-height: calc(100vh - 53px); }
-.sidebar { border-right: 0.5px solid var(--border2); padding: 20px; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.main { display: grid; grid-template-columns: 340px 1fr; min-height: calc(100vh - 53px); transition: grid-template-columns 0.2s ease; }
+.sidebar { border-right: 0.5px solid var(--border2); padding: 20px; display: flex; flex-direction: column; gap: 20px; min-width: 0; position: relative; transition: padding 0.2s ease; }
+
+/* Collapsible sidebar — chevron toggle that shrinks the 340px column to a
+   56px rail showing only REC button, timer, and mini VU. State is persisted
+   in localStorage; auto-expands when a recording starts. The collapsed
+   styles are scoped to ≥721px so the existing mobile stacked layout is
+   unaffected by a stored "collapsed" flag. */
+.sidebar-toggle {
+  position: absolute; top: 10px; right: 10px;
+  width: 22px; height: 22px; border-radius: 4px;
+  background: transparent; border: 0.5px solid var(--border2);
+  color: var(--muted); font-size: 14px; cursor: pointer; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: color 0.12s, background 0.12s;
+  z-index: 2;
+}
+.sidebar-toggle:hover { color: var(--text); background: var(--surface2); }
+.sidebar-toggle-icon { display: inline-block; transition: transform 0.2s ease; }
+
+@media (min-width: 721px) {
+  .main[data-collapsed] { grid-template-columns: 56px 1fr; }
+  .main[data-collapsed] .sidebar-toggle-icon { transform: rotate(180deg); }
+  .main[data-collapsed] .sidebar { padding: 38px 4px 14px; gap: 14px; align-items: center; }
+  .main[data-collapsed] .sidebar-toggle { top: 8px; right: 50%; transform: translateX(50%); }
+
+  /* Hide non-essential sections in the rail */
+  .main[data-collapsed] .sb-section:not(.sb-section-transport):not(.sb-section-vu) { display: none; }
+  .main[data-collapsed] .sb-section-transport .transport-head,
+  .main[data-collapsed] .sb-section-transport .timer-hint,
+  .main[data-collapsed] .sb-section-transport .prog-wrap,
+  .main[data-collapsed] .sb-section-transport .pause-btn { display: none; }
+
+  /* Compact transport: button on top, tiny timer below */
+  .main[data-collapsed] .sb-section-transport { width: 100%; display: flex; justify-content: center; }
+  .main[data-collapsed] .transport { flex-direction: column; gap: 6px; align-items: center; }
+  .main[data-collapsed] .timer-block { flex: 0 0 auto; width: 100%; text-align: center; }
+  .main[data-collapsed] .timer { font-size: 11px; letter-spacing: 0.02em; text-align: center; }
+
+  /* Tiny VU strip — keep input levels visible in slim form */
+  .main[data-collapsed] .sb-section-vu { display: flex; flex-direction: column; gap: 4px; width: 40px; }
+  .main[data-collapsed] .sb-section-vu .label,
+  .main[data-collapsed] .sb-section-vu .vu-label,
+  .main[data-collapsed] .sb-section-vu .vu-db,
+  .main[data-collapsed] .sb-section-vu .vu-clip { display: none; }
+  .main[data-collapsed] .sb-section-vu .vu-wrap { padding: 4px; gap: 3px; background: transparent; border: none; }
+  .main[data-collapsed] .sb-section-vu .vu-track { height: 4px; }
+}
 /* min-width:0 lets the 1fr column shrink below its content's intrinsic min
    so the page actually resizes when the window narrows — without this, the
    table colgroup widths jam the grid open at ~940px. */
@@ -420,4 +466,8 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
   .lib-table th, .lib-table td { padding: 8px 6px; font-size: 11px; }
   .sidebar .log { display: none; }
   .toast-container { top: 10px; right: 10px; left: 10px; max-width: none; }
+  /* Hide the chevron on mobile — the rail style only applies ≥721px so a
+     stored "collapsed" flag has no visual effect here, and the toggle would
+     be a no-op for users. */
+  .sidebar-toggle { display: none; }
 }

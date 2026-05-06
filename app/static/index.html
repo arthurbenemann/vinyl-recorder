@@ -36,7 +36,10 @@
 
   <!-- SIDEBAR: capture controls -->
   <div class="sidebar">
-    <div>
+    <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()" title="Collapse panel" aria-expanded="true">
+      <span class="sidebar-toggle-icon">‹</span>
+    </button>
+    <div class="sb-section">
       <div class="label">Stream source</div>
       <div class="stream-row">
         <input id="stream-url" value="https://ice1.somafm.com/groovesalad-256-mp3" placeholder="http://host:port/stream" />
@@ -50,7 +53,7 @@
       </div>
     </div>
 
-    <div>
+    <div class="sb-section sb-section-vu">
       <div class="label">Input levels</div>
       <div class="vu-wrap">
         <div class="vu-channel">
@@ -74,7 +77,7 @@
       </div>
     </div>
 
-    <div>
+    <div class="sb-section sb-section-transport">
       <div class="transport-head">
         <div class="label">Transport</div>
         <select class="dur" id="dur-sel" title="Max recording length">
@@ -100,7 +103,7 @@
       </div>
     </div>
 
-    <div>
+    <div class="sb-section">
       <div class="label">Log</div>
       <div class="log" id="log">Ready.</div>
     </div>

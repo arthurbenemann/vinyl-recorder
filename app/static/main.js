@@ -442,6 +442,10 @@ function applyRecordState({ active, paused: isPaused, sid, durationSec, elapsedS
   pauseBtn.title       = paused ? 'Resume' : 'Pause';
 
   if (recording) {
+    // Force-expand the sidebar so the timer / progress are visible while
+    // capturing. We don't auto-collapse on stop — leave the user's choice.
+    applySidebarState(false);
+    try { localStorage.setItem(SIDEBAR_KEY, '0'); } catch (_) {}
     stext.textContent = paused ? 'paused' : 'recording';
     hint.textContent = paused ? 'paused — click ▶ to resume'
                               : 'click ■ to stop · ‖ to pause';
@@ -564,6 +568,33 @@ function toggleHealthPanel() {
   if (!panel) return;
   panel.hidden = !panel.hidden;
 }
+
+// ── Collapsible sidebar ──────────────────────────────────────────────────
+// The capture panel can shrink to a 56px rail (REC button + tiny timer + mini
+// VU). State persists across reloads; auto-expands when a recording starts so
+// the user always sees the full transport view during capture.
+const SIDEBAR_KEY = 'sidebarCollapsed';
+function applySidebarState(collapsed) {
+  const main = document.querySelector('.main');
+  if (!main) return;
+  if (collapsed) main.setAttribute('data-collapsed', '');
+  else main.removeAttribute('data-collapsed');
+  const btn = document.getElementById('sidebar-toggle');
+  if (btn) {
+    btn.setAttribute('aria-expanded', String(!collapsed));
+    btn.title = collapsed ? 'Expand panel' : 'Collapse panel';
+  }
+}
+function toggleSidebar() {
+  const collapsed = !document.querySelector('.main').hasAttribute('data-collapsed');
+  applySidebarState(collapsed);
+  try { localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0'); } catch (_) {}
+}
+document.addEventListener('DOMContentLoaded', () => {
+  let saved = null;
+  try { saved = localStorage.getItem(SIDEBAR_KEY); } catch (_) {}
+  applySidebarState(saved === '1');  // default = expanded
+});
 
 // ── Library ───────────────────────────────────────────────────────────────
 let filesByName = {};
