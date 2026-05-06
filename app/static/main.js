@@ -740,6 +740,53 @@ async function bulkDelete() {
   } catch(e) { toast('✗ ' + e.message, 'err'); }
 }
 
+async function bulkPromote() {
+  if (!selected.size) return;
+  const names = [...selected];
+  if (!confirm(`Promote ${names.length} recording${names.length===1?'':'s'} to albums/ using existing tags?`)) return;
+
+  const bar  = document.getElementById('bulk-promote-bar');
+  const fill = document.getElementById('bulk-promote-fill');
+  const pct  = document.getElementById('bulk-promote-pct');
+  bar.hidden = false;
+
+  let done = 0, failed = 0;
+  const total = names.length;
+  for (const fname of names) {
+    const f = filesByName[fname] || {};
+    const album = {
+      artist: f.artist || '',
+      album:  f.album  || '',
+      year:   f.year   || '',
+      genre:  f.genre  || '',
+      label:  f.label  || '',
+    };
+    try {
+      const r = await fetch('/api/promote', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ filename: fname, album }),
+      });
+      if (!r.ok) throw new Error(await parseError(r));
+      done++;
+    } catch { failed++; }
+    const progress = ((done + failed) / total) * 100;
+    fill.style.width = progress + '%';
+    pct.textContent  = `${done + failed} / ${total}`;
+  }
+
+  bar.hidden = true;
+  fill.style.width = '0%';
+
+  if (failed === 0) {
+    toast(`✓ Promoted ${done} recording${done===1?'':'s'} to albums`, 'ok');
+  } else {
+    toast(`Promoted ${done}, failed ${failed}`, 'err');
+  }
+  selected.clear();
+  refreshLib();
+  refreshAlbums();
+}
+
 async function refreshLib() {
   try {
     const r = await fetch('/api/recordings');

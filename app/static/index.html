@@ -124,7 +124,12 @@
           <button class="btn-small" onclick="clearSelection()">clear</button>
           <button class="btn-small" id="combine-btn" onclick="openCombine()" disabled
                   title="Select 2+ sides to combine into an album">combine into album</button>
+          <button class="btn-small" onclick="bulkPromote()" title="Promote selected recordings to albums/ using existing tags">promote selected</button>
           <button class="btn-small danger" onclick="bulkDelete()">delete selected</button>
+        </div>
+        <div class="job-bar" id="bulk-promote-bar" hidden style="padding:6px 12px 8px">
+          <div class="job-bar-text"><span class="job-bar-phase">promoting…</span><span id="bulk-promote-pct" class="job-bar-pct">0 / 0</span></div>
+          <div class="job-bar-fill-wrap"><div id="bulk-promote-fill" class="job-bar-fill"></div></div>
         </div>
         <table class="lib-table">
           <colgroup>
