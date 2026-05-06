@@ -39,8 +39,12 @@ function updateMeter(ch, level) {
   else if (++peakAge[ch] > PEAK_HOLD_FRAMES) { peak[ch] = Math.max(0, peak[ch] - PEAK_DECAY); }
 
   const pct = Math.min(lvl[ch] * 100, 100);
-  document.getElementById('mask-' + ch).style.width = (100 - pct) + '%';
-  document.getElementById('peak-' + ch).style.left = Math.min(peak[ch] * 100, 99.5) + '%';
+  // The mask hides the unfilled portion of the bar, peak marks the latched
+  // hold position. Both are written as CSS custom properties so the same
+  // values drive horizontal (default) and vertical (collapsed-rail) tracks
+  // without JS having to know which orientation is active.
+  document.getElementById('mask-' + ch).style.setProperty('--vu-fill', (100 - pct) + '%');
+  document.getElementById('peak-' + ch).style.setProperty('--vu-peak', Math.min(peak[ch] * 100, 99.5) + '%');
   document.getElementById('db-' + ch).textContent = dbStr(peak[ch]);
 }
 
@@ -424,6 +428,7 @@ let recDurationSec = 0;        // 0 = unlimited
 let recTimerInterval = null;
 
 function applyRecordState({ active, paused: isPaused, sid, durationSec, elapsedSec }) {
+  const wasRecording = recording;
   recording = !!active;
   paused    = !!isPaused;
   sessionId = active ? (sid || null) : null;
@@ -442,10 +447,13 @@ function applyRecordState({ active, paused: isPaused, sid, durationSec, elapsedS
   pauseBtn.title       = paused ? 'Resume' : 'Pause';
 
   if (recording) {
-    // Force-expand the sidebar so the timer / progress are visible while
-    // capturing. We don't auto-collapse on stop — leave the user's choice.
-    applySidebarState(false);
-    try { localStorage.setItem(SIDEBAR_KEY, '0'); } catch (_) {}
+    if (!wasRecording) {
+      // Force-expand only on the inactive → active transition so the timer /
+      // progress are visible when a session starts. Pause/resume events
+      // shouldn't reopen the rail if the user has chosen to keep it slim.
+      applySidebarState(false);
+      try { localStorage.setItem(SIDEBAR_KEY, '0'); } catch (_) {}
+    }
     stext.textContent = paused ? 'paused' : 'recording';
     hint.textContent = paused ? 'paused — click ▶ to resume'
                               : 'click ■ to stop · ‖ to pause';
