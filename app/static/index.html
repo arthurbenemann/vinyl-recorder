@@ -124,7 +124,12 @@
           <button class="btn-small" onclick="clearSelection()">clear</button>
           <button class="btn-small" id="combine-btn" onclick="openCombine()" disabled
                   title="Select 2+ sides to combine into an album">combine into album</button>
-          <button class="btn-small" style="color:var(--accent);border-color:rgba(226,75,74,0.35)" onclick="bulkDelete()">delete selected</button>
+          <button class="btn-small" onclick="bulkPromote()" title="Promote selected recordings to albums/ using existing tags">promote selected</button>
+          <button class="btn-small danger" onclick="bulkDelete()">delete selected</button>
+        </div>
+        <div class="job-bar" id="bulk-action-bar" hidden style="padding:6px 12px 8px">
+          <div class="job-bar-text"><span id="bulk-action-phase" class="job-bar-phase"></span><span id="bulk-action-pct" class="job-bar-pct"></span></div>
+          <div class="job-bar-fill-wrap"><div id="bulk-action-fill" class="job-bar-fill"></div></div>
         </div>
         <table class="lib-table">
           <colgroup>
@@ -160,7 +165,7 @@
           <span><span id="albums-bulk-count">0</span> selected</span>
           <span class="grow"></span>
           <button class="btn-small" onclick="clearAlbumsSelection()">clear</button>
-          <button class="btn-small" style="color:var(--accent);border-color:rgba(226,75,74,0.35)" onclick="bulkDeleteAlbums()">delete selected</button>
+          <button class="btn-small danger" onclick="bulkDeleteAlbums()">delete selected</button>
         </div>
         <table class="lib-table">
           <colgroup>
@@ -171,13 +176,13 @@
           <thead>
             <tr>
               <th class="col-check"><input type="checkbox" id="albums-check-all" onclick="toggleAllAlbums(this.checked)"></th>
-              <th>Album</th>
-              <th>Artist</th>
-              <th>Year</th>
-              <th>Recorded</th>
-              <th>Length</th>
-              <th>Size</th>
-              <th title="Source bit depth / sample rate (kHz)">Fmt</th>
+              <th class="sortable" data-sort="album"  onclick="setSort('album')">Album<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="artist" onclick="setSort('artist')">Artist<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="year"   onclick="setSort('year')">Year<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="date"   onclick="setSort('date')">Recorded<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="length" onclick="setSort('length')">Length<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="size"   onclick="setSort('size')">Size<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')" title="Source bit depth / sample rate (kHz)">Fmt<span class="sort-arrow"></span></th>
               <th>Sides</th>
               <th></th>
             </tr>
@@ -246,6 +251,10 @@
       <div class="field"><label>Label</label><input id="p-label"/></div>
     </div>
 
+    <div class="job-bar" id="promote-bar" hidden style="margin-top:10px">
+      <div class="job-bar-fill-wrap"><div class="job-bar-fill indeterminate"></div></div>
+    </div>
+
     <div class="action-row" style="margin-top:14px">
       <button class="btn primary" id="promote-go" onclick="runPromote()">promote</button>
       <button class="btn" onclick="closePromote()">cancel</button>
@@ -287,9 +296,9 @@
         <div class="we-suggest-pop" id="we-pop-silence" hidden>
           <div class="col-label">Silence detection</div>
           <div class="threshold-row" style="margin-bottom:6px">
-            <label>Noise floor <input type="number" id="we-noise" value="-40" step="1" style="width:60px;background:var(--surface);border:0.5px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:11px;padding:3px 6px"> dB</label>
-            <label style="margin-left:8px">Min silence <input type="number" id="we-mindur" value="1.5" step="0.1" min="0.2" style="width:54px;background:var(--surface);border:0.5px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:11px;padding:3px 6px"> s</label>
-            <label style="margin-left:8px" title="Silences this long get a pair of cuts and the in-between region is auto-marked skip — typical for side flips and lead-in/out.">Auto-skip ≥ <input type="number" id="we-skiplong" value="15" step="1" min="2" style="width:54px;background:var(--surface);border:0.5px solid var(--border2);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:11px;padding:3px 6px"> s</label>
+            <label>Noise floor <input type="number" id="we-noise" value="-40" step="1"> dB</label>
+            <label style="margin-left:8px">Min silence <input type="number" id="we-mindur" value="1.5" step="0.1" min="0.2" style="width:54px"> s</label>
+            <label style="margin-left:8px" title="Silences this long get a pair of cuts and the in-between region is auto-marked skip — typical for side flips and lead-in/out.">Auto-skip ≥ <input type="number" id="we-skiplong" value="15" step="1" min="2" style="width:54px"> s</label>
           </div>
           <div class="action-row">
             <button class="btn primary" onclick="weDetectAndApply()">detect &amp; replace cuts</button>

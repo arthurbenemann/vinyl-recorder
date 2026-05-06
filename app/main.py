@@ -112,7 +112,7 @@ async def connect(req: ConnectRequest):
         bus.log(f"✗ Connect failed: {e}", "err")
         raise HTTPException(502, str(e))
     bus.log(
-        f"✔ {fmt['sample_rate']} Hz / {fmt['channels']}ch / {fmt['codec']}",
+        f"✓ {fmt['sample_rate']} Hz / {fmt['channels']}ch / {fmt['codec']}",
         "ok",
     )
     bus.log("▶ Streaming live", "info")

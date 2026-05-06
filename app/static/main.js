@@ -358,7 +358,7 @@ document.getElementById('gain-slider').addEventListener('input', (e) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ db })
       });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) throw new Error(await parseError(r));
       const d = await r.json();
       document.getElementById('gain-db').textContent = d.gain_db.toFixed(1) + ' dB';
     } catch (err) { log('✗ gain set failed: ' + err.message, 'err'); }
@@ -411,7 +411,7 @@ async function togglePause() {
   const path = paused ? 'resume' : 'pause';
   try {
     const r = await fetch(`/api/record/${path}/${sessionId}`, { method: 'POST' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     // UI updates via the WS `record:pause`/`resume` event.
   } catch (e) { toast('✗ ' + e.message, 'err'); }
 }
@@ -639,6 +639,7 @@ function setSort(col) {
   localStorage.setItem('lib.sortBy',  sortBy);
   localStorage.setItem('lib.sortDir', sortDir);
   refreshLib();
+  refreshAlbumsRender();
 }
 
 function sortFiles(files) {
@@ -725,6 +726,12 @@ async function bulkDelete() {
   if (!selected.size) return;
   const names = [...selected];
   if (!confirm(`Delete ${names.length} recording${names.length===1?'':'s'}? This cannot be undone.`)) return;
+  const bar = document.getElementById('bulk-action-bar');
+  const fill = document.getElementById('bulk-action-fill');
+  document.getElementById('bulk-action-phase').textContent = 'deleting…';
+  document.getElementById('bulk-action-pct').textContent = '';
+  fill.classList.add('indeterminate');
+  bar.hidden = false;
   try {
     const r = await fetch('/api/recordings/bulk-delete', {
       method: 'POST',
@@ -732,11 +739,64 @@ async function bulkDelete() {
       body: JSON.stringify({filenames: names})
     });
     const d = await r.json();
-    toast(`✕ Deleted ${d.deleted.length} file${d.deleted.length===1?'':'s'}`,
+    toast(`✓ Deleted ${d.deleted.length} file${d.deleted.length===1?'':'s'}`,
           d.missing?.length ? 'err' : 'ok');
     selected.clear();
     refreshLib();
   } catch(e) { toast('✗ ' + e.message, 'err'); }
+  finally {
+    bar.hidden = true;
+    fill.classList.remove('indeterminate');
+    fill.style.width = '0%';
+  }
+}
+
+async function bulkPromote() {
+  if (!selected.size) return;
+  const names = [...selected];
+  if (!confirm(`Promote ${names.length} recording${names.length===1?'':'s'} to albums/ using existing tags?`)) return;
+
+  const bar  = document.getElementById('bulk-action-bar');
+  const fill = document.getElementById('bulk-action-fill');
+  const pct  = document.getElementById('bulk-action-pct');
+  document.getElementById('bulk-action-phase').textContent = 'promoting…';
+  bar.hidden = false;
+
+  let done = 0, failed = 0;
+  const total = names.length;
+  for (const fname of names) {
+    const f = filesByName[fname] || {};
+    const album = {
+      artist: f.artist || '',
+      album:  f.album  || '',
+      year:   f.year   || '',
+      genre:  f.genre  || '',
+      label:  f.label  || '',
+    };
+    try {
+      const r = await fetch('/api/promote', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ filename: fname, album }),
+      });
+      if (!r.ok) throw new Error(await parseError(r));
+      done++;
+    } catch { failed++; }
+    const progress = ((done + failed) / total) * 100;
+    fill.style.width = progress + '%';
+    pct.textContent  = `${done + failed} / ${total}`;
+  }
+
+  bar.hidden = true;
+  fill.style.width = '0%';
+
+  if (failed === 0) {
+    toast(`✓ Promoted ${done} recording${done===1?'':'s'} to albums`, 'ok');
+  } else {
+    toast(`Promoted ${done}, failed ${failed}`, 'err');
+  }
+  selected.clear();
+  refreshLib();
+  refreshAlbums();
 }
 
 async function refreshLib() {
@@ -824,10 +884,13 @@ function refreshLibRender() {
 }
 
 async function deleteFile(fname) {
-  if (!confirm(`Delete ${fname}?`)) return;
-  await fetch(`/api/recordings/${encodeURIComponent(fname)}`, { method: 'DELETE' });
-  selected.delete(fname);
-  refreshLib();
+  if (!confirm(`Delete ${fname}? This cannot be undone.`)) return;
+  try {
+    const r = await fetch(`/api/recordings/${encodeURIComponent(fname)}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error(await parseError(r));
+    selected.delete(fname);
+    refreshLib();
+  } catch (e) { toast('✗ delete failed: ' + e.message, 'err'); }
 }
 
 // Inline rename for untagged rows. Double-clicking the title swaps it for an
@@ -856,10 +919,7 @@ function startInlineRename(fname, el) {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ new_name: newName }),
       });
-      if (!r.ok) {
-        const text = await r.text();
-        throw new Error(text || ('HTTP ' + r.status));
-      }
+      if (!r.ok) throw new Error(await parseError(r));
       const d = await r.json();
       toast(`✓ Renamed → ${d.filename}`, 'ok');
       // The file moved — drop it from selection so we don't try to act on a
@@ -913,7 +973,7 @@ function toggleAlbumRow(fname, checked) {
 function toggleAllAlbums(checked) {
   if (checked) Object.keys(albumsByName).forEach(fn => albumsSelected.add(fn));
   else albumsSelected.clear();
-  refreshAlbums();
+  document.querySelectorAll('.album-row-check').forEach(cb => { cb.checked = checked; });
   updateAlbumsBulkBar();
 }
 
@@ -931,7 +991,7 @@ async function bulkDeleteAlbums() {
     try { await fetch(`/api/albums/${encodeURIComponent(fn)}`, { method: 'DELETE' }); }
     catch (e) { console.error(e); }
   }
-  log(`✕ Deleted ${names.length} album(s)`, 'ok');
+  toast(`✓ Deleted ${names.length} album${names.length === 1 ? '' : 's'}`, 'ok');
   albumsSelected.clear();
   refreshAlbums();
 }
@@ -949,7 +1009,7 @@ async function refreshAlbums() {
 
 function refreshAlbumsRender() {
   const all = Object.values(albumsByName);
-  const filtered = all.filter(rowMatches);
+  const filtered = sortFiles(all.filter(rowMatches));
   const total = all.length;
   const shown = filtered.length;
   const filterActive = !!libFilterText.trim();
@@ -961,8 +1021,8 @@ function refreshAlbumsRender() {
   const countEl = document.getElementById('albums-count');
   if (countEl) {
     countEl.textContent = filterActive
-      ? `${shown} of ${total}`
-      : `${total}`;
+      ? `${shown} of ${total} album${total === 1 ? '' : 's'}`
+      : `${total} album${total === 1 ? '' : 's'}`;
   }
   const tbody = document.getElementById('albums-tbody');
   if (!tbody) return;
@@ -1024,7 +1084,7 @@ async function deleteAlbum(fname) {
   if (!confirm(`Delete album ${fname}? Sides remain in the library.`)) return;
   const r = await fetch(`/api/albums/${encodeURIComponent(fname)}`, { method: 'DELETE' });
   if (r.ok) {
-    toast(`✕ Album deleted — ${fname}`, 'ok');
+    toast(`✓ Album deleted — ${fname}`, 'ok');
     refreshAlbums();
   } else {
     toast('✗ delete failed', 'err');
@@ -1271,7 +1331,9 @@ async function runPromote() {
     return;
   }
   const btn = document.getElementById('promote-go');
+  const bar = document.getElementById('promote-bar');
   btn.disabled = true; btn.textContent = 'promoting…';
+  bar.hidden = false;
   try {
     const r = await fetch('/api/promote', {
       method: 'POST', headers: {'Content-Type':'application/json'},
@@ -1288,6 +1350,7 @@ async function runPromote() {
     toast('✗ promote failed: ' + e.message, 'err');
   } finally {
     btn.disabled = false; btn.textContent = 'promote';
+    bar.hidden = true;
   }
 }
 
@@ -1430,7 +1493,7 @@ async function runSearch() {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify(body)
     });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     tagPanelCandidates = d.candidates || [];
     tagPanelCollectionCandidates = d.collection_candidates || [];
@@ -1471,7 +1534,7 @@ async function pickCollectionCandidate(releaseId) {
   document.getElementById('t-search-status').textContent = `loading ${c.title}…`;
   try {
     const r = await fetch(`/api/release/discogs/${releaseId}`);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     // Picking a Discogs-only candidate means we don't have an MBID to pass
     // to /api/apply (which uses the MBID to fetch CAA cover art). Clear the
@@ -1499,7 +1562,7 @@ async function refreshCollection() {
   if (btn) btn.disabled = true;
   try {
     const r = await fetch('/api/collection/refresh', { method: 'POST' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     toast(`✓ Discogs collection refreshed (${d.count} releases)`, 'ok');
     // Re-run the current search so the new cache is reflected immediately.
@@ -1518,7 +1581,7 @@ async function pickCandidate(i) {
   document.getElementById('t-search-status').textContent = `loading ${c.title}…`;
   try {
     const r = await fetch(`/api/release/${c.mbid}`);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     tagPanelMbid = d.mbid;
     tagPanelDiscogsId = d.discogs_id || null;
@@ -1568,7 +1631,7 @@ async function applyTagPanel() {
         discogs_release_id: tagPanelDiscogsId,
       })
     });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     toast(`✓ Tagged → ${d.filename}`, 'ok');
     closeTag();

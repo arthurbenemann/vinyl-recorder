@@ -64,6 +64,8 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 .btn-small.active { color: var(--text); border-color: rgba(255,255,255,0.25); background: var(--surface2); }
 .btn-small:disabled { opacity: 0.5; cursor: wait; }
 .btn-small:disabled:hover { border-color: var(--border2); background: transparent; color: var(--muted); }
+.btn-small.danger { color: var(--accent); border-color: rgba(226,75,74,0.35); }
+.btn-small.danger:hover { background: rgba(226,75,74,0.1); color: var(--accent); border-color: rgba(226,75,74,0.55); }
 
 /* VU meter — stereo peak with hold markers */
 .vu-wrap { background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
@@ -121,6 +123,8 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .job-bar .job-bar-fill { height: 100%; background: var(--blue); border-radius: 2px; transition: width 0.25s linear; width: 0%; }
 .job-bar.inline { flex-direction: row; align-items: center; gap: 8px; }
 .job-bar.inline .job-bar-fill-wrap { flex: 1; min-width: 80px; }
+@keyframes indeterminate { 0% { left: -40%; width: 40%; } 100% { left: 100%; width: 40%; } }
+.job-bar .job-bar-fill.indeterminate { position: relative; width: 40%; animation: indeterminate 1.2s ease-in-out infinite; transition: none; }
 .job-bar.inline .job-bar-text { flex-shrink: 0; }
 
 /* Waveform-render progress overlay — sits on top of the wave-img placeholder
@@ -196,6 +200,8 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .icon-btn { width: 26px; height: 26px; background: transparent; border: 0.5px solid var(--border2); border-radius: 5px; cursor: pointer; color: var(--muted); font-size: 12px; display: inline-flex; align-items: center; justify-content: center; margin-left: 4px; text-decoration: none; }
 .icon-btn:hover { background: var(--surface2); color: var(--text); }
 .icon-btn.playing { background: rgba(55,138,221,0.18); border-color: var(--blue); color: var(--blue); }
+.icon-btn.danger { color: var(--accent); border-color: rgba(226,75,74,0.3); }
+.icon-btn.danger:hover { background: rgba(226,75,74,0.1); color: var(--accent); border-color: rgba(226,75,74,0.55); }
 .empty-lib { text-align: center; padding: 40px; color: var(--muted); font-size: 12px; }
 
 /* Cover thumb in library / album rows */
@@ -298,6 +304,13 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .wave-readout { position: absolute; top: 4px; right: 6px; padding: 2px 6px; background: rgba(0,0,0,0.6); border-radius: 3px; font-size: 10px; color: var(--text); pointer-events: none; font-variant-numeric: tabular-nums; }
 .wave-axis { display: flex; justify-content: space-between; padding: 4px 6px; font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; background: var(--surface); border-top: 0.5px solid var(--border); }
 .wave-help { font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
+
+/* Silence-detection number inputs inside the suggest popover */
+.we-suggest-pop input[type="number"] {
+  background: var(--surface); border: 0.5px solid var(--border2); border-radius: 4px;
+  color: var(--text); font-family: var(--mono); font-size: 11px; padding: 3px 6px;
+  outline: none; width: 60px;
+}
 
 /* Wave editor — auto-suggest popovers */
 .we-suggest { position: relative; }
