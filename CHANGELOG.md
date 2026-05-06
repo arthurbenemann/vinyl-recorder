@@ -1,3 +1,8 @@
+## v0.5.1 — 2026-05-06
+
+### Features
+- **docker:** Add healthcheck and /health endpoint (#72)
+
 ## v0.5.0 — 2026-05-06
 
 ### Features
