@@ -25,7 +25,7 @@ pytestmark = pytest.mark.e2e
 
 
 def _record_clip(seconds: int, album: str) -> str:
-    """Record `seconds` of /album, return the resulting filename in untagged/."""
+    """Record `seconds` of /album, return the resulting filename in raw/."""
     started = http_json(
         f"{RECORDER_URL}/api/record/start", method="POST",
         body={
@@ -42,7 +42,7 @@ def _record_clip(seconds: int, album: str) -> str:
 
 
 def _promote(filename: str, album: str) -> str:
-    """Promote a recording in untagged/ → albums/. Returns the album filename."""
+    """Promote a recording in raw/ → in-progress/. Returns the album filename."""
     body = http_json(
         f"{RECORDER_URL}/api/promote", method="POST",
         body={

@@ -951,8 +951,15 @@ function fmtDuration(sec) {
     : `${m}m ${String(ss).padStart(2,'0')}s`;
 }
 
-// Tracks selected album filenames for the bulk-action bar (mirrors `selected`).
-let albumsSelected = new Set();
+// Tracks selected album filenames per section. In-progress (un-split albums)
+// and Music (split-completed albums) keep separate selection sets so a
+// "delete selected" in one section doesn't pull rows from the other.
+let albumsSelected = new Set();   // in-progress section
+let musicSelected  = new Set();   // music section
+
+function _albumsBySplit(split) {
+  return Object.values(albumsByName).filter(a => !!a.split === !!split);
+}
 
 function updateAlbumsBulkBar() {
   const bar = document.getElementById('albums-bulk-bar');
@@ -960,9 +967,20 @@ function updateAlbumsBulkBar() {
   if (!bar || !cnt) return;
   cnt.textContent = albumsSelected.size;
   bar.classList.toggle('hidden', albumsSelected.size === 0);
-  const total = Object.keys(albumsByName).length;
+  const total = _albumsBySplit(false).length;
   const checkAll = document.getElementById('albums-check-all');
   if (checkAll) checkAll.checked = total > 0 && albumsSelected.size === total;
+}
+
+function updateMusicBulkBar() {
+  const bar = document.getElementById('music-bulk-bar');
+  const cnt = document.getElementById('music-bulk-count');
+  if (!bar || !cnt) return;
+  cnt.textContent = musicSelected.size;
+  bar.classList.toggle('hidden', musicSelected.size === 0);
+  const total = _albumsBySplit(true).length;
+  const checkAll = document.getElementById('music-check-all');
+  if (checkAll) checkAll.checked = total > 0 && musicSelected.size === total;
 }
 
 function toggleAlbumRow(fname, checked) {
@@ -970,11 +988,23 @@ function toggleAlbumRow(fname, checked) {
   updateAlbumsBulkBar();
 }
 
+function toggleMusicRow(fname, checked) {
+  if (checked) musicSelected.add(fname); else musicSelected.delete(fname);
+  updateMusicBulkBar();
+}
+
 function toggleAllAlbums(checked) {
-  if (checked) Object.keys(albumsByName).forEach(fn => albumsSelected.add(fn));
+  if (checked) _albumsBySplit(false).forEach(a => albumsSelected.add(a.filename));
   else albumsSelected.clear();
   document.querySelectorAll('.album-row-check').forEach(cb => { cb.checked = checked; });
   updateAlbumsBulkBar();
+}
+
+function toggleAllMusic(checked) {
+  if (checked) _albumsBySplit(true).forEach(a => musicSelected.add(a.filename));
+  else musicSelected.clear();
+  document.querySelectorAll('.music-row-check').forEach(cb => { cb.checked = checked; });
+  updateMusicBulkBar();
 }
 
 function clearAlbumsSelection() {
@@ -983,16 +1013,33 @@ function clearAlbumsSelection() {
   updateAlbumsBulkBar();
 }
 
-async function bulkDeleteAlbums() {
-  if (albumsSelected.size === 0) return;
-  if (!confirm(`Delete ${albumsSelected.size} album(s)? Sides remain in the library.`)) return;
-  const names = [...albumsSelected];
+function clearMusicSelection() {
+  musicSelected.clear();
+  refreshAlbums();
+  updateMusicBulkBar();
+}
+
+async function _bulkDeleteAlbumNames(names, label) {
+  if (!names.length) return;
+  if (!confirm(`Delete ${names.length} ${label}? Sides remain in the library.`)) return;
   for (const fn of names) {
     try { await fetch(`/api/albums/${encodeURIComponent(fn)}`, { method: 'DELETE' }); }
     catch (e) { console.error(e); }
   }
-  toast(`✓ Deleted ${names.length} album${names.length === 1 ? '' : 's'}`, 'ok');
+  toast(`✓ Deleted ${names.length} ${label}`, 'ok');
+}
+
+async function bulkDeleteAlbums() {
+  const names = [...albumsSelected];
+  await _bulkDeleteAlbumNames(names, names.length === 1 ? 'album' : 'albums');
   albumsSelected.clear();
+  refreshAlbums();
+}
+
+async function bulkDeleteMusic() {
+  const names = [...musicSelected];
+  await _bulkDeleteAlbumNames(names, names.length === 1 ? 'album' : 'albums');
+  musicSelected.clear();
   refreshAlbums();
 }
 
@@ -1002,73 +1049,108 @@ async function refreshAlbums() {
     const d = await r.json();
     albumsByName = {};
     (d.albums || []).forEach(a => albumsByName[a.filename] = a);
-    [...albumsSelected].forEach(fn => { if (!albumsByName[fn]) albumsSelected.delete(fn); });
+    [...albumsSelected].forEach(fn => {
+      if (!albumsByName[fn] || albumsByName[fn].split) albumsSelected.delete(fn);
+    });
+    [...musicSelected].forEach(fn => {
+      if (!albumsByName[fn] || !albumsByName[fn].split) musicSelected.delete(fn);
+    });
     refreshAlbumsRender();
   } catch (e) { console.error(e); }
 }
 
-function refreshAlbumsRender() {
-  const all = Object.values(albumsByName);
-  const filtered = sortFiles(all.filter(rowMatches));
-  const total = all.length;
+function _albumRowHtml(a, opts) {
+  const fn = htmlEscape(a.filename);
+  const isSel = opts.selected.has(a.filename) ? 'checked' : '';
+  const countCell = a.split
+    ? (a.track_count ? `<a class="track-count-link" onclick="toggleTracks('${fn}')">${a.track_count} tracks</a>` : '—')
+    : `${a.side_count || '—'}`;
+  const splitTitle = a.split ? 'Re-edit splits' : 'Split into tracks';
+  const playing = previewIs(a.filename, 'album') ? 'playing' : '';
+  const playGlyph = previewIs(a.filename, 'album') ? '⏸' : '▶';
+  return `
+  <tr data-album="${fn}">
+    <td class="col-check"><input type="checkbox" class="${opts.checkClass}" data-fname="${fn}" ${isSel}
+        onclick="${opts.toggleRow}(this.dataset.fname, this.checked)"></td>
+    <td style="font-weight:500">
+      <div class="row-title">
+        <span class="row-thumb"><img src="/api/file-cover/${encodeURIComponent(a.filename)}" loading="lazy" onerror="this.remove()"></span>
+        <span class="row-title-text">${htmlEscape(a.album || a.filename.replace('.flac',''))}</span>
+      </div>
+    </td>
+    <td style="color:var(--muted)">${htmlEscape(a.artist || '—')}</td>
+    <td style="color:var(--muted)">${htmlEscape(a.year || '—')}</td>
+    <td style="color:var(--muted);white-space:nowrap" title="${htmlEscape(fmtDateFull(a.mtime))}">${htmlEscape(fmtDate(a.mtime))}</td>
+    <td style="color:var(--muted)">${fmtDuration(a.duration_seconds)}</td>
+    <td style="color:var(--muted)">${a.size_mb} MB</td>
+    <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="bit depth / sample rate (kHz)">${fmtSourceFormat(a)}</td>
+    <td style="color:var(--muted)">${countCell}</td>
+    <td style="white-space:nowrap;text-align:right">
+      <button class="icon-btn preview-btn ${playing}" data-fname="${fn}" data-kind="album" title="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>
+      <button class="icon-btn" title="Edit tags" onclick="openTagAlbum('${fn}')">✎</button>
+      <button class="icon-btn" title="${splitTitle}" onclick="openWaveEditor('${fn}')">⌇</button>
+      <a class="icon-btn" href="/api/download/${encodeURIComponent(a.filename)}" download title="Download">↓</a>
+      <button class="icon-btn danger" title="Delete album" onclick="deleteAlbum('${fn}')">✕</button>
+    </td>
+  </tr>`;
+}
+
+function _renderAlbumSection(opts) {
+  // opts: { all, sectionId, countId, tbodyId, label, emptyMsg, checkClass,
+  //         toggleRow, updateBulkBar, selected }
+  const filtered = sortFiles(opts.all.filter(rowMatches));
+  const total = opts.all.length;
   const shown = filtered.length;
   const filterActive = !!libFilterText.trim();
   // Hide the section entirely only when there are zero albums to begin with.
   // While filtering, keep the section visible so the user sees the "0 of N"
   // count rather than the section vanishing under them.
-  const section = document.getElementById('albums-section');
+  const section = document.getElementById(opts.sectionId);
   if (section) section.hidden = total === 0;
-  const countEl = document.getElementById('albums-count');
+  const countEl = document.getElementById(opts.countId);
   if (countEl) {
     countEl.textContent = filterActive
-      ? `${shown} of ${total} album${total === 1 ? '' : 's'}`
-      : `${total} album${total === 1 ? '' : 's'}`;
+      ? `${shown} of ${total} ${opts.label}${total === 1 ? '' : 's'}`
+      : `${total} ${opts.label}${total === 1 ? '' : 's'}`;
   }
-  const tbody = document.getElementById('albums-tbody');
+  const tbody = document.getElementById(opts.tbodyId);
   if (!tbody) return;
   if (!filtered.length) {
     const colspan = tbody.parentElement.querySelector('thead tr').children.length;
-    const msg = total === 0 ? 'No albums yet.' : 'No matches for current filter.';
+    const msg = total === 0 ? opts.emptyMsg : 'No matches for current filter.';
     tbody.innerHTML = `<tr><td colspan="${colspan}" class="empty-lib">${msg}</td></tr>`;
-    updateAlbumsBulkBar();
+    opts.updateBulkBar();
     return;
   }
-  tbody.innerHTML = filtered.map(a => {
-      const fn = htmlEscape(a.filename);
-      const isSel = albumsSelected.has(a.filename) ? 'checked' : '';
-      const sidesCell = a.track_count
-        ? `${a.side_count || '—'} · <a class="track-count-link" onclick="toggleTracks('${fn}')">${a.track_count} tracks</a>`
-        : `${a.side_count || '—'}`;
-      const splitTitle = a.track_count ? 'Re-split into tracks' : 'Split into tracks';
-      const playing = previewIs(a.filename, 'album') ? 'playing' : '';
-      const playGlyph = previewIs(a.filename, 'album') ? '⏸' : '▶';
-      return `
-      <tr data-album="${fn}">
-        <td class="col-check"><input type="checkbox" class="album-row-check" data-fname="${fn}" ${isSel}
-            onclick="toggleAlbumRow(this.dataset.fname, this.checked)"></td>
-        <td style="font-weight:500">
-          <div class="row-title">
-            <span class="row-thumb"><img src="/api/file-cover/${encodeURIComponent(a.filename)}" loading="lazy" onerror="this.remove()"></span>
-            <span class="row-title-text">${htmlEscape(a.album || a.filename.replace('.flac',''))}</span>
-          </div>
-        </td>
-        <td style="color:var(--muted)">${htmlEscape(a.artist || '—')}</td>
-        <td style="color:var(--muted)">${htmlEscape(a.year || '—')}</td>
-        <td style="color:var(--muted);white-space:nowrap" title="${htmlEscape(fmtDateFull(a.mtime))}">${htmlEscape(fmtDate(a.mtime))}</td>
-        <td style="color:var(--muted)">${fmtDuration(a.duration_seconds)}</td>
-        <td style="color:var(--muted)">${a.size_mb} MB</td>
-        <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="bit depth / sample rate (kHz)">${fmtSourceFormat(a)}</td>
-        <td style="color:var(--muted)">${sidesCell}</td>
-        <td style="white-space:nowrap;text-align:right">
-          <button class="icon-btn preview-btn ${playing}" data-fname="${fn}" data-kind="album" title="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>
-          <button class="icon-btn" title="Edit tags" onclick="openTagAlbum('${fn}')">✎</button>
-          <button class="icon-btn" title="${splitTitle}" onclick="openWaveEditor('${fn}')">⌇</button>
-          <a class="icon-btn" href="/api/download/${encodeURIComponent(a.filename)}" download title="Download">↓</a>
-          <button class="icon-btn danger" title="Delete album" onclick="deleteAlbum('${fn}')">✕</button>
-        </td>
-      </tr>`;
-  }).join('');
-  updateAlbumsBulkBar();
+  tbody.innerHTML = filtered.map(a => _albumRowHtml(a, opts)).join('');
+  opts.updateBulkBar();
+}
+
+function refreshAlbumsRender() {
+  _renderAlbumSection({
+    all:           _albumsBySplit(false),
+    sectionId:     'in-progress-section',
+    countId:       'in-progress-count',
+    tbodyId:       'albums-tbody',
+    label:         'album',
+    emptyMsg:      'No albums in progress.',
+    checkClass:    'album-row-check',
+    toggleRow:     'toggleAlbumRow',
+    updateBulkBar: updateAlbumsBulkBar,
+    selected:      albumsSelected,
+  });
+  _renderAlbumSection({
+    all:           _albumsBySplit(true),
+    sectionId:     'music-section',
+    countId:       'music-count',
+    tbodyId:       'music-tbody',
+    label:         'album',
+    emptyMsg:      'No split albums yet.',
+    checkClass:    'music-row-check',
+    toggleRow:     'toggleMusicRow',
+    updateBulkBar: updateMusicBulkBar,
+    selected:      musicSelected,
+  });
 }
 
 function openTagAlbum(fname) {
@@ -1842,6 +1924,21 @@ async function refreshDiskFree() {
     updateDiskFree(d.disk_free_gb);
   } catch(e) {}
 }
+
+// Persist the open/closed state of each library section across reloads, so
+// users who collapse "Music" once don't have to do it every page load.
+function _wireSectionCollapse(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const key = `vr.section.${id}`;
+  const saved = localStorage.getItem(key);
+  if (saved === 'closed') el.open = false;
+  else if (saved === 'open') el.open = true;
+  el.addEventListener('toggle', () => {
+    localStorage.setItem(key, el.open ? 'open' : 'closed');
+  });
+}
+['raw-section', 'in-progress-section', 'music-section'].forEach(_wireSectionCollapse);
 
 applyConfig();
 ensureAudioGraph();

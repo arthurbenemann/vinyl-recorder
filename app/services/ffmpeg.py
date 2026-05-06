@@ -1,6 +1,7 @@
 """Filesystem + FLAC tag helpers backed by metaflac/ffmpeg subprocess calls.
 Pure functions — no FastAPI deps — so they can be reused from routes and from
 the higher-level album/recording listing helpers."""
+import json
 import re
 import shutil
 import subprocess
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from services.jobs import update_job
-from state import ALBUMS_DIR, OUTPUT_DIR, TAGGED_DIR, UNTAGGED_DIR
+from state import IN_PROGRESS_DIR, MUSIC_DIR, OUTPUT_DIR, RAW_ALBUM_DIR, RAW_DIR
 
 
 def run_ffmpeg_with_progress(
@@ -91,6 +92,41 @@ def safe_name(s: str) -> str:
     return re.sub(r'[^\w\s\-\.]', '', s).strip().replace(' ', '_') or 'untitled'
 
 
+def safe_path_component(s: str) -> str:
+    """Sanitize a string for use as a single Jellyfin-friendly path component:
+    keeps spaces, strips filesystem-hostile chars (`<>:"/\\|?*` + control
+    chars). Used for `music/{Artist}/{Album} (Year)/` directory names."""
+    s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', s).strip().rstrip('.')
+    return s or 'Unknown'
+
+
+def parse_split_plan(album_path: Path) -> Optional[dict]:
+    """Read VR_SPLIT_PLAN from a combined album FLAC, returning the parsed dict
+    or None if absent / malformed. The plan stores titles, durations, skip
+    flags, normalize/peak/bit-depth knobs, and the music_relpath under MUSIC_DIR
+    so the API can find emitted tracks even after a re-tag."""
+    raw = read_tags(album_path).get("VR_SPLIT_PLAN")
+    if not raw:
+        return None
+    try:
+        plan = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return plan if isinstance(plan, dict) else None
+
+
+def write_split_plan(album_path: Path, plan: dict) -> None:
+    """Persist `plan` as a single-line JSON Vorbis comment on the album FLAC."""
+    subprocess.run(
+        ["metaflac", "--remove-tag=VR_SPLIT_PLAN", str(album_path)],
+        check=False, stderr=subprocess.DEVNULL,
+    )
+    subprocess.run(
+        ["metaflac", f"--set-tag=VR_SPLIT_PLAN={json.dumps(plan)}", str(album_path)],
+        check=False, stderr=subprocess.DEVNULL,
+    )
+
+
 LOW_SPACE_GB = 2.0  # below this threshold the UI marker turns red and writes are refused.
 
 
@@ -113,10 +149,11 @@ def disk_space_error(min_needed_gb: float, op: str) -> Optional[str]:
 
 
 def find_file(filename: str) -> Optional[Path]:
-    """Locate a FLAC anywhere in the output tree (sides or combined albums)."""
+    """Locate a FLAC anywhere in the output tree (sides, in-progress albums,
+    or post-split source albums kept for re-edit)."""
     if "/" in filename or "\\" in filename or ".." in filename:
         return None
-    for d in (TAGGED_DIR, UNTAGGED_DIR, ALBUMS_DIR):
+    for d in (RAW_DIR, IN_PROGRESS_DIR, RAW_ALBUM_DIR):
         p = d / filename
         if p.exists():
             return p
@@ -235,43 +272,47 @@ def rename_to_match_tags(path: Path) -> Path:
 
 
 def list_recordings() -> list[dict]:
+    """List untagged side recordings in raw/. Tagged sides have already been
+    promoted to in-progress/ and surface via list_albums()."""
     files = []
-    for d in (TAGGED_DIR, UNTAGGED_DIR):
-        is_tagged = d == TAGGED_DIR
-        for f in d.glob("*.flac"):
-            stat = f.stat()
-            tags = read_tags(f)
-            fmt = flac_format(f)
-            files.append({
-                "filename":         f.name,
-                "size_mb":          round(stat.st_size / 1e6, 1),
-                "mtime":            stat.st_mtime,
-                "duration_seconds": flac_duration_seconds(f),
-                "bit_depth":        fmt.get("bit_depth"),
-                "sample_rate_khz":  fmt.get("sample_rate_khz"),
-                "artist":         tags.get("ARTIST", ""),
-                "album":          tags.get("ALBUM", ""),
-                "year":           tags.get("DATE", ""),
-                "genre":          tags.get("GENRE", ""),
-                "label":          tags.get("LABEL", ""),
-                "catalog_number": tags.get("CATALOGNUMBER", ""),
-                "country":        tags.get("RELEASECOUNTRY", ""),
-                "tracks":             tags.get("TRACKLIST", ""),
-                "musicbrainz_albumid": tags.get("MUSICBRAINZ_ALBUMID", ""),
-                "discogs_release_id":  int(tags.get("DISCOGS_RELEASE_ID") or 0) or None,
-                "tagged":             is_tagged,
-            })
+    for f in RAW_DIR.glob("*.flac"):
+        stat = f.stat()
+        tags = read_tags(f)
+        fmt = flac_format(f)
+        files.append({
+            "filename":         f.name,
+            "size_mb":          round(stat.st_size / 1e6, 1),
+            "mtime":            stat.st_mtime,
+            "duration_seconds": flac_duration_seconds(f),
+            "bit_depth":        fmt.get("bit_depth"),
+            "sample_rate_khz":  fmt.get("sample_rate_khz"),
+            "artist":         tags.get("ARTIST", ""),
+            "album":          tags.get("ALBUM", ""),
+            "year":           tags.get("DATE", ""),
+            "genre":          tags.get("GENRE", ""),
+            "label":          tags.get("LABEL", ""),
+            "catalog_number": tags.get("CATALOGNUMBER", ""),
+            "country":        tags.get("RELEASECOUNTRY", ""),
+            "tracks":             tags.get("TRACKLIST", ""),
+            "musicbrainz_albumid": tags.get("MUSICBRAINZ_ALBUMID", ""),
+            "discogs_release_id":  int(tags.get("DISCOGS_RELEASE_ID") or 0) or None,
+        })
     files.sort(key=lambda x: x["mtime"], reverse=True)
     return files
 
 
 def list_albums() -> list[dict]:
-    """List combined albums living in albums/."""
+    """List combined albums from in-progress/ (un-split) and raw-album/
+    (post-split sources). Each entry carries a `split` flag — the UI
+    partitions on this to show un-split albums in the In-progress section
+    and split ones in the Music section."""
     out = []
-    for f in ALBUMS_DIR.glob("*.flac"):
+    for f in list(IN_PROGRESS_DIR.glob("*.flac")) + list(RAW_ALBUM_DIR.glob("*.flac")):
         stat = f.stat()
         tags = read_tags(f)
         fmt = flac_format(f)
+        plan = parse_split_plan(f)
+        kept_tracks = [t for t in (plan or {}).get("tracks", []) if not t.get("skip")]
         out.append({
             "filename":         f.name,
             "size_mb":          round(stat.st_size / 1e6, 1),
@@ -290,7 +331,9 @@ def list_albums() -> list[dict]:
             "musicbrainz_albumid": tags.get("MUSICBRAINZ_ALBUMID", ""),
             "discogs_release_id":  int(tags.get("DISCOGS_RELEASE_ID") or 0) or None,
             "side_count":         int(tags.get("SIDECOUNT", "0") or 0),
-            "track_count":        len(list((ALBUMS_DIR / f.stem).glob("*.flac"))) if (ALBUMS_DIR / f.stem).is_dir() else 0,
+            "split":              plan is not None,
+            "music_relpath":      (plan or {}).get("music_relpath"),
+            "track_count":        len(kept_tracks),
         })
     out.sort(key=lambda x: x["mtime"], reverse=True)
     return out

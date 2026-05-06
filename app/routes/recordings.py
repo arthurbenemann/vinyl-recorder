@@ -15,11 +15,13 @@ from fastapi.responses import FileResponse, StreamingResponse
 from services.eventbus import bus
 from services.ffmpeg import (
     LOW_SPACE_GB, disk_free_gb, disk_space_error, find_file, list_recordings,
-    move_to, read_tags, rename_to_match_tags, safe_name, write_tags,
+    move_to, parse_split_plan, read_tags, rename_to_match_tags, safe_name,
+    write_tags,
 )
 from state import (
-    ALBUMS_DIR, BulkDelete, LOG_DIR, RecordRequest, RenameRequest, TAGGED_DIR,
-    TagEdit, UNTAGGED_DIR, active, log_lines, log_paths, upstream,
+    BulkDelete, IN_PROGRESS_DIR, LOG_DIR, MUSIC_DIR, RAW_ALBUM_DIR, RAW_DIR,
+    RecordRequest, RenameRequest, TagEdit, active, log_lines, log_paths,
+    upstream,
 )
 
 router = APIRouter()
@@ -198,7 +200,7 @@ async def start_recording(req: RecordRequest):
     year   = req.year   or datetime.now().strftime("%Y")
 
     fname = f"{safe_name(artist)} - {safe_name(album)} ({year}).flac"
-    outfile = str(UNTAGGED_DIR / fname)
+    outfile = str(RAW_DIR / fname)
     fmt = upstream.fmt
     sample_format = upstream.sample_format
 
@@ -481,12 +483,16 @@ async def edit_recording(filename: str, req: TagEdit):
         raise HTTPException(404)
     fields = {k: v for k, v in req.dict().items() if v is not None}
     write_tags(path, fields)
-    # An explicit edit promotes the file to "tagged" once it has at least an artist.
+    # An explicit edit promotes the raw recording into in-progress/ once it
+    # has at least an artist — tagging IS promotion in the new flow. Albums
+    # already in in-progress/ stay put.
     new_tags = read_tags(path)
-    if new_tags.get("ARTIST"):
-        path = move_to(path, TAGGED_DIR)
+    if new_tags.get("ARTIST") and path.parent == RAW_DIR:
+        path = move_to(path, IN_PROGRESS_DIR)
         path = rename_to_match_tags(path)
-    return {"ok": True, "filename": path.name, "tagged": path.parent == TAGGED_DIR}
+    elif path.parent == IN_PROGRESS_DIR:
+        path = rename_to_match_tags(path)
+    return {"ok": True, "filename": path.name, "album": path.parent == IN_PROGRESS_DIR}
 
 
 @router.post("/api/recordings/{filename}/rename")
@@ -497,8 +503,8 @@ async def rename_recording(filename: str, req: RenameRequest):
     src = find_file(filename)
     if not src:
         raise HTTPException(404)
-    if src.parent != UNTAGGED_DIR:
-        raise HTTPException(400, "rename only supported on untagged recordings")
+    if src.parent != RAW_DIR:
+        raise HTTPException(400, "rename only supported on raw recordings")
     stem = safe_name(req.new_name).strip()
     if not stem:
         raise HTTPException(400, "name cannot be empty")
@@ -509,11 +515,35 @@ async def rename_recording(filename: str, req: RenameRequest):
     return {"ok": True, "filename": target.name}
 
 
+def _cleanup_music_for(album_path: Path) -> None:
+    """Remove the per-album dir under MUSIC_DIR (if any) recorded in this
+    album's split plan, and prune the now-empty parent artist dir."""
+    plan = parse_split_plan(album_path)
+    relpath = (plan or {}).get("music_relpath")
+    if not relpath:
+        return
+    music_album = MUSIC_DIR / relpath
+    if music_album.is_dir():
+        for child in music_album.iterdir():
+            try: child.unlink()
+            except Exception: pass
+        try: music_album.rmdir()
+        except Exception: pass
+    parent = music_album.parent
+    try:
+        if parent.is_dir() and parent != MUSIC_DIR and not any(parent.iterdir()):
+            parent.rmdir()
+    except Exception:
+        pass
+
+
 @router.delete("/api/recordings/{filename}")
 async def delete_recording(filename: str):
     path = find_file(filename)
     if not path:
         raise HTTPException(404)
+    if path.parent in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
+        _cleanup_music_for(path)
     path.unlink()
     return {"ok": True}
 
@@ -525,6 +555,8 @@ async def bulk_delete(req: BulkDelete):
         p = find_file(fn)
         if p:
             try:
+                if p.parent in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
+                    _cleanup_music_for(p)
                 p.unlink()
                 deleted.append(fn)
             except Exception:
@@ -536,12 +568,12 @@ async def bulk_delete(req: BulkDelete):
 
 @router.get("/api/download/{filename}")
 async def download(filename: str, source: str = ""):
-    # `source=album` disambiguates when an album in albums/ shares its filename
-    # with a side in tagged/ (e.g. an already-tagged side that also got combined).
+    # `source=album` disambiguates when an in-progress album shares its
+    # filename with a raw side (e.g. a tagged side promoted then re-recorded).
     if source == "album":
         if "/" in filename or "\\" in filename or ".." in filename:
             raise HTTPException(404)
-        path = ALBUMS_DIR / filename
+        path = IN_PROGRESS_DIR / filename
         if not path.exists():
             raise HTTPException(404)
     else:

@@ -8,13 +8,21 @@ auto-fill metadata + embed cover art from the Cover Art Archive.
 ## Features
 
 - One-click record / stop with live VU meters and a duration timer
-- Library view with edit, bulk delete, download, and per-row auto-tag actions
-- Recordings split between `output/untagged/` and `output/tagged/`; files are
-  renamed on disk to `Artist - Album (Year).flac` once tagged
+- Three-stage library view (collapsible) that mirrors the workflow:
+  **Raw** (just recorded) → **In-progress** (tagged + combined) →
+  **Music** (split into per-track FLACs ready for Jellyfin)
+- Output layout under `./output/`:
+  - `raw/` — fresh side recordings, untagged
+  - `in-progress/` — combined album FLAC, workspace for the wave editor
+  - `raw-album/` — combined source FLACs that have been split (kept for re-edit)
+  - `music/` — final tracks in `Artist/Album (Year)/NN - Title.flac` shape
+    that Jellyfin scans natively
 - Direct MusicBrainz lookup, enriched with Discogs (catalog #, country,
   format, matrix/runout) when MB has linked the release. No tokens or
   setup — uses both services' public APIs.
 - Configurable default stream URL and optional auto-connect on page load
+- The Jellyfin output directory can be relocated via the
+  `MUSIC_OUTPUT_DIR` environment variable (e.g. to a network share)
 
 ## Run it
 

@@ -170,27 +170,28 @@ function openWaveEditor(fname) {
   }
 }
 
-// If this album has already been split, recreate the cuts and titles from
-// the on-disk track list so the user can adjust the split rather than redo it.
+// If this album has already been split, repopulate cuts, titles, and skip
+// flags from the embedded VR_SPLIT_PLAN so the user can adjust the split
+// rather than redo it from scratch.
 async function weLoadExistingSplit(fname) {
   try {
     const r = await fetch(`/api/album/${encodeURIComponent(fname)}/tracks`);
     if (!r.ok) return;
     const d = await r.json();
     if (we.filename !== fname) return;  // editor moved on while we were waiting
-    const tracks = (d.tracks || []).slice().sort(
-      (a, b) => (a.track_number || 0) - (b.track_number || 0));
-    if (tracks.length < 2) return;
+    const plan = d.plan;
+    if (!plan || !plan.tracks || plan.tracks.length < 2) return;
+    const ptracks = plan.tracks;
     const cuts = [];
-    let cursor = 0;
-    for (let j = 0; j < tracks.length - 1; j++) {
-      cursor += tracks[j].duration_seconds || 0;
+    let cursor = +(plan.offset_seconds || 0);
+    for (let j = 0; j < ptracks.length - 1; j++) {
+      cursor += ptracks[j].duration_seconds || 0;
       if (cursor > 0 && cursor < we.total) cuts.push(cursor);
     }
     if (!cuts.length) return;
     we.cuts    = cuts;
-    we.titles  = tracks.map(t => t.title || '');
-    we.skipped = we.titles.map(() => false);
+    we.titles  = ptracks.map(t => t.title || '');
+    we.skipped = ptracks.map(t => !!t.skip);
     drawAll();
   } catch (e) { /* nothing existing — leave the empty state */ }
 }

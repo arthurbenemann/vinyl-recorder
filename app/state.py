@@ -10,18 +10,17 @@ from services.eventbus import bus
 from services.upstream import UpstreamSession
 
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/output"))
-UNTAGGED_DIR = OUTPUT_DIR / "untagged"
-TAGGED_DIR = OUTPUT_DIR / "tagged"
-ALBUMS_DIR = OUTPUT_DIR / "albums"
+RAW_DIR = OUTPUT_DIR / "raw"
+IN_PROGRESS_DIR = OUTPUT_DIR / "in-progress"
+# raw-album/ holds combined album FLACs that have been split into tracks. The
+# source FLAC is preserved here so the wave editor's "load existing split"
+# path can still re-edit a finished album. The per-track output lives only in
+# MUSIC_DIR.
+RAW_ALBUM_DIR = OUTPUT_DIR / "raw-album"
+MUSIC_DIR = Path(os.getenv("MUSIC_OUTPUT_DIR", str(OUTPUT_DIR / "music")))
 LOG_DIR = OUTPUT_DIR / ".logs"
-for _d in (UNTAGGED_DIR, TAGGED_DIR, ALBUMS_DIR, LOG_DIR):
+for _d in (RAW_DIR, IN_PROGRESS_DIR, RAW_ALBUM_DIR, MUSIC_DIR, LOG_DIR):
     _d.mkdir(parents=True, exist_ok=True)
-
-# Migrate any legacy flat-layout flacs into untagged/ on startup.
-for _f in OUTPUT_DIR.glob("*.flac"):
-    target = UNTAGGED_DIR / _f.name
-    if not target.exists():
-        _f.rename(target)
 
 MB_BASE = "https://musicbrainz.org/ws/2"
 MB_UA = "VinylRecorder/0.1 ( https://github.com/arthurbenemann/vinyl-recorder )"

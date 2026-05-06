@@ -97,7 +97,7 @@ def stack():
         pytest.skip("docker not available")
 
     output_dir = REPO_ROOT / "output"
-    untagged = output_dir / "untagged"
+    raw = output_dir / "raw"
 
     # Always bring down any leftover stack from a previous run.
     print("[e2e] compose down -v…", flush=True)
@@ -128,6 +128,6 @@ def stack():
             logs = compose("logs", "vinyl-recorder", "--tail", "50").stdout
             pytest.fail(f"{e}\nrecorder logs:\n{logs}")
 
-        yield {"output_dir": output_dir, "untagged": untagged}
+        yield {"output_dir": output_dir, "raw": raw}
     finally:
         compose("down", "-v", timeout=60)

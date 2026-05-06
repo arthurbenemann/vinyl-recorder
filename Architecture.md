@@ -17,7 +17,7 @@ Single-user, no auth, runs in Docker. Three components:
                                        │
                                        ▼
                                  /data on disk
-                          (untagged/ tagged/ sides/ tracks/)
+                       (raw/ in-progress/ raw-album/ music/)
 ```
 
 ## Components
@@ -132,7 +132,7 @@ the recording path. The playback subscriber starts at "now" with no prepend.
         │
         ▼
    /api/apply → metaflac writes Vorbis tags + embeds cover
-              → file moves untagged/ → tagged/
+              → file moves raw/ → in-progress/ (tagging promotes)
               → renamed "Artist - Album (Year).flac"
 ```
 
@@ -146,10 +146,14 @@ artist/album against owned releases uses normalised token overlap (stdlib only).
 For multi-side LP rips:
 
 1. User selects N recordings → `/api/album/combine` concatenates them into one
-   FLAC (re-encoded so concat boundaries are clean).
+   FLAC in `in-progress/` (re-encoded so concat boundaries are clean).
 2. The combined file opens in `wave-editor.js`. Auto-detected silences seed
    suggested cuts; the user adjusts and labels tracks.
-3. `/api/album/split` writes one FLAC per track with copied metadata.
+3. `/api/album/split` writes one FLAC per track into
+   `music/{Artist}/{Album} (Year)/NN - Title.flac` (Jellyfin-shaped),
+   persists the full plan as a `VR_SPLIT_PLAN` Vorbis tag on the source FLAC,
+   and moves the source from `in-progress/` into `raw-album/` so the editor
+   can still re-load + re-edit it later without duplicating audio.
 
 ## WebSocket event reference
 
@@ -164,15 +168,23 @@ For multi-side LP rips:
 | `log`      | on event         | `{level, msg}`                                                                 |
 | `ping`     | keepalive        | `{}`                                                                           |
 
-## File layout (`/data` inside the container)
+## File layout (`/output` inside the container)
 
 ```
-/data
-├── untagged/    fresh recordings, named by timestamp; auto-tag target
-├── tagged/      post-tag, renamed "Artist - Album (Year).flac"
-├── sides/       intermediate per-side files for album combine
-└── tracks/      per-track outputs from album split
+/output
+├── raw/         fresh side recordings, named by timestamp
+├── in-progress/ combined album FLACs not yet split (wave-editor workspace)
+├── raw-album/   combined sources after split — kept for re-edit. Each
+│                FLAC carries a VR_SPLIT_PLAN Vorbis tag with the full
+│                plan (titles, durations, skip flags, normalize knobs)
+└── music/       Jellyfin-shaped output:
+                   music/{Artist}/{Album} (Year)/NN - Title.flac
+                 The only place per-track FLACs live; no duplication.
 ```
+
+The location of `music/` can be overridden with `MUSIC_OUTPUT_DIR` so
+the Jellyfin tree can sit on a network share separate from the rest of
+the workflow data.
 
 Disk-free is monitored; recording start is blocked under 2 GB free.
 

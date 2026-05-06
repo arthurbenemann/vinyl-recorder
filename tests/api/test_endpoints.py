@@ -98,14 +98,14 @@ def test_clip_clear_validates_channel():
 
 
 # ── /api/recordings ──────────────────────────────────────────────────────
-def test_recordings_lists_files_in_untagged_and_tagged(tmp_path):
+def test_recordings_lists_files_in_raw(tmp_path):
     # The conftest set OUTPUT_DIR to a tmp dir; we can drop fake .flac files
     # there and confirm the listing picks them up. Real metaflac calls will
     # fail on these stubs and the helpers swallow the error → empty tags,
     # which is exactly the "untagged" path we want to exercise.
-    from state import UNTAGGED_DIR
+    from state import RAW_DIR
 
-    fake = UNTAGGED_DIR / "test_dummy.flac"
+    fake = RAW_DIR / "test_dummy.flac"
     fake.write_bytes(b"")
 
     try:

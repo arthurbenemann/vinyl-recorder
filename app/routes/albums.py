@@ -1,6 +1,7 @@
 """Combined-album list, combine, delete, waveform, silence detect, split,
 and per-track download."""
 import asyncio
+import json
 import subprocess
 import uuid
 from datetime import datetime
@@ -12,16 +13,34 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from services.ffmpeg import (
     LOW_SPACE_GB, disk_space_error, find_file, flac_duration_seconds,
-    flac_format, list_albums, parse_astats, parse_silencedetect, read_tags,
-    run_ffmpeg_with_progress, safe_name, write_tags,
+    flac_format, list_albums, parse_astats, parse_silencedetect,
+    parse_split_plan, read_tags, run_ffmpeg_with_progress, safe_name,
+    safe_path_component, write_split_plan, write_tags,
 )
 from services.jobs import finish_job, start_job
 from state import (
-    ALBUMS_DIR, CombineRequest, MeasureRequest, PromoteRequest,
-    SilenceDetectRequest, SplitRequest, TAGGED_DIR, UNTAGGED_DIR,
+    CombineRequest, IN_PROGRESS_DIR, MUSIC_DIR, MeasureRequest,
+    PromoteRequest, RAW_ALBUM_DIR, RAW_DIR, SilenceDetectRequest,
+    SplitRequest,
 )
 
 router = APIRouter()
+
+
+def _music_dir_for(album_tags: dict) -> tuple[Path, str]:
+    """Compute the Jellyfin-shaped output dir for an album's tags. Returns
+    `(absolute_dir, relpath_under_MUSIC_DIR)`. Falls back to "Unknown
+    Artist" / "Unknown Album" when tags are missing; year is omitted from
+    the album folder name when DATE is empty."""
+    artist = (album_tags.get("ARTIST") or "").strip() or "Unknown Artist"
+    album_ = (album_tags.get("ALBUM")  or "").strip() or "Unknown Album"
+    year   = (album_tags.get("DATE")   or "").strip()
+    album_dirname = (
+        f"{safe_path_component(album_)} ({year})"
+        if year else safe_path_component(album_)
+    )
+    relpath = f"{safe_path_component(artist)}/{album_dirname}"
+    return MUSIC_DIR / relpath, relpath
 
 
 @router.get("/api/albums")
@@ -41,7 +60,7 @@ async def combine_album(req: CombineRequest):
     paths: list[Path] = []
     for fn in req.filenames:
         p = find_file(fn)
-        if not p or p.parent == ALBUMS_DIR:
+        if not p or p.parent != RAW_DIR:
             raise HTTPException(404, f"side not found: {fn}")
         paths.append(p)
 
@@ -56,19 +75,19 @@ async def combine_album(req: CombineRequest):
     album  = (req.album.album  or "").strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
     year   = (req.album.year   or "").strip() or datetime.now().strftime("%Y")
     out_name = f"{safe_name(artist)} - {safe_name(album)} ({year}).flac"
-    out_path = ALBUMS_DIR / out_name
+    out_path = IN_PROGRESS_DIR / out_name
     if out_path.exists():
         stem = out_path.stem
         i = 2
         while True:
-            cand = ALBUMS_DIR / f"{stem} ({i}).flac"
+            cand = IN_PROGRESS_DIR / f"{stem} ({i}).flac"
             if not cand.exists():
                 out_path = cand
                 break
             i += 1
 
     # ffmpeg's concat demuxer needs a tiny playlist file.
-    playlist = ALBUMS_DIR / f".combine_{uuid.uuid4().hex[:8]}.txt"
+    playlist = IN_PROGRESS_DIR / f".combine_{uuid.uuid4().hex[:8]}.txt"
     # Total output duration ≈ sum of input durations; drives the progress bar.
     total_dur = sum((flac_duration_seconds(p) or 0.0) for p in paths)
     start_job(req.job_id, "combine")
@@ -146,19 +165,19 @@ async def promote_album(req: PromoteRequest):
     one-way operation, mirroring the way combined sides leave the side list.
     Cover art embedded in the source is preserved by the move."""
     src = find_file(req.filename)
-    if not src or src.parent not in (TAGGED_DIR, UNTAGGED_DIR):
+    if not src or src.parent != RAW_DIR:
         raise HTTPException(404, f"recording not found: {req.filename}")
 
     artist = (req.album.artist or "").strip() or "Unknown"
     album  = (req.album.album  or "").strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
     year   = (req.album.year   or "").strip() or datetime.now().strftime("%Y")
     out_name = f"{safe_name(artist)} - {safe_name(album)} ({year}).flac"
-    out_path = ALBUMS_DIR / out_name
+    out_path = IN_PROGRESS_DIR / out_name
     if out_path.exists():
         stem = out_path.stem
         i = 2
         while True:
-            cand = ALBUMS_DIR / f"{stem} ({i}).flac"
+            cand = IN_PROGRESS_DIR / f"{stem} ({i}).flac"
             if not cand.exists():
                 out_path = cand
                 break
@@ -166,7 +185,7 @@ async def promote_album(req: PromoteRequest):
 
     # Move (rename) keeps the FLAC bitstream and embedded cover art untouched
     # and is free on the same filesystem — no extra disk space needed and no
-    # re-encode. ALBUMS_DIR is always under OUTPUT_DIR alongside the library.
+    # re-encode. IN_PROGRESS_DIR is always under OUTPUT_DIR alongside the library.
     src.rename(out_path)
 
     tag_fields = {k: v for k, v in req.album.dict().items() if v is not None}
@@ -187,21 +206,35 @@ async def promote_album(req: PromoteRequest):
     }
 
 
+def _cleanup_music_dir(plan: Optional[dict]) -> None:
+    """Remove the per-album dir under MUSIC_DIR named in `plan`, and prune
+    the now-empty parent artist dir."""
+    relpath = (plan or {}).get("music_relpath")
+    if not relpath:
+        return
+    music_album = MUSIC_DIR / relpath
+    if music_album.is_dir():
+        for child in music_album.iterdir():
+            try: child.unlink()
+            except Exception: pass
+        try: music_album.rmdir()
+        except Exception: pass
+    parent = music_album.parent
+    try:
+        if parent.is_dir() and parent != MUSIC_DIR and not any(parent.iterdir()):
+            parent.rmdir()
+    except Exception:
+        pass
+
+
 @router.delete("/api/albums/{filename}")
 async def delete_album(filename: str):
     p = find_file(filename)
-    if not p or p.parent != ALBUMS_DIR:
+    if not p or p.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
         raise HTTPException(404)
+    _cleanup_music_dir(parse_split_plan(p))
     p.unlink()
-    sub = ALBUMS_DIR / p.stem
-    if sub.is_dir():
-        try:
-            for f in sub.iterdir():
-                f.unlink()
-            sub.rmdir()
-        except Exception:
-            pass
-    cache_dir = ALBUMS_DIR / ".cache"
+    cache_dir = p.parent / ".cache"
     if cache_dir.is_dir():
         for f in cache_dir.glob(f"{p.stem}.*"):
             try: f.unlink()
@@ -218,7 +251,7 @@ async def album_waveform(filename: str, w: int = 2400, h: int = 120,
     arbitrary zoom. The full-album view is cached on disk; zoomed views are
     rendered on demand (typically <1s for a minute-long segment)."""
     src = find_file(filename)
-    if not src or src.parent != ALBUMS_DIR:
+    if not src or src.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
         raise HTTPException(404)
     w = max(400, min(8000, int(w)))
     h = max(40,  min(400,  int(h)))
@@ -228,7 +261,7 @@ async def album_waveform(filename: str, w: int = 2400, h: int = 120,
     # which we cache aggressively because the editor reopens it often.
     full_view = (end <= 0.0) or (start <= 0.0 and end >= total - 0.5)
     if full_view:
-        cache_dir = ALBUMS_DIR / ".cache"
+        cache_dir = src.parent / ".cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         png = cache_dir / f"{src.stem}.{w}x{h}.png"
         if not png.exists() or png.stat().st_mtime < src.stat().st_mtime:
@@ -280,7 +313,7 @@ async def album_waveform(filename: str, w: int = 2400, h: int = 120,
 @router.post("/api/album/detect-silences")
 async def detect_silences(req: SilenceDetectRequest):
     src = find_file(req.filename)
-    if not src or src.parent != ALBUMS_DIR:
+    if not src or src.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
         raise HTTPException(404, "album not found")
     total_dur = flac_duration_seconds(src) or 0.0
     # `-nostats` would otherwise hide the silencedetect=… messages we parse.
@@ -337,7 +370,7 @@ async def measure_album(req: MeasureRequest):
     needle-drop pops) so the readout reflects the audio that will end up in
     the final tracks."""
     src = find_file(req.filename)
-    if not src or src.parent != ALBUMS_DIR:
+    if not src or src.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
         raise HTTPException(404, "album not found")
     af = _astats_filter_for_ranges(req.included_ranges)
     flag = "-filter_complex" if (req.included_ranges) else "-af"
@@ -374,7 +407,7 @@ async def measure_album(req: MeasureRequest):
 @router.post("/api/album/split")
 async def split_album(req: SplitRequest):
     src = find_file(req.filename)
-    if not src or src.parent != ALBUMS_DIR:
+    if not src or src.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
         raise HTTPException(404, "album not found")
     if not req.tracks:
         raise HTTPException(400, "no tracks given")
@@ -410,7 +443,27 @@ async def split_album(req: SplitRequest):
     sample_fmt = {16: "s16", 24: "s32"}.get(req.bit_depth) if apply_aformat else None
 
     album_tags = read_tags(src)
-    out_dir = ALBUMS_DIR / src.stem
+    out_dir, music_relpath = _music_dir_for(album_tags)
+
+    # If a previous split landed in a different music subdirectory (because
+    # tags changed between splits), clear the stale folder so we don't leave
+    # an orphan album in the Jellyfin tree.
+    prior = parse_split_plan(src)
+    prior_relpath = (prior or {}).get("music_relpath")
+    if prior_relpath and prior_relpath != music_relpath:
+        prior_dir = MUSIC_DIR / prior_relpath
+        if prior_dir.is_dir():
+            for old in prior_dir.glob("*.flac"):
+                try: old.unlink()
+                except Exception: pass
+            try: prior_dir.rmdir()
+            except Exception: pass
+            try:
+                if prior_dir.parent != MUSIC_DIR and not any(prior_dir.parent.iterdir()):
+                    prior_dir.parent.rmdir()
+            except Exception:
+                pass
+
     out_dir.mkdir(parents=True, exist_ok=True)
     for old in out_dir.glob("*.flac"):
         try: old.unlink()
@@ -457,7 +510,7 @@ async def split_album(req: SplitRequest):
             if t.skip:
                 continue   # advance cursor only — region is dropped from output
             out_idx += 1
-            track_name = f"{str(out_idx).zfill(pad)} - {safe_name(t.title) or 'Track'}.flac"
+            track_name = f"{str(out_idx).zfill(pad)} - {safe_path_component(t.title) or 'Track'}.flac"
             out = out_dir / track_name
             # Always re-encode: ffmpeg's stream copy preserves the source's
             # STREAMINFO, so every split track would advertise the full album
@@ -515,39 +568,97 @@ async def split_album(req: SplitRequest):
             try: cover_tmp.unlink()
             except Exception: pass
 
+    plan = {
+        "schema_version": 1,
+        "tracks": [
+            {"title": t.title,
+             "duration_seconds": t.duration_seconds,
+             "skip": t.skip}
+            for t in req.tracks
+        ],
+        "offset_seconds":   req.offset_seconds,
+        "normalize":        req.normalize,
+        "target_peak_db":   req.target_peak_db,
+        "measured_peak_db": req.measured_peak_db,
+        "bit_depth":        req.bit_depth,
+        "music_relpath":    music_relpath,
+    }
+    write_split_plan(src, plan)
+
+    # The combined source moves out of the in-progress workspace into
+    # raw-album/ once it has been split. From there the wave editor can still
+    # re-load the plan and re-split without ever duplicating the FLAC.
+    if src.parent == IN_PROGRESS_DIR:
+        new_src = RAW_ALBUM_DIR / src.name
+        if new_src.exists() and new_src.resolve() != src.resolve():
+            stem, ext = new_src.stem, new_src.suffix
+            i = 2
+            while True:
+                cand = RAW_ALBUM_DIR / f"{stem} ({i}){ext}"
+                if not cand.exists():
+                    new_src = cand
+                    break
+                i += 1
+        src.rename(new_src)
+        src = new_src
+
     finish_job(req.job_id)
-    return {"ok": True, "subdir": src.stem, "tracks": created}
+    return {"ok": True, "music_relpath": music_relpath,
+            "filename": src.name, "tracks": created}
 
 
 @router.get("/api/album/{filename}/tracks")
 async def album_tracks(filename: str):
+    """List the tracks an album was split into. Track titles, durations and
+    skip flags come from the album FLAC's VR_SPLIT_PLAN tag (the editor's
+    source of truth for re-edit). The matching files live under MUSIC_DIR; we
+    stat them to surface size + actual encoded duration."""
     src = find_file(filename)
-    if not src or src.parent != ALBUMS_DIR:
+    if not src or src.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
         raise HTTPException(404)
-    sub = ALBUMS_DIR / src.stem
-    if not sub.is_dir():
-        return {"tracks": []}
+    plan = parse_split_plan(src)
+    if not plan:
+        return {"tracks": [], "music_relpath": None, "plan": None}
+    music_relpath = plan.get("music_relpath") or ""
+    music_dir = MUSIC_DIR / music_relpath if music_relpath else None
+    kept = [t for t in plan.get("tracks", []) if not t.get("skip")]
+    out_total = len(kept)
+    pad = max(2, len(str(out_total)))
     tracks = []
-    for f in sorted(sub.glob("*.flac")):
-        tags = read_tags(f)
+    for i, t in enumerate(kept, start=1):
+        title = t.get("title", "") or "Track"
+        track_name = f"{str(i).zfill(pad)} - {safe_path_component(title) or 'Track'}.flac"
+        f = music_dir / track_name if music_dir else None
+        size_mb = duration = None
+        if f and f.exists():
+            size_mb = round(f.stat().st_size / 1e6, 1)
+            duration = flac_duration_seconds(f)
         tracks.append({
-            "filename":         f.name,
-            "title":            tags.get("TITLE", f.stem),
-            "track_number":     int(tags.get("TRACKNUMBER", "0") or 0),
-            "duration_seconds": flac_duration_seconds(f),
-            "size_mb":          round(f.stat().st_size / 1e6, 1),
+            "filename":         track_name,
+            "title":            title,
+            "track_number":     i,
+            "duration_seconds": duration if duration is not None else float(t.get("duration_seconds") or 0.0),
+            "size_mb":          size_mb,
         })
-    return {"tracks": tracks, "subdir": src.stem}
+    return {
+        "tracks":         tracks,
+        "music_relpath":  music_relpath or None,
+        "plan":           plan,  # full plan incl. skipped tracks + normalize knobs
+    }
 
 
 @router.get("/api/album/{filename}/track/{trackname}")
 async def download_track(filename: str, trackname: str):
     src = find_file(filename)
-    if not src or src.parent != ALBUMS_DIR:
+    if not src or src.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
         raise HTTPException(404)
     if "/" in trackname or "\\" in trackname or ".." in trackname:
         raise HTTPException(400)
-    p = ALBUMS_DIR / src.stem / trackname
+    plan = parse_split_plan(src)
+    relpath = (plan or {}).get("music_relpath") or ""
+    if not relpath:
+        raise HTTPException(404)
+    p = MUSIC_DIR / relpath / trackname
     if not p.exists():
         raise HTTPException(404)
     return FileResponse(str(p), media_type="audio/flac", filename=trackname)

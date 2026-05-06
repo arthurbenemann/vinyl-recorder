@@ -17,8 +17,8 @@ from services.musicbrainz import (
     _http_bytes, caa_front, extract_discogs_id, release_full, search_releases,
 )
 from state import (
-    ALBUMS_DIR, ApplyRequest, DISCOGS_TOKEN, DISCOGS_USERNAME, SearchRequest,
-    TAGGED_DIR,
+    ApplyRequest, DISCOGS_TOKEN, DISCOGS_USERNAME, IN_PROGRESS_DIR,
+    RAW_ALBUM_DIR, RAW_DIR, SearchRequest,
 )
 
 router = APIRouter()
@@ -362,21 +362,20 @@ async def apply_tags(req: ApplyRequest):
             check=False, stderr=subprocess.DEVNULL,
         )
 
-    # Albums live in ALBUMS_DIR and stay there after re-tagging — moving them
-    # to TAGGED_DIR would make them disappear from the Albums section and
-    # resurface in the Library list. Untagged sides still get promoted to
-    # TAGGED_DIR once they have an ARTIST tag.
-    if path.parent == ALBUMS_DIR:
+    # Albums already in in-progress/ or raw-album/ stay put. A raw side gets
+    # promoted to in-progress/ once it has an ARTIST tag — tagging IS
+    # promotion in the new flow, so there's no separate "tagged but not
+    # promoted" state.
+    if path.parent in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
         new_path = path
     elif read_tags(path).get("ARTIST"):
-        new_path = move_to(path, TAGGED_DIR)
+        new_path = move_to(path, IN_PROGRESS_DIR)
     else:
         new_path = path
     renamed = (rename_to_match_tags(new_path)
-               if new_path.parent in (TAGGED_DIR, ALBUMS_DIR) else new_path)
+               if new_path.parent in (IN_PROGRESS_DIR, RAW_ALBUM_DIR) else new_path)
     return {
         "ok":       True,
         "filename": renamed.name,
-        "tagged":   renamed.parent == TAGGED_DIR,
-        "album":    renamed.parent == ALBUMS_DIR,
+        "album":    renamed.parent in (IN_PROGRESS_DIR, RAW_ALBUM_DIR),
     }

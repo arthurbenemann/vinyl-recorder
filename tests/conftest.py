@@ -5,9 +5,8 @@ Runs at conftest import time, BEFORE any test module is imported, so that
 
 1. The app uses bare imports (`from state import ...`); it expects `app/`
    to be on sys.path, not as a package. We prepend it here.
-2. Importing `state` mkdirs `OUTPUT_DIR` and migrates any flat-layout
-   FLACs into untagged/. Point it at a throwaway tmp dir so the test
-   suite can't touch the developer's recordings.
+2. Importing `state` mkdirs `OUTPUT_DIR`. Point it at a throwaway tmp
+   dir so the test suite can't touch the developer's recordings.
 """
 import atexit
 import os
