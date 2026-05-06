@@ -247,7 +247,7 @@ class UpstreamSession:
             import time as _time
             self._bytes_in_window = 0
             self._window_start = _time.monotonic()
-            self._last_frame_ts = self._window_start
+            self._last_frame_ts = 0.0  # 0.0 sentinel: no frame received yet
             self._gap_count = 0
             self._gap_window.clear()
             if self._has_connected_before:
@@ -460,7 +460,7 @@ class UpstreamSession:
                 while self._gap_window and (now - self._gap_window[0]) > 5.0:
                     self._gap_window.popleft()
                 recent_gaps = len(self._gap_window)
-                ms_since = int((now - self._last_frame_ts) * 1000)
+                ms_since = int((now - (self._last_frame_ts or self._window_start)) * 1000)
                 expected = self._expected_bps
                 reconnects = self._reconnect_count
                 gap_total = self._gap_count
