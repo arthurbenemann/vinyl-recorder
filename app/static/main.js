@@ -726,6 +726,12 @@ async function bulkDelete() {
   if (!selected.size) return;
   const names = [...selected];
   if (!confirm(`Delete ${names.length} recording${names.length===1?'':'s'}? This cannot be undone.`)) return;
+  const bar = document.getElementById('bulk-action-bar');
+  const fill = document.getElementById('bulk-action-fill');
+  document.getElementById('bulk-action-phase').textContent = 'deleting…';
+  document.getElementById('bulk-action-pct').textContent = '';
+  fill.classList.add('indeterminate');
+  bar.hidden = false;
   try {
     const r = await fetch('/api/recordings/bulk-delete', {
       method: 'POST',
@@ -738,6 +744,11 @@ async function bulkDelete() {
     selected.clear();
     refreshLib();
   } catch(e) { toast('✗ ' + e.message, 'err'); }
+  finally {
+    bar.hidden = true;
+    fill.classList.remove('indeterminate');
+    fill.style.width = '0%';
+  }
 }
 
 async function bulkPromote() {
@@ -745,9 +756,10 @@ async function bulkPromote() {
   const names = [...selected];
   if (!confirm(`Promote ${names.length} recording${names.length===1?'':'s'} to albums/ using existing tags?`)) return;
 
-  const bar  = document.getElementById('bulk-promote-bar');
-  const fill = document.getElementById('bulk-promote-fill');
-  const pct  = document.getElementById('bulk-promote-pct');
+  const bar  = document.getElementById('bulk-action-bar');
+  const fill = document.getElementById('bulk-action-fill');
+  const pct  = document.getElementById('bulk-action-pct');
+  document.getElementById('bulk-action-phase').textContent = 'promoting…';
   bar.hidden = false;
 
   let done = 0, failed = 0;
