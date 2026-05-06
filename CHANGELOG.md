@@ -1,3 +1,25 @@
+## v0.5.0 — 2026-05-06
+
+### Features
+- **recording:** Pre-roll buffer (default 5s) (#55)
+- **stream:** Health metrics + traffic-light indicator (#59)
+- **library:** Search & filter (#56)
+- **tagging:** Discogs collection-aware suggestions (#57)
+- UI polish — sortable albums, bulk promote, progress bars, error handling (#69)
+
+### Bug Fixes
+- **docker:** Publish 8080 via default bridge so WebUI works on Docker Desktop (#70)
+
+### Tests
+- **e2e:** Poll for VU mask drop instead of fixed 1.5 s sleep (#66)
+- **e2e:** Cut wall time by shortening sleeps and dropping host ffmpeg dep (#68)
+
+### Changes
+- (fix) Generate /loop stream live with lavfi instead of pre-rendered WAV (#64)
+- Shrink image with python:slim base + apt ffmpeg (#62)
+- Shrink image with python:alpine base + apk ffmpeg (#63)
+- **cliff:** Group changelog by conventional commit type (#67)
+
 ## v0.4.0 — 2026-05-04
 
 - Update Docker publish workflow to only trigger on version tags (#54)
