@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from services.jobs import update_job
-from state import IN_PROGRESS_DIR, MUSIC_DIR, OUTPUT_DIR, RAW_ALBUM_DIR, RAW_DIR
+from state import IN_PROGRESS_DIR, OUTPUT_DIR, RAW_ALBUM_DIR, RAW_DIR
 
 
 def run_ffmpeg_with_progress(

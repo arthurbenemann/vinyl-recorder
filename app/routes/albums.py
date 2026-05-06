@@ -1,7 +1,6 @@
 """Combined-album list, combine, delete, waveform, silence detect, split,
 and per-track download."""
 import asyncio
-import json
 import subprocess
 import uuid
 from datetime import datetime

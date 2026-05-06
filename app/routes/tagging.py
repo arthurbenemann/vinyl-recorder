@@ -18,7 +18,7 @@ from services.musicbrainz import (
 )
 from state import (
     ApplyRequest, DISCOGS_TOKEN, DISCOGS_USERNAME, IN_PROGRESS_DIR,
-    RAW_ALBUM_DIR, RAW_DIR, SearchRequest,
+    RAW_ALBUM_DIR, SearchRequest,
 )
 
 router = APIRouter()
