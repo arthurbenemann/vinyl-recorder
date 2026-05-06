@@ -118,12 +118,15 @@ function openWaveEditor(fname) {
   });
   resetMeasureUI();
   weMeasure();  // kick off in the background; UI doesn't block on it
-  document.getElementById('we-filename').textContent = fname;
+  // The "filename" field on the editor used to literally be a FLAC name; in
+  // the album-folder model `fname` is the opaque album_id. Show the album's
+  // human label in the title bar instead.
+  const headerLabel = [a.artist, a.album].filter(Boolean).join(' — ') || fname;
+  document.getElementById('we-filename').textContent = headerLabel;
   document.getElementById('we-duration').textContent = fmtMMSS(we.total);
   document.getElementById('we-mini-end').textContent = fmtMMSS(we.total);
   // Pre-fill with " - " so weRunSearch can split into artist/album. Strip a
-  // trailing "(YYYY)" from the album because MusicBrainz won't match it as
-  // part of the release title (combine writes the year into the filename).
+  // trailing "(YYYY)" from the album in case the user typed a year in.
   const albumClean = (a.album || '').replace(/\s*\(\d{4}\)\s*$/, '');
   document.getElementById('we-search-q').value =
     [a.artist, albumClean].filter(Boolean).join(' - ');
@@ -183,7 +186,7 @@ async function weLoadExistingSplit(fname) {
     if (!plan || !plan.tracks || plan.tracks.length < 2) return;
     const ptracks = plan.tracks;
     const cuts = [];
-    let cursor = +(plan.offset_seconds || 0);
+    let cursor = 0;
     for (let j = 0; j < ptracks.length - 1; j++) {
       cursor += ptracks[j].duration_seconds || 0;
       if (cursor > 0 && cursor < we.total) cuts.push(cursor);
@@ -954,14 +957,14 @@ async function wePickCollectionCandidate(releaseId) {
 // file. Only called when the editor has no existing cuts (no draft, no
 // previous split). The user can still run a manual search to override.
 async function _weAutoLoadFromIds(a) {
-  if (we.filename !== a.filename) return;     // editor moved on
+  if (we.filename !== a.album_id) return;     // editor moved on
   if (we.cuts.length) return;                  // draft / existing split won
   if (a.discogs_release_id) {
     try {
       const r = await fetch(`/api/release/discogs/${a.discogs_release_id}`);
       if (!r.ok) throw new Error(await parseError(r));
       const d = await r.json();
-      if (we.filename === a.filename && !we.cuts.length) {
+      if (we.filename === a.album_id && !we.cuts.length) {
         _weApplyTracklist(d.track_details, 'auto-loaded from saved Discogs id');
       }
       return;
@@ -972,7 +975,7 @@ async function _weAutoLoadFromIds(a) {
       const r = await fetch(`/api/release/${a.musicbrainz_albumid}`);
       if (!r.ok) return;
       const d = await r.json();
-      if (we.filename === a.filename && !we.cuts.length) {
+      if (we.filename === a.album_id && !we.cuts.length) {
         _weApplyTracklist(d.track_details, 'auto-loaded from saved MBID');
       }
     } catch (e) { /* nothing more to try */ }
@@ -999,7 +1002,7 @@ async function weDetectInternal({ replace }) {
       const r = await fetch('/api/album/detect-silences', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
-          filename: we.filename, noise_db: noise, min_silence: mindur, job_id: jobId,
+          album_id: we.filename, noise_db: noise, min_silence: mindur, job_id: jobId,
         }),
       });
       if (!r.ok) throw new Error(await parseError(r));
@@ -1089,7 +1092,7 @@ async function weApplySplit() {
   showBar(bar, 'encoding tracks');
   try {
     const d = await withJobProgress(bar, async (jobId) => {
-      const body = { filename: we.filename, tracks, bit_depth: bitDepth, job_id: jobId };
+      const body = { album_id: we.filename, tracks, bit_depth: bitDepth, job_id: jobId };
       if (normalize) {
         body.normalize         = true;
         body.target_peak_db    = we.targetPeakDb;
@@ -1150,7 +1153,7 @@ async function weMeasure() {
     const allIncluded = included.length === 1
       && included[0][0] <= 0.01 && included[0][1] >= we.total - 0.5;
     const d = await withJobProgress(bar, async (jobId) => {
-      const body = { filename: we.filename, job_id: jobId };
+      const body = { album_id: we.filename, job_id: jobId };
       if (!allIncluded && included.length) body.included_ranges = included;
       const r = await fetch('/api/album/measure', {
         method: 'POST', headers: {'Content-Type':'application/json'},

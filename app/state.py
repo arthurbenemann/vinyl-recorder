@@ -11,15 +11,14 @@ from services.upstream import UpstreamSession
 
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/output"))
 RAW_DIR = OUTPUT_DIR / "raw"
+# in-progress/ holds one folder per album: side FLACs (untagged) + an
+# `album.json` manifest that owns metadata, side order, and the optional
+# split plan. The folder persists across multiple splits — there's no
+# separate post-split directory.
 IN_PROGRESS_DIR = OUTPUT_DIR / "in-progress"
-# raw-album/ holds combined album FLACs that have been split into tracks. The
-# source FLAC is preserved here so the wave editor's "load existing split"
-# path can still re-edit a finished album. The per-track output lives only in
-# MUSIC_DIR.
-RAW_ALBUM_DIR = OUTPUT_DIR / "raw-album"
 MUSIC_DIR = Path(os.getenv("MUSIC_OUTPUT_DIR", str(OUTPUT_DIR / "music")))
 LOG_DIR = OUTPUT_DIR / ".logs"
-for _d in (RAW_DIR, IN_PROGRESS_DIR, RAW_ALBUM_DIR, MUSIC_DIR, LOG_DIR):
+for _d in (RAW_DIR, IN_PROGRESS_DIR, MUSIC_DIR, LOG_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 MB_BASE = "https://musicbrainz.org/ws/2"
@@ -92,21 +91,24 @@ class SearchRequest(BaseModel):
 
 
 class ApplyRequest(BaseModel):
-    filename: str
+    # Either `filename` (raw side, will be promoted) or `album_id` (existing
+    # album, manifest patched in place). Exactly one must be set.
+    filename: Optional[str] = None
+    album_id: Optional[str] = None
     fields: TagEdit
     mbid: Optional[str] = None  # if set, fetch + embed cover art via CAA / Discogs
     discogs_release_id: Optional[int] = None  # persisted as DISCOGS_RELEASE_ID
 
 
 class CombineRequest(BaseModel):
-    filenames: list[str]              # ordered list of side filenames to concatenate
-    album: TagEdit                    # tags to write on the combined album
-    job_id: Optional[str] = None      # if set, server publishes ffmpeg progress under this id
+    filenames: list[str]              # ordered list of raw/ side filenames
+    album: TagEdit                    # tags written into album.json
+    job_id: Optional[str] = None      # reserved; combine no longer encodes
 
 
 class PromoteRequest(BaseModel):
-    filename: str                     # a side recording in tagged/ or untagged/
-    album: TagEdit                    # tags to write on the promoted album
+    filename: str                     # a side in raw/ to promote into a 1-side album
+    album: TagEdit                    # tags written into album.json
 
 
 class SplitTrack(BaseModel):
@@ -116,9 +118,8 @@ class SplitTrack(BaseModel):
 
 
 class SplitRequest(BaseModel):
-    filename: str                     # an album in albums/
+    album_id: str                     # the in-progress/ folder slug
     tracks: list[SplitTrack]
-    offset_seconds: float = 0.0       # silence-trim at the start, applied to track 1's start
     normalize: bool = False           # apply gain to hit target peak across all tracks
     target_peak_db: float = -1.0      # only used when normalize=True
     measured_peak_db: Optional[float] = None  # peak from /api/album/measure; required for normalize
@@ -127,16 +128,20 @@ class SplitRequest(BaseModel):
 
 
 class SilenceDetectRequest(BaseModel):
-    filename: str                     # an album in albums/
+    album_id: str
     noise_db: float = -40.0
     min_silence: float = 1.5
     job_id: Optional[str] = None
 
 
 class MeasureRequest(BaseModel):
-    filename: str                     # an album in albums/
+    album_id: str
     included_ranges: Optional[list[list[float]]] = None  # [[start, end], ...] in seconds; None = whole album
     job_id: Optional[str] = None
+
+
+class ReorderSidesRequest(BaseModel):
+    sides: list[str]                  # permutation of the album's current sides[]
 
 
 class BulkDelete(BaseModel):

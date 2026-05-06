@@ -1,40 +1,54 @@
-"""Combined-album list, combine, delete, waveform, silence detect, split,
-and per-track download."""
+"""Album endpoints — list, combine, delete, demote, sides reorder, waveform,
+silence detect, measure, split, per-track download.
+
+Albums are folders under `in-progress/<album_id>/` (see services/albums_fs.py).
+Every endpoint here keys on `album_id` rather than a filename. Editor-facing
+ffmpeg endpoints (waveform, silences, measure, split) all run against a
+single `.cache/concat.flac` rendered on demand from the manifest's `sides`
+list, so the underlying audio is never duplicated."""
 import asyncio
+import re
 import subprocess
 import uuid
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
+from services import albums_fs
 from services.ffmpeg import (
-    LOW_SPACE_GB, _move_path_with_sidecar, disk_space_error, find_file,
-    flac_duration_seconds, flac_format, list_albums, parse_astats,
-    parse_silencedetect, parse_split_plan, read_tags,
-    run_ffmpeg_with_progress, safe_name, safe_path_component, split_plan_path,
-    write_split_plan, write_tags,
+    LOW_SPACE_GB, disk_space_error, flac_duration_seconds, parse_astats,
+    parse_silencedetect, run_ffmpeg_with_progress, safe_path_component,
 )
 from services.jobs import finish_job, start_job
 from state import (
-    CombineRequest, IN_PROGRESS_DIR, MUSIC_DIR, MeasureRequest,
-    PromoteRequest, RAW_ALBUM_DIR, RAW_DIR, SilenceDetectRequest,
-    SplitRequest,
+    CombineRequest, MUSIC_DIR, MeasureRequest, PromoteRequest,
+    ReorderSidesRequest, SilenceDetectRequest, SplitRequest,
 )
 
 router = APIRouter()
 
 
-def _music_dir_for(album_tags: dict) -> tuple[Path, str]:
-    """Compute the Jellyfin-shaped output dir for an album's tags. Returns
-    `(absolute_dir, relpath_under_MUSIC_DIR)`. Falls back to "Unknown
-    Artist" / "Unknown Album" when tags are missing; year is omitted from
+def _require_album(album_id: str) -> dict:
+    """Validate the album_id, fetch its (reconciled) manifest, and 404 if
+    the album dir doesn't exist. Centralizes the validation so each route
+    stays a thin wrapper."""
+    if not albums_fs.is_valid_album_id(album_id):
+        raise HTTPException(404, "album not found")
+    if not albums_fs.album_dir(album_id).is_dir():
+        raise HTTPException(404, "album not found")
+    return albums_fs.reconcile_sides(album_id)
+
+
+def _music_dir_for(tags: dict) -> tuple[Path, str]:
+    """Compute the Jellyfin-shaped output dir for an album's manifest tags.
+    Returns `(absolute_dir, relpath_under_MUSIC_DIR)`. Falls back to "Unknown
+    Artist" / "Unknown Album" when tags are missing; the year is omitted from
     the album folder name when DATE is empty."""
-    artist = (album_tags.get("ARTIST") or "").strip() or "Unknown Artist"
-    album_ = (album_tags.get("ALBUM")  or "").strip() or "Unknown Album"
-    year   = (album_tags.get("DATE")   or "").strip()
+    artist = (tags.get("artist") or "").strip() or "Unknown Artist"
+    album_ = (tags.get("album")  or "").strip() or "Unknown Album"
+    year   = (tags.get("year")   or "").strip()
     album_dirname = (
         f"{safe_path_component(album_)} ({year})"
         if year else safe_path_component(album_)
@@ -43,231 +57,121 @@ def _music_dir_for(album_tags: dict) -> tuple[Path, str]:
     return MUSIC_DIR / relpath, relpath
 
 
+# ── Listing / lifecycle ──────────────────────────────────────────────────
+
 @router.get("/api/albums")
 async def get_albums():
-    return {"albums": list_albums()}
+    return {"albums": albums_fs.list_albums()}
 
 
 @router.post("/api/combine")
 async def combine_album(req: CombineRequest):
-    """Concatenate the given side recordings (in order) into a single FLAC in
-    albums/, copy tags from the request, and embed cover art if any source
-    side has one. Sources are left in place — they remain in the library so
-    they can be re-combined or split later."""
-    if len(req.filenames) < 2:
-        raise HTTPException(400, "need at least 2 sides to combine")
-
-    paths: list[Path] = []
-    for fn in req.filenames:
-        p = find_file(fn)
-        if not p or p.parent != RAW_DIR:
-            raise HTTPException(404, f"side not found: {fn}")
-        paths.append(p)
-
-    # Output is roughly the sum of input sizes (lossless re-encode); demand a
-    # small safety margin so writes don't fail near the end.
-    total_in_gb = sum(p.stat().st_size for p in paths) / 1e9
-    err = disk_space_error(max(LOW_SPACE_GB, total_in_gb + 0.5), "combine")
-    if err:
-        raise HTTPException(507, err)
-
-    artist = (req.album.artist or "").strip() or "Unknown"
-    album  = (req.album.album  or "").strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
-    year   = (req.album.year   or "").strip() or datetime.now().strftime("%Y")
-    out_name = f"{safe_name(artist)} - {safe_name(album)} ({year}).flac"
-    out_path = IN_PROGRESS_DIR / out_name
-    if out_path.exists():
-        stem = out_path.stem
-        i = 2
-        while True:
-            cand = IN_PROGRESS_DIR / f"{stem} ({i}).flac"
-            if not cand.exists():
-                out_path = cand
-                break
-            i += 1
-
-    # ffmpeg's concat demuxer needs a tiny playlist file.
-    playlist = IN_PROGRESS_DIR / f".combine_{uuid.uuid4().hex[:8]}.txt"
-    # Total output duration ≈ sum of input durations; drives the progress bar.
-    total_dur = sum((flac_duration_seconds(p) or 0.0) for p in paths)
-    start_job(req.job_id, "combine")
+    """Promote N raw sides into a new in-progress album. Metadata-only —
+    no ffmpeg encode. Sides are MOVED out of `raw/` into the album dir
+    (preserving original filenames; uniquify on collision); tags from the
+    request body land in `album.json` only. Returns the new `album_id` plus
+    a duration sum so the UI can show "✓ Combined N sides · MMm SSs"."""
+    if not req.filenames:
+        raise HTTPException(400, "need at least one side to combine")
+    tags = {k: v for k, v in (req.album.dict() if req.album else {}).items()
+            if v not in ("", None)}
     try:
-        playlist.write_text(
-            "".join(f"file '{str(p).replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}'\n" for p in paths)
-        )
-        # FLAC's `-c copy` concat preserves only the first input's STREAMINFO
-        # total_samples, so most players stop after the first side even though
-        # all the audio data is in the file. Always re-encode.
-        cmd = ["ffmpeg", "-y", "-loglevel", "error",
-               "-f", "concat", "-safe", "0",
-               "-i", str(playlist),
-               "-c:a", "flac", "-compression_level", "8",
-               "-map_metadata", "-1",
-               str(out_path)]
-        rc, stderr = await asyncio.to_thread(
-            run_ffmpeg_with_progress, cmd, total_dur, req.job_id, (0.0, 1.0), "encoding",
-        )
-        if rc != 0:
-            err = (stderr or b"").decode(errors="replace")[:500]
-            finish_job(req.job_id, error=err)
-            raise HTTPException(500, f"ffmpeg failed: {err}")
-    finally:
-        try: playlist.unlink()
-        except Exception: pass
-    finish_job(req.job_id)
-
-    # Tag the result.
-    tag_fields = {k: v for k, v in req.album.dict().items() if v is not None}
-    write_tags(out_path, tag_fields)
-    subprocess.run(
-        ["metaflac",
-         "--remove-tag=SIDECOUNT", f"--set-tag=SIDECOUNT={len(paths)}",
-         str(out_path)],
-        check=False, stderr=subprocess.DEVNULL,
+        album_id, manifest = albums_fs.create_album(req.filenames, tags)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    d = albums_fs.album_dir(album_id)
+    total_dur = sum((flac_duration_seconds(d / s) or 0.0)
+                    for s in manifest["sides"])
+    size_mb = round(
+        sum((d / s).stat().st_size for s in manifest["sides"]) / 1e6, 1,
     )
-
-    # Inherit cover art from the first side that has one.
-    for src in paths:
-        try:
-            pic = subprocess.run(
-                ["metaflac", "--list", "--block-type=PICTURE", str(src)],
-                capture_output=True, text=True, check=False,
-            )
-            if pic.stdout and "type: 3 (Cover (front))" in pic.stdout:
-                tmp = Path(f"/tmp/cover_{uuid.uuid4().hex[:8]}.jpg")
-                ex = subprocess.run(
-                    ["metaflac", f"--export-picture-to={tmp}", str(src)],
-                    capture_output=True, check=False,
-                )
-                if ex.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
-                    subprocess.run(["metaflac", f"--import-picture-from={tmp}", str(out_path)],
-                                   check=False, stderr=subprocess.DEVNULL)
-                    try: tmp.unlink()
-                    except Exception: pass
-                    break
-        except Exception:
-            continue
-
-    stat = out_path.stat()
     return {
-        "ok": True,
-        "filename": out_path.name,
-        "size_mb": round(stat.st_size / 1e6, 1),
-        "duration_seconds": flac_duration_seconds(out_path),
+        "ok":               True,
+        "album_id":         album_id,
+        "duration_seconds": total_dur,
+        "size_mb":          size_mb,
     }
 
 
 @router.post("/api/promote")
 async def promote_album(req: PromoteRequest):
-    """Promote a single side recording (tagged or untagged) to album status by
-    moving the FLAC into albums/, applying the supplied tags, and marking it as
-    a one-side album. The source is removed from the library — promote is a
-    one-way operation, mirroring the way combined sides leave the side list.
-    Cover art embedded in the source is preserved by the move."""
-    src = find_file(req.filename)
-    if not src or src.parent != RAW_DIR:
-        raise HTTPException(404, f"recording not found: {req.filename}")
-
-    artist = (req.album.artist or "").strip() or "Unknown"
-    album  = (req.album.album  or "").strip() or datetime.now().strftime("%Y%m%d_%H%M%S")
-    year   = (req.album.year   or "").strip() or datetime.now().strftime("%Y")
-    out_name = f"{safe_name(artist)} - {safe_name(album)} ({year}).flac"
-    out_path = IN_PROGRESS_DIR / out_name
-    if out_path.exists():
-        stem = out_path.stem
-        i = 2
-        while True:
-            cand = IN_PROGRESS_DIR / f"{stem} ({i}).flac"
-            if not cand.exists():
-                out_path = cand
-                break
-            i += 1
-
-    # Move (rename) keeps the FLAC bitstream and embedded cover art untouched
-    # and is free on the same filesystem — no extra disk space needed and no
-    # re-encode. IN_PROGRESS_DIR is always under OUTPUT_DIR alongside the library.
-    src.rename(out_path)
-
-    tag_fields = {k: v for k, v in req.album.dict().items() if v is not None}
-    write_tags(out_path, tag_fields)
-    subprocess.run(
-        ["metaflac",
-         "--remove-tag=SIDECOUNT", "--set-tag=SIDECOUNT=1",
-         str(out_path)],
-        check=False, stderr=subprocess.DEVNULL,
-    )
-
-    stat = out_path.stat()
-    return {
-        "ok": True,
-        "filename": out_path.name,
-        "size_mb": round(stat.st_size / 1e6, 1),
-        "duration_seconds": flac_duration_seconds(out_path),
-    }
+    """Single-side promote — exactly the N=1 case of combine. Kept as a
+    separate endpoint so the row-level "promote" button has a one-shot
+    handler."""
+    return await combine_album(CombineRequest(
+        filenames=[req.filename],
+        album=req.album,
+    ))
 
 
-def _cleanup_music_dir(plan: Optional[dict]) -> None:
-    """Remove the per-album dir under MUSIC_DIR named in `plan`, and prune
-    the now-empty parent artist dir."""
-    relpath = (plan or {}).get("music_relpath")
-    if not relpath:
-        return
-    music_album = MUSIC_DIR / relpath
-    if music_album.is_dir():
-        for child in music_album.iterdir():
-            try: child.unlink()
-            except Exception: pass
-        try: music_album.rmdir()
-        except Exception: pass
-    parent = music_album.parent
-    try:
-        if parent.is_dir() and parent != MUSIC_DIR and not any(parent.iterdir()):
-            parent.rmdir()
-    except Exception:
-        pass
-
-
-@router.delete("/api/albums/{filename}")
-async def delete_album(filename: str):
-    p = find_file(filename)
-    if not p or p.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
+@router.delete("/api/albums/{album_id}")
+async def delete_album(album_id: str):
+    """Remove the in-progress dir AND the music subtree (if split)."""
+    if not albums_fs.is_valid_album_id(album_id):
         raise HTTPException(404)
-    _cleanup_music_dir(parse_split_plan(p))
-    p.unlink()
-    sidecar = split_plan_path(p)
-    if sidecar.exists():
-        try: sidecar.unlink()
-        except Exception: pass
-    cache_dir = p.parent / ".cache"
-    if cache_dir.is_dir():
-        for f in cache_dir.glob(f"{p.stem}.*"):
-            try: f.unlink()
-            except Exception: pass
+    if not albums_fs.album_dir(album_id).is_dir():
+        raise HTTPException(404)
+    albums_fs.delete_album(album_id)
     return {"ok": True}
 
 
-@router.get("/api/album/{filename}/waveform")
-async def album_waveform(filename: str, w: int = 2400, h: int = 120,
+@router.post("/api/album/{album_id}/demote")
+async def demote_album(album_id: str):
+    """Move every side back to `raw/` and remove the album dir. The music
+    subtree is preserved if the album was already split — the UI confirm
+    dialog warns about this so the user is never surprised."""
+    _require_album(album_id)
+    return {"ok": True, **albums_fs.demote_album(album_id)}
+
+
+@router.post("/api/album/{album_id}/sides/reorder")
+async def reorder_sides(album_id: str, req: ReorderSidesRequest):
+    """Persist a permutation of `sides[]`. Forces the editor's concat cache
+    to regenerate on next render."""
+    _require_album(album_id)
+    try:
+        manifest = albums_fs.reorder_sides(album_id, req.sides)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    albums_fs.invalidate_concat_cache(album_id)
+    return {"ok": True, "sides": manifest["sides"]}
+
+
+# ── Wave-editor source: concat cache ─────────────────────────────────────
+
+async def _ensure_cache(album_id: str, job_id: Optional[str] = None) -> Path:
+    """asyncio wrapper around the cache builder so the route doesn't block
+    the event loop while ffmpeg is concatenating sides."""
+    try:
+        return await asyncio.to_thread(
+            albums_fs.ensure_concat_cache, album_id, job_id,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+
+
+@router.get("/api/album/{album_id}/waveform")
+async def album_waveform(album_id: str, w: int = 2400, h: int = 120,
                          start: float = 0.0, end: float = 0.0,
                          job_id: str = ""):
-    """Render a PNG waveform of the album using ffmpeg's showwavespic. When
-    start/end (seconds) are given, only that segment is rendered, enabling
-    arbitrary zoom. The full-album view is cached on disk; zoomed views are
-    rendered on demand (typically <1s for a minute-long segment)."""
-    src = find_file(filename)
-    if not src or src.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
-        raise HTTPException(404)
+    """Render a PNG waveform of the album's concat cache. The full-album
+    view is cached on disk (PNG keyed by cache mtime); zoomed views
+    render to a temp file and stream back."""
+    _require_album(album_id)
+    src = await _ensure_cache(album_id, job_id or None)
     w = max(400, min(8000, int(w)))
     h = max(40,  min(400,  int(h)))
     total = flac_duration_seconds(src) or 0.0
 
-    # Treat 0/0 (or end<=start, or covering the whole file) as "full album",
-    # which we cache aggressively because the editor reopens it often.
     full_view = (end <= 0.0) or (start <= 0.0 and end >= total - 0.5)
     if full_view:
-        cache_dir = src.parent / ".cache"
+        cache_dir = albums_fs.album_dir(album_id) / ".cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
-        png = cache_dir / f"{src.stem}.{w}x{h}.png"
+        png = cache_dir / f"waveform.{w}x{h}.png"
         if not png.exists() or png.stat().st_mtime < src.stat().st_mtime:
             cmd = ["ffmpeg", "-y", "-loglevel", "error",
                    "-i", str(src),
@@ -285,8 +189,6 @@ async def album_waveform(filename: str, w: int = 2400, h: int = 120,
                 raise HTTPException(500, f"waveform render failed: {err}")
             finish_job(job_id)
         else:
-            # Cache hit — still mark the job done so the client tears the bar
-            # down promptly instead of waiting for a poll-404.
             start_job(job_id, "waveform")
             finish_job(job_id)
         return FileResponse(str(png), media_type="image/png")
@@ -316,14 +218,9 @@ async def album_waveform(filename: str, w: int = 2400, h: int = 120,
 
 @router.post("/api/album/detect-silences")
 async def detect_silences(req: SilenceDetectRequest):
-    src = find_file(req.filename)
-    if not src or src.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
-        raise HTTPException(404, "album not found")
+    _require_album(req.album_id)
+    src = await _ensure_cache(req.album_id, req.job_id)
     total_dur = flac_duration_seconds(src) or 0.0
-    # `-nostats` would otherwise hide the silencedetect=… messages we parse.
-    # run_ffmpeg_with_progress injects -progress -nostats which is fine: the
-    # silencedetect filter prints to stderr (parsed below), separate from the
-    # progress channel on stdout.
     cmd = ["ffmpeg", "-hide_banner", "-i", str(src),
            "-af", f"silencedetect=noise={req.noise_db}dB:d={req.min_silence}",
            "-f", "null", "-"]
@@ -334,14 +231,10 @@ async def detect_silences(req: SilenceDetectRequest):
     if rc != 0:
         err = (stderr or b"").decode(errors="replace")[:300]
         finish_job(req.job_id, error=err)
-        raise HTTPException(500, f"silencedetect failed: {err}")
+        raise HTTPException(500, f"ffmpeg failed: {err}")
     finish_job(req.job_id)
-    return {
-        "silences":       parse_silencedetect((stderr or b"").decode(errors="replace")),
-        "total_duration": total_dur,
-        "noise_db":       req.noise_db,
-        "min_silence":    req.min_silence,
-    }
+    silences = parse_silencedetect((stderr or b"").decode(errors="replace"))
+    return {"silences": silences}
 
 
 def _astats_filter_for_ranges(ranges: Optional[list[list[float]]]) -> str:
@@ -368,20 +261,12 @@ def _astats_filter_for_ranges(ranges: Optional[list[list[float]]]) -> str:
 
 @router.post("/api/album/measure")
 async def measure_album(req: MeasureRequest):
-    """Measure peak level and noise floor (RMS trough) using ffmpeg's `astats`
-    filter. When `included_ranges` is given, only those segments are measured —
-    this lets the caller exclude skipped regions (e.g. side flips with
-    needle-drop pops) so the readout reflects the audio that will end up in
-    the final tracks."""
-    src = find_file(req.filename)
-    if not src or src.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
-        raise HTTPException(404, "album not found")
+    _require_album(req.album_id)
+    src = await _ensure_cache(req.album_id, req.job_id)
     af = _astats_filter_for_ranges(req.included_ranges)
     flag = "-filter_complex" if (req.included_ranges) else "-af"
     cmd = ["ffmpeg", "-hide_banner", "-i", str(src),
            flag, af, "-f", "null", "-"]
-    # When ranges are given astats sees the concat'd union, so progress is
-    # driven by the sum of those ranges, not the album duration.
     if req.included_ranges:
         total_dur = sum(max(0.0, e - s) for s, e in req.included_ranges)
     else:
@@ -401,23 +286,27 @@ async def measure_album(req: MeasureRequest):
     dr = (peak - noise) if (peak is not None and noise is not None) else None
     bits = (dr / 6.02) if dr is not None else None
     return {
-        "peak_db":           peak,
-        "noise_floor_db":    noise,
-        "dynamic_range_db":  dr,
-        "effective_bits":    bits,
+        "peak_db":          peak,
+        "noise_floor_db":   noise,
+        "dynamic_range_db": dr,
+        "effective_bits":   bits,
     }
 
 
+# ── Split / track endpoints ──────────────────────────────────────────────
+
 @router.post("/api/album/split")
 async def split_album(req: SplitRequest):
-    src = find_file(req.filename)
-    if not src or src.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
-        raise HTTPException(404, "album not found")
+    """Cut the concat cache into per-track FLACs in `music/{Artist}/{Album} (Year)/`,
+    embed manifest tags + cover.jpg in each track, and persist the plan +
+    `music_relpath` back into `album.json`. Idempotent on re-run — clears
+    any prior music dir first (including the case where artist/album tags
+    changed and the music_relpath moved)."""
+    manifest = _require_album(req.album_id)
     if not req.tracks:
         raise HTTPException(400, "no tracks given")
 
-    # Tracks are produced via `-c copy`, so total output size is at most the
-    # source size; require a small margin so we don't fail mid-split.
+    src = await _ensure_cache(req.album_id, req.job_id)
     src_gb = src.stat().st_size / 1e9
     err = disk_space_error(max(LOW_SPACE_GB, src_gb + 0.5), "split")
     if err:
@@ -425,36 +314,35 @@ async def split_album(req: SplitRequest):
 
     total = flac_duration_seconds(src) or 0.0
     if total <= 0:
-        raise HTTPException(500, "could not determine source duration")
+        raise HTTPException(500, "could not read source duration")
 
-    if req.bit_depth not in (0, 16, 24):
-        raise HTTPException(400, "bit_depth must be 0, 16, or 24")
-    if req.normalize and req.measured_peak_db is None:
-        raise HTTPException(400, "normalize requires measured_peak_db")
+    src_fmt: dict = {}
+    try:
+        # Reuse flac_format imported above? It's not in the import list yet —
+        # use the same metaflac probe inline to keep the dependency surface
+        # tight. The bit_depth/sample_rate values are only consulted for the
+        # apply_aformat optimization below.
+        out = subprocess.check_output(
+            ["metaflac", "--show-bps", "--show-sample-rate", str(src)],
+            stderr=subprocess.DEVNULL, text=True,
+        ).split()
+        if len(out) >= 1:
+            src_fmt["bit_depth"] = int(out[0])
+    except Exception:
+        pass
 
-    # Compute one gain value reused for every track — preserves relative
-    # loudness across all sides of the album.
-    gain_db: float = 0.0
-    if req.normalize:
-        gain_db = float(req.target_peak_db) - float(req.measured_peak_db)
-    # Skip filters individually when they'd be no-ops: sub-0.01 dB gain is
-    # inaudible, matching bit depth needs no aformat. Re-encoding still happens
-    # unconditionally — `-c copy` would inherit the source STREAMINFO duration
-    # and break the editor's "load existing split" path.
-    src_bits = flac_format(src).get("bit_depth")
+    src_bits = src_fmt.get("bit_depth")
+    gain_db = 0.0
+    if req.normalize and req.measured_peak_db is not None:
+        gain_db = req.target_peak_db - req.measured_peak_db
     apply_gain = req.normalize and abs(gain_db) >= 0.01
     apply_aformat = req.bit_depth in (16, 24) and req.bit_depth != src_bits
     sample_fmt = {16: "s16", 24: "s32"}.get(req.bit_depth) if apply_aformat else None
 
-    album_tags = read_tags(src)
-    out_dir, music_relpath = _music_dir_for(album_tags)
-
-    # If a previous split landed in a different music subdirectory (because
-    # tags changed between splits), clear the stale folder so we don't leave
-    # an orphan album in the Jellyfin tree.
-    prior = parse_split_plan(src)
-    prior_relpath = (prior or {}).get("music_relpath")
-    if prior_relpath and prior_relpath != music_relpath:
+    tags = manifest.get("tags") or {}
+    music_dir, relpath = _music_dir_for(tags)
+    prior_relpath = manifest.get("music_relpath")
+    if prior_relpath and prior_relpath != relpath:
         prior_dir = MUSIC_DIR / prior_relpath
         if prior_dir.is_dir():
             for old in prior_dir.glob("*.flac"):
@@ -468,24 +356,17 @@ async def split_album(req: SplitRequest):
             except Exception:
                 pass
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for old in out_dir.glob("*.flac"):
+    music_dir.mkdir(parents=True, exist_ok=True)
+    for old in music_dir.glob("*.flac"):
         try: old.unlink()
         except Exception: pass
 
-    cover_tmp: Optional[Path] = Path(f"/tmp/cover_{uuid.uuid4().hex[:8]}.jpg")
-    ex = subprocess.run(
-        ["metaflac", f"--export-picture-to={cover_tmp}", str(src)],
-        capture_output=True, check=False,
-    )
-    if ex.returncode != 0 or not cover_tmp.exists() or cover_tmp.stat().st_size == 0:
-        cover_tmp = None
+    cover_file = albums_fs.cover_path(req.album_id)
 
-    # Map each non-skipped track onto a slice of [0, 1] proportional to its
-    # duration so the bar advances at a constant rate across the whole split,
-    # not per-track. Walk the tracks once with the same cursor logic the main
-    # loop uses, so the totals line up exactly.
-    _cur = float(req.offset_seconds or 0.0)
+    # Pre-walk the tracks to compute the slice range for the progress bar
+    # so the bar advances at a constant rate across the whole split, not
+    # per-track. Walk twice with the same cursor logic.
+    _cur = 0.0
     _kept = 0.0
     for _i, _t in enumerate(req.tracks, start=1):
         _s = _cur
@@ -497,133 +378,110 @@ async def split_album(req: SplitRequest):
     start_job(req.job_id, "split")
 
     created: list[dict] = []
-    cursor = float(req.offset_seconds or 0.0)
+    cursor = 0.0
     out_total = sum(1 for t in req.tracks if not t.skip)
     pad = max(2, len(str(out_total)))
     out_idx = 0
     progress_acc = 0.0
-    try:
-        for i, t in enumerate(req.tracks, start=1):
-            start_ = cursor
-            end_ = min(total, start_ + max(0.0, t.duration_seconds))
-            if i == len(req.tracks):
-                end_ = total
-            cursor = end_
-            if end_ <= start_:
-                continue
-            if t.skip:
-                continue   # advance cursor only — region is dropped from output
-            out_idx += 1
-            track_name = f"{str(out_idx).zfill(pad)} - {safe_path_component(t.title) or 'Track'}.flac"
-            out = out_dir / track_name
-            # Always re-encode: ffmpeg's stream copy preserves the source's
-            # STREAMINFO, so every split track would advertise the full album
-            # duration via metaflac, breaking `flac_duration_seconds` and the
-            # editor's "load existing split" path. Skip per-filter when it'd
-            # be a no-op so the default normalize/bit-depth knobs don't add
-            # cost when they don't change anything.
-            af = []
-            if apply_gain:
-                af.append(f"volume={gain_db:.4f}dB")
-            if sample_fmt:
-                af.append(f"aformat=sample_fmts={sample_fmt}")
-            cmd = ["ffmpeg", "-y", "-loglevel", "error",
-                   "-ss", f"{start_:.3f}", "-to", f"{end_:.3f}",
-                   "-i", str(src)]
-            if af:
-                cmd += ["-af", ",".join(af)]
-            cmd += ["-c:a", "flac", "-compression_level", "5",
-                    "-map_metadata", "-1", str(out)]
-            track_dur = end_ - start_
-            slice_a = progress_acc / out_dur_total
-            slice_b = (progress_acc + track_dur) / out_dur_total
-            progress_acc += track_dur
-            rc, stderr = await asyncio.to_thread(
-                run_ffmpeg_with_progress, cmd, track_dur, req.job_id,
-                (slice_a, slice_b), f"track {out_idx}/{out_total}",
+
+    for i, t in enumerate(req.tracks, start=1):
+        start_ = cursor
+        end_ = min(total, start_ + max(0.0, t.duration_seconds))
+        if i == len(req.tracks):
+            end_ = total
+        cursor = end_
+        if end_ <= start_:
+            continue
+        if t.skip:
+            continue   # advance cursor only — region is dropped from output
+        out_idx += 1
+        track_name = f"{str(out_idx).zfill(pad)} - {safe_path_component(t.title) or 'Track'}.flac"
+        out = music_dir / track_name
+        af = []
+        if apply_gain:
+            af.append(f"volume={gain_db:.4f}dB")
+        if sample_fmt:
+            af.append(f"aformat=sample_fmts={sample_fmt}")
+        cmd = ["ffmpeg", "-y", "-loglevel", "error",
+               "-ss", f"{start_:.3f}", "-to", f"{end_:.3f}",
+               "-i", str(src)]
+        if af:
+            cmd += ["-af", ",".join(af)]
+        cmd += ["-c:a", "flac", "-compression_level", "5",
+                "-map_metadata", "-1", str(out)]
+        track_dur = end_ - start_
+        slice_a = progress_acc / out_dur_total
+        slice_b = (progress_acc + track_dur) / out_dur_total
+        progress_acc += track_dur
+        rc, stderr = await asyncio.to_thread(
+            run_ffmpeg_with_progress, cmd, track_dur, req.job_id,
+            (slice_a, slice_b), f"track {out_idx}/{out_total}",
+        )
+        if rc != 0:
+            err = (stderr or b"").decode(errors="replace")[:300]
+            finish_job(req.job_id, error=err)
+            raise HTTPException(500, f"ffmpeg failed on track {i}: {err}")
+        # Tags + cover are committed HERE — only at the music/ emit step.
+        tag_args = ["metaflac", "--remove-all-tags",
+                    f"--set-tag=ARTIST={tags.get('artist', '')}",
+                    f"--set-tag=ALBUM={tags.get('album', '')}",
+                    f"--set-tag=DATE={tags.get('year', '')}",
+                    f"--set-tag=GENRE={tags.get('genre', '')}",
+                    f"--set-tag=LABEL={tags.get('label', '')}",
+                    f"--set-tag=CATALOGNUMBER={tags.get('catalog_number', '')}",
+                    f"--set-tag=RELEASECOUNTRY={tags.get('country', '')}",
+                    f"--set-tag=TITLE={t.title}",
+                    f"--set-tag=TRACKNUMBER={out_idx}",
+                    f"--set-tag=TRACKTOTAL={out_total}",
+                    str(out)]
+        if tags.get("musicbrainz_albumid"):
+            tag_args.insert(-1, f"--set-tag=MUSICBRAINZ_ALBUMID={tags['musicbrainz_albumid']}")
+        if tags.get("discogs_release_id"):
+            tag_args.insert(-1, f"--set-tag=DISCOGS_RELEASE_ID={tags['discogs_release_id']}")
+        subprocess.run(tag_args, check=False, stderr=subprocess.DEVNULL)
+        if cover_file:
+            subprocess.run(
+                ["metaflac", f"--import-picture-from={cover_file}", str(out)],
+                check=False, stderr=subprocess.DEVNULL,
             )
-            if rc != 0:
-                err = (stderr or b"").decode(errors="replace")[:300]
-                finish_job(req.job_id, error=err)
-                raise HTTPException(500, f"ffmpeg failed on track {i}: {err}")
-            tag_args = ["metaflac", "--remove-all-tags",
-                        f"--set-tag=ARTIST={album_tags.get('ARTIST', '')}",
-                        f"--set-tag=ALBUM={album_tags.get('ALBUM', '')}",
-                        f"--set-tag=DATE={album_tags.get('DATE', '')}",
-                        f"--set-tag=GENRE={album_tags.get('GENRE', '')}",
-                        f"--set-tag=LABEL={album_tags.get('LABEL', '')}",
-                        f"--set-tag=CATALOGNUMBER={album_tags.get('CATALOGNUMBER', '')}",
-                        f"--set-tag=RELEASECOUNTRY={album_tags.get('RELEASECOUNTRY', '')}",
-                        f"--set-tag=TITLE={t.title}",
-                        f"--set-tag=TRACKNUMBER={out_idx}",
-                        f"--set-tag=TRACKTOTAL={out_total}",
-                        str(out)]
-            subprocess.run(tag_args, check=False, stderr=subprocess.DEVNULL)
-            if cover_tmp:
-                subprocess.run(["metaflac", f"--import-picture-from={cover_tmp}", str(out)],
-                               check=False, stderr=subprocess.DEVNULL)
-            created.append({
-                "filename":         track_name,
-                "duration_seconds": end_ - start_,
-                "size_mb":          round(out.stat().st_size / 1e6, 1),
-            })
-    finally:
-        if cover_tmp:
-            try: cover_tmp.unlink()
-            except Exception: pass
+        created.append({
+            "filename":         track_name,
+            "duration_seconds": end_ - start_,
+            "size_mb":          round(out.stat().st_size / 1e6, 1),
+        })
 
     plan = {
-        "schema_version": 1,
         "tracks": [
             {"title": t.title,
              "duration_seconds": t.duration_seconds,
              "skip": t.skip}
             for t in req.tracks
         ],
-        "offset_seconds":   req.offset_seconds,
         "normalize":        req.normalize,
         "target_peak_db":   req.target_peak_db,
         "measured_peak_db": req.measured_peak_db,
         "bit_depth":        req.bit_depth,
-        "music_relpath":    music_relpath,
     }
-    write_split_plan(src, plan)
-
-    # The combined source moves out of the in-progress workspace into
-    # raw-album/ once it has been split. From there the wave editor can still
-    # re-load the plan and re-split without ever duplicating the FLAC.
-    if src.parent == IN_PROGRESS_DIR:
-        new_src = RAW_ALBUM_DIR / src.name
-        if new_src.exists() and new_src.resolve() != src.resolve():
-            stem, ext = new_src.stem, new_src.suffix
-            i = 2
-            while True:
-                cand = RAW_ALBUM_DIR / f"{stem} ({i}){ext}"
-                if not cand.exists():
-                    new_src = cand
-                    break
-                i += 1
-        _move_path_with_sidecar(src, new_src)
-        src = new_src
+    manifest = albums_fs.read_manifest(req.album_id)
+    manifest["plan"] = plan
+    manifest["music_relpath"] = relpath
+    albums_fs.write_manifest(req.album_id, manifest)
 
     finish_job(req.job_id)
-    return {"ok": True, "music_relpath": music_relpath,
-            "filename": src.name, "tracks": created}
+    return {"ok": True, "music_relpath": relpath, "tracks": created}
 
 
-@router.get("/api/album/{filename}/tracks")
-async def album_tracks(filename: str):
-    """List the tracks an album was split into. Track titles, durations and
-    skip flags come from the sidecar split plan JSON (the editor's
-    source of truth for re-edit). The matching files live under MUSIC_DIR; we
-    stat them to surface size + actual encoded duration."""
-    src = find_file(filename)
-    if not src or src.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
-        raise HTTPException(404)
-    plan = parse_split_plan(src)
+@router.get("/api/album/{album_id}/tracks")
+async def album_tracks(album_id: str):
+    """List the tracks an album was split into. Titles, durations and skip
+    flags come from `album.json`'s `plan`; the per-track FLACs live under
+    `music/{music_relpath}/`. Used by the wave editor's re-edit reload
+    path and by the Music section's "expand to show tracks" affordance."""
+    manifest = _require_album(album_id)
+    plan = manifest.get("plan")
     if not plan:
         return {"tracks": [], "music_relpath": None, "plan": None}
-    music_relpath = plan.get("music_relpath") or ""
+    music_relpath = manifest.get("music_relpath") or ""
     music_dir = MUSIC_DIR / music_relpath if music_relpath else None
     kept = [t for t in plan.get("tracks", []) if not t.get("skip")]
     out_total = len(kept)
@@ -647,19 +505,19 @@ async def album_tracks(filename: str):
     return {
         "tracks":         tracks,
         "music_relpath":  music_relpath or None,
-        "plan":           plan,  # full plan incl. skipped tracks + normalize knobs
+        "plan":           plan,
     }
 
 
-@router.get("/api/album/{filename}/track/{trackname}")
-async def download_track(filename: str, trackname: str):
-    src = find_file(filename)
-    if not src or src.parent not in (IN_PROGRESS_DIR, RAW_ALBUM_DIR):
-        raise HTTPException(404)
-    if "/" in trackname or "\\" in trackname or ".." in trackname:
+_TRACKNAME_RE = re.compile(r"^[^/\\]+\.flac$")
+
+
+@router.get("/api/album/{album_id}/track/{trackname}")
+async def download_track(album_id: str, trackname: str):
+    manifest = _require_album(album_id)
+    if not _TRACKNAME_RE.fullmatch(trackname) or ".." in trackname:
         raise HTTPException(400)
-    plan = parse_split_plan(src)
-    relpath = (plan or {}).get("music_relpath") or ""
+    relpath = manifest.get("music_relpath") or ""
     if not relpath:
         raise HTTPException(404)
     p = MUSIC_DIR / relpath / trackname

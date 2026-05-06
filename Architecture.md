@@ -172,19 +172,34 @@ For multi-side LP rips:
 
 ```
 /output
-├── raw/         fresh side recordings, named by timestamp
-├── in-progress/ combined album FLACs not yet split (wave-editor workspace)
-├── raw-album/   combined sources after split — kept for re-edit. Each
-│                FLAC has a `<stem>.split.json` sidecar with the full
-│                plan (titles, durations, skip flags, normalize knobs)
-└── music/       Jellyfin-shaped output:
-                   music/{Artist}/{Album} (Year)/NN - Title.flac
-                 The only place per-track FLACs live; no duplication.
+├── raw/                        fresh side recordings, untagged
+│   └── 20251104_191205.flac
+├── in-progress/                ONE FOLDER PER ALBUM (workspace)
+│   └── 7f3a8c91/               opaque hex slug, stable URL handle
+│       ├── album.json          tags, side order, optional split plan
+│       ├── 20251104_141522.flac   original side filename, no Vorbis tags
+│       ├── 20251104_142105.flac
+│       ├── cover.jpg           optional, written at tag-time
+│       └── .cache/concat.flac  rebuilt on demand for the wave editor
+└── music/                      FINAL Jellyfin tree
+    └── Artist Name/
+        └── Album Name (2003)/
+            ├── 01 - Track1.flac    tags + cover embedded HERE only
+            └── 02 - Track2.flac
 ```
 
+Tags, cover art, and split plans live in `album.json` while the album is
+in progress. The side FLACs are never touched. At the split-emit step the
+wave editor concatenates the sides per the manifest's order, slices into
+per-track FLACs in `music/`, and embeds tags + cover into each one.
+
+`/api/album/{album_id}/demote` moves the sides back to `raw/` and removes
+the album dir; if the album was already split, the existing `music/`
+subtree is preserved (the user's already-finished export).
+
 The location of `music/` can be overridden with `MUSIC_OUTPUT_DIR` so
-the Jellyfin tree can sit on a network share separate from the rest of
-the workflow data.
+the Jellyfin tree can sit on a network share separate from the workspace
+data.
 
 Disk-free is monitored; recording start is blocked under 2 GB free.
 

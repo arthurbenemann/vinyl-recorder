@@ -994,14 +994,14 @@ function toggleMusicRow(fname, checked) {
 }
 
 function toggleAllAlbums(checked) {
-  if (checked) _albumsBySplit(false).forEach(a => albumsSelected.add(a.filename));
+  if (checked) _albumsBySplit(false).forEach(a => albumsSelected.add(a.album_id));
   else albumsSelected.clear();
   document.querySelectorAll('.album-row-check').forEach(cb => { cb.checked = checked; });
   updateAlbumsBulkBar();
 }
 
 function toggleAllMusic(checked) {
-  if (checked) _albumsBySplit(true).forEach(a => musicSelected.add(a.filename));
+  if (checked) _albumsBySplit(true).forEach(a => musicSelected.add(a.album_id));
   else musicSelected.clear();
   document.querySelectorAll('.music-row-check').forEach(cb => { cb.checked = checked; });
   updateMusicBulkBar();
@@ -1019,14 +1019,14 @@ function clearMusicSelection() {
   updateMusicBulkBar();
 }
 
-async function _bulkDeleteAlbumNames(names, label) {
-  if (!names.length) return;
-  if (!confirm(`Delete ${names.length} ${label}? Sides remain in the library.`)) return;
-  for (const fn of names) {
-    try { await fetch(`/api/albums/${encodeURIComponent(fn)}`, { method: 'DELETE' }); }
+async function _bulkDeleteAlbumNames(ids, label) {
+  if (!ids.length) return;
+  if (!confirm(`Delete ${ids.length} ${label}? Music tracks emitted from these albums will also be removed.`)) return;
+  for (const album_id of ids) {
+    try { await fetch(`/api/albums/${album_id}`, { method: 'DELETE' }); }
     catch (e) { console.error(e); }
   }
-  toast(`✓ Deleted ${names.length} ${label}`, 'ok');
+  toast(`✓ Deleted ${ids.length} ${label}`, 'ok');
 }
 
 async function bulkDeleteAlbums() {
@@ -1048,34 +1048,40 @@ async function refreshAlbums() {
     const r = await fetch('/api/albums');
     const d = await r.json();
     albumsByName = {};
-    (d.albums || []).forEach(a => albumsByName[a.filename] = a);
-    [...albumsSelected].forEach(fn => {
-      if (!albumsByName[fn] || albumsByName[fn].split) albumsSelected.delete(fn);
+    (d.albums || []).forEach(a => albumsByName[a.album_id] = a);
+    [...albumsSelected].forEach(id => {
+      if (!albumsByName[id] || albumsByName[id].split) albumsSelected.delete(id);
     });
-    [...musicSelected].forEach(fn => {
-      if (!albumsByName[fn] || !albumsByName[fn].split) musicSelected.delete(fn);
+    [...musicSelected].forEach(id => {
+      if (!albumsByName[id] || !albumsByName[id].split) musicSelected.delete(id);
     });
     refreshAlbumsRender();
   } catch (e) { console.error(e); }
 }
 
 function _albumRowHtml(a, opts) {
-  const fn = htmlEscape(a.filename);
-  const isSel = opts.selected.has(a.filename) ? 'checked' : '';
+  // The "fn" key is the album_id (a slug like 7f3a8c91); HTML escaping is
+  // unnecessary (the slug regex is `[a-z0-9_-]+`) but cheap and safe in
+  // case a hand-named drop-in dir made it here.
+  const fn = htmlEscape(a.album_id);
+  const isSel = opts.selected.has(a.album_id) ? 'checked' : '';
   const countCell = a.split
     ? (a.track_count ? `<a class="track-count-link" onclick="toggleTracks('${fn}')">${a.track_count} tracks</a>` : '—')
     : `${a.side_count || '—'}`;
   const splitTitle = a.split ? 'Re-edit splits' : 'Split into tracks';
-  const playing = previewIs(a.filename, 'album') ? 'playing' : '';
-  const playGlyph = previewIs(a.filename, 'album') ? '⏸' : '▶';
+  // Demote button is offered only on un-split rows by default; for split
+  // albums the dialog warns that music/ stays put.
+  const demoteBtn = a.split
+    ? `<button class="icon-btn" title="Demote to Raw (music/ files preserved)" onclick="demoteAlbum('${fn}', true)">↩</button>`
+    : `<button class="icon-btn" title="Demote to Raw" onclick="demoteAlbum('${fn}', false)">↩</button>`;
   return `
-  <tr data-album="${fn}">
+  <tr data-album-id="${fn}">
     <td class="col-check"><input type="checkbox" class="${opts.checkClass}" data-fname="${fn}" ${isSel}
         onclick="${opts.toggleRow}(this.dataset.fname, this.checked)"></td>
     <td style="font-weight:500">
       <div class="row-title">
-        <span class="row-thumb"><img src="/api/file-cover/${encodeURIComponent(a.filename)}" loading="lazy" onerror="this.remove()"></span>
-        <span class="row-title-text">${htmlEscape(a.album || a.filename.replace('.flac',''))}</span>
+        <span class="row-thumb"><img src="/api/file-cover/${fn}" loading="lazy" onerror="this.remove()"></span>
+        <span class="row-title-text">${htmlEscape(a.album || '(untitled album)')}</span>
       </div>
     </td>
     <td style="color:var(--muted)">${htmlEscape(a.artist || '—')}</td>
@@ -1086,10 +1092,9 @@ function _albumRowHtml(a, opts) {
     <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="bit depth / sample rate (kHz)">${fmtSourceFormat(a)}</td>
     <td style="color:var(--muted)">${countCell}</td>
     <td style="white-space:nowrap;text-align:right">
-      <button class="icon-btn preview-btn ${playing}" data-fname="${fn}" data-kind="album" title="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>
       <button class="icon-btn" title="Edit tags" onclick="openTagAlbum('${fn}')">✎</button>
       <button class="icon-btn" title="${splitTitle}" onclick="openWaveEditor('${fn}')">⌇</button>
-      <a class="icon-btn" href="/api/download/${encodeURIComponent(a.filename)}" download title="Download">↓</a>
+      ${demoteBtn}
       <button class="icon-btn danger" title="Delete album" onclick="deleteAlbum('${fn}')">✕</button>
     </td>
   </tr>`;
@@ -1153,23 +1158,53 @@ function refreshAlbumsRender() {
   });
 }
 
-function openTagAlbum(fname) {
+// Tracks the kind of row currently bound to the tag panel — `{album_id}`
+// when retagging an existing album, `{filename}` when promoting a raw side.
+// applyTagPanel() reads this to choose the correct /api/apply payload shape.
+let tagPanelTarget = null;
+
+function openTagAlbum(album_id) {
   // The tag panel is keyed off filesByName; albums live in albumsByName.
   // Mirror the album entry into filesByName so openTag finds it.
-  const a = albumsByName[fname];
+  const a = albumsByName[album_id];
   if (!a) return;
-  filesByName[fname] = a;
-  openTag(fname);
+  filesByName[album_id] = a;
+  tagPanelTarget = { album_id };
+  openTag(album_id);
 }
 
-async function deleteAlbum(fname) {
-  if (!confirm(`Delete album ${fname}? Sides remain in the library.`)) return;
-  const r = await fetch(`/api/albums/${encodeURIComponent(fname)}`, { method: 'DELETE' });
+async function deleteAlbum(album_id) {
+  const a = albumsByName[album_id];
+  const label = (a && a.album) || album_id;
+  const splitWarn = (a && a.split)
+    ? `\n\nThe music/${a.music_relpath || '...'} folder will be removed too.`
+    : '';
+  if (!confirm(`Delete album "${label}"?${splitWarn}`)) return;
+  const r = await fetch(`/api/albums/${album_id}`, { method: 'DELETE' });
   if (r.ok) {
-    toast(`✓ Album deleted — ${fname}`, 'ok');
+    toast(`✓ Album deleted — ${label}`, 'ok');
     refreshAlbums();
   } else {
     toast('✗ delete failed', 'err');
+  }
+}
+
+async function demoteAlbum(album_id, isSplit) {
+  const a = albumsByName[album_id];
+  const label = (a && a.album) || album_id;
+  const sideCount = (a && a.side_count) || '?';
+  const tail = isSplit
+    ? `\n\nThe already-emitted music/${(a && a.music_relpath) || '...'} folder will be left untouched.`
+    : '';
+  const msg = `Demote "${label}" back to Raw?\n\n${sideCount} side(s) will be moved into raw/. Album metadata will be discarded.${tail}`;
+  if (!confirm(msg)) return;
+  const r = await fetch(`/api/album/${album_id}/demote`, { method: 'POST' });
+  if (r.ok) {
+    toast(`✓ Demoted — ${label}`, 'ok');
+    refreshLib();
+    refreshAlbums();
+  } else {
+    toast('✗ demote failed', 'err');
   }
 }
 
@@ -1198,8 +1233,9 @@ function togglePreview(fname, kind) {
     preview.audio = new Audio();
     preview.audio.addEventListener('ended', () => stopPreview());
   }
-  const qs = kind === 'album' ? '?source=album' : '';
-  preview.audio.src = '/api/download/' + encodeURIComponent(fname) + qs;
+  // Albums no longer have a single-file download (they're folders). Library
+  // rows (raw sides) keep the same `/api/download/{filename}` route.
+  preview.audio.src = '/api/download/' + encodeURIComponent(fname);
   preview.audio.play().catch(e => {
     toast('✗ preview failed: ' + e.message, 'err');
     stopPreview();
@@ -1423,7 +1459,7 @@ async function runPromote() {
     });
     if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
-    toast(`✓ Promoted → ${d.filename} · ${fmtDuration(d.duration_seconds)}`, 'ok');
+    toast(`✓ Promoted · ${fmtDuration(d.duration_seconds)}`, 'ok');
     selected.delete(promoteFilename);
     closePromote();
     refreshLib();
@@ -1469,6 +1505,12 @@ function setCover(url) {
 function openTag(fname) {
   const f = filesByName[fname];
   if (!f) return;
+  // openTagAlbum already set this; openTag is also called directly for raw
+  // sides (e.g. from the recording-finished WS event), in which case we
+  // need to clear any stale album_id target left from a previous panel.
+  if (!tagPanelTarget || tagPanelTarget.filename !== undefined) {
+    tagPanelTarget = { filename: fname };
+  }
   tagPanelMbid = null;
   tagPanelDiscogsId = null;
   tagPanelCandidates = [];
@@ -1493,6 +1535,7 @@ function openTag(fname) {
 function closeTag() {
   document.getElementById('tag-modal').hidden = true;
   document.removeEventListener('keydown', tagEscHandler);
+  tagPanelTarget = null;
 }
 const tagEscHandler = makeModalEscHandler(closeTag);
 
@@ -1704,21 +1747,24 @@ async function applyTagPanel() {
     toast('✗ Need at least artist + album', 'err');
     return;
   }
+  // tagPanelTarget tells the server whether we're patching an existing
+  // album (album_id) or promoting a raw side (filename).
+  const target = tagPanelTarget || { filename: fname };
   try {
     const r = await fetch('/api/apply', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({
-        filename: fname, fields,
+        ...target, fields,
         mbid: tagPanelMbid,
         discogs_release_id: tagPanelDiscogsId,
       })
     });
     if (!r.ok) throw new Error(await parseError(r));
-    const d = await r.json();
-    toast(`✓ Tagged → ${d.filename}`, 'ok');
+    await r.json();
+    toast(`✓ Tagged ${fields.artist} — ${fields.album}`, 'ok');
     closeTag();
-    if (d.album) refreshAlbums();
-    else         refreshLib();
+    refreshLib();
+    refreshAlbums();
   } catch (e) { toast('✗ ' + e.message, 'err'); }
 }
 

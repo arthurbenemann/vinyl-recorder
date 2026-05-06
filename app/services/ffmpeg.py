@@ -1,17 +1,17 @@
 """Filesystem + FLAC tag helpers backed by metaflac/ffmpeg subprocess calls.
 Pure functions — no FastAPI deps — so they can be reused from routes and from
-the higher-level album/recording listing helpers."""
-import json
+the higher-level album/recording listing helpers. Album-folder logic lives
+in `services/albums_fs.py`; this file just deals with raw side files and
+tag/format helpers shared across the codebase."""
 import re
 import shutil
 import subprocess
 import threading
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from services.jobs import update_job
-from state import IN_PROGRESS_DIR, OUTPUT_DIR, RAW_ALBUM_DIR, RAW_DIR
+from state import OUTPUT_DIR, RAW_DIR
 
 
 def run_ffmpeg_with_progress(
@@ -100,34 +100,6 @@ def safe_path_component(s: str) -> str:
     return s or 'Unknown'
 
 
-def split_plan_path(album_path: Path) -> Path:
-    """Sidecar JSON path next to the album FLAC: `Foo.flac` → `Foo.split.json`.
-    Kept as a single helper so move/rename/delete callers can keep the sidecar
-    in lockstep with the FLAC."""
-    return album_path.with_suffix(".split.json")
-
-
-def parse_split_plan(album_path: Path) -> Optional[dict]:
-    """Read the sidecar split plan written next to a combined album FLAC,
-    returning the parsed dict or None if absent / malformed. The plan stores
-    titles, durations, skip flags, normalize/peak/bit-depth knobs, and the
-    music_relpath under MUSIC_DIR so the API can find emitted tracks even
-    after a re-tag."""
-    p = split_plan_path(album_path)
-    if not p.exists():
-        return None
-    try:
-        plan = json.loads(p.read_text())
-    except (OSError, ValueError, TypeError):
-        return None
-    return plan if isinstance(plan, dict) else None
-
-
-def write_split_plan(album_path: Path, plan: dict) -> None:
-    """Persist `plan` as a JSON sidecar next to the album FLAC."""
-    split_plan_path(album_path).write_text(json.dumps(plan, indent=2))
-
-
 LOW_SPACE_GB = 2.0  # below this threshold the UI marker turns red and writes are refused.
 
 
@@ -149,16 +121,14 @@ def disk_space_error(min_needed_gb: float, op: str) -> Optional[str]:
     )
 
 
-def find_file(filename: str) -> Optional[Path]:
-    """Locate a FLAC anywhere in the output tree (sides, in-progress albums,
-    or post-split source albums kept for re-edit)."""
+def find_side(filename: str) -> Optional[Path]:
+    """Locate a side recording in `raw/` by filename. Albums are folders now
+    so they don't have a single-file handle — endpoints that need to address
+    an album do so by `album_id` via `services/albums_fs.album_dir(...)`."""
     if "/" in filename or "\\" in filename or ".." in filename:
         return None
-    for d in (RAW_DIR, IN_PROGRESS_DIR, RAW_ALBUM_DIR):
-        p = d / filename
-        if p.exists():
-            return p
-    return None
+    p = RAW_DIR / filename
+    return p if p.exists() else None
 
 
 def flac_duration_seconds(path: Path) -> Optional[float]:
@@ -239,56 +209,13 @@ def write_tags(path: Path, fields: dict):
         subprocess.run(setters, check=False, stderr=subprocess.DEVNULL)
 
 
-def _move_path_with_sidecar(src: Path, dst: Path) -> None:
-    """Rename `src` → `dst` and carry the matching `<stem>.split.json` sidecar
-    alongside if one exists. Used by every move/rename helper so an album's
-    plan never gets orphaned away from its FLAC."""
-    src.rename(dst)
-    src_sidecar = split_plan_path(src)
-    if src_sidecar.exists():
-        src_sidecar.rename(split_plan_path(dst))
-
-
-def move_to(path: Path, target_dir: Path) -> Path:
-    if path.parent == target_dir:
-        return path
-    new_path = target_dir / path.name
-    _move_path_with_sidecar(path, new_path)
-    return new_path
-
-
-def rename_to_match_tags(path: Path) -> Path:
-    """Rename `path` so its filename matches its embedded artist/album/year tags."""
-    tags = read_tags(path)
-    artist = tags.get("ARTIST", "").strip()
-    album  = tags.get("ALBUM", "").strip()
-    if not artist or not album:
-        return path
-    year = (tags.get("DATE", "").strip()[:4]) or datetime.now().strftime("%Y")
-    desired = f"{safe_name(artist)} - {safe_name(album)} ({year}).flac"
-    if desired == path.name:
-        return path
-    target = path.parent / desired
-    if target.exists() and target.resolve() != path.resolve():
-        stem, ext = target.stem, target.suffix
-        i = 2
-        while True:
-            candidate = path.parent / f"{stem} ({i}){ext}"
-            if not candidate.exists():
-                target = candidate
-                break
-            i += 1
-    _move_path_with_sidecar(path, target)
-    return target
-
-
 def list_recordings() -> list[dict]:
-    """List untagged side recordings in raw/. Tagged sides have already been
-    promoted to in-progress/ and surface via list_albums()."""
+    """List side recordings in raw/. These are always untagged (any
+    tagging happens at the in-progress album level via album.json — sides
+    never carry Vorbis tags in the new model)."""
     files = []
     for f in RAW_DIR.glob("*.flac"):
         stat = f.stat()
-        tags = read_tags(f)
         fmt = flac_format(f)
         files.append({
             "filename":         f.name,
@@ -297,57 +224,9 @@ def list_recordings() -> list[dict]:
             "duration_seconds": flac_duration_seconds(f),
             "bit_depth":        fmt.get("bit_depth"),
             "sample_rate_khz":  fmt.get("sample_rate_khz"),
-            "artist":         tags.get("ARTIST", ""),
-            "album":          tags.get("ALBUM", ""),
-            "year":           tags.get("DATE", ""),
-            "genre":          tags.get("GENRE", ""),
-            "label":          tags.get("LABEL", ""),
-            "catalog_number": tags.get("CATALOGNUMBER", ""),
-            "country":        tags.get("RELEASECOUNTRY", ""),
-            "tracks":             tags.get("TRACKLIST", ""),
-            "musicbrainz_albumid": tags.get("MUSICBRAINZ_ALBUMID", ""),
-            "discogs_release_id":  int(tags.get("DISCOGS_RELEASE_ID") or 0) or None,
         })
     files.sort(key=lambda x: x["mtime"], reverse=True)
     return files
-
-
-def list_albums() -> list[dict]:
-    """List combined albums from in-progress/ (un-split) and raw-album/
-    (post-split sources). Each entry carries a `split` flag — the UI
-    partitions on this to show un-split albums in the In-progress section
-    and split ones in the Music section."""
-    out = []
-    for f in list(IN_PROGRESS_DIR.glob("*.flac")) + list(RAW_ALBUM_DIR.glob("*.flac")):
-        stat = f.stat()
-        tags = read_tags(f)
-        fmt = flac_format(f)
-        plan = parse_split_plan(f)
-        kept_tracks = [t for t in (plan or {}).get("tracks", []) if not t.get("skip")]
-        out.append({
-            "filename":         f.name,
-            "size_mb":          round(stat.st_size / 1e6, 1),
-            "mtime":            stat.st_mtime,
-            "duration_seconds": flac_duration_seconds(f),
-            "bit_depth":        fmt.get("bit_depth"),
-            "sample_rate_khz":  fmt.get("sample_rate_khz"),
-            "artist":           tags.get("ARTIST", ""),
-            "album":            tags.get("ALBUM", ""),
-            "year":             tags.get("DATE", ""),
-            "genre":            tags.get("GENRE", ""),
-            "label":            tags.get("LABEL", ""),
-            "catalog_number":   tags.get("CATALOGNUMBER", ""),
-            "country":          tags.get("RELEASECOUNTRY", ""),
-            "tracks":             tags.get("TRACKLIST", ""),
-            "musicbrainz_albumid": tags.get("MUSICBRAINZ_ALBUMID", ""),
-            "discogs_release_id":  int(tags.get("DISCOGS_RELEASE_ID") or 0) or None,
-            "side_count":         int(tags.get("SIDECOUNT", "0") or 0),
-            "split":              plan is not None,
-            "music_relpath":      (plan or {}).get("music_relpath"),
-            "track_count":        len(kept_tracks),
-        })
-    out.sort(key=lambda x: x["mtime"], reverse=True)
-    return out
 
 
 def parse_silencedetect(stderr: str) -> list[dict]:

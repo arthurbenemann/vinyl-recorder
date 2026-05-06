@@ -12,11 +12,16 @@ auto-fill metadata + embed cover art from the Cover Art Archive.
   **Raw** (just recorded) → **In-progress** (tagged + combined) →
   **Music** (split into per-track FLACs ready for Jellyfin)
 - Output layout under `./output/`:
-  - `raw/` — fresh side recordings, untagged
-  - `in-progress/` — combined album FLAC, workspace for the wave editor
-  - `raw-album/` — combined source FLACs that have been split (kept for re-edit)
+  - `raw/` — fresh side recordings (FLAC, no tags). Drop your own files in
+    here too.
+  - `in-progress/{album_id}/` — one folder per album. Holds the original
+    side FLACs untouched plus an `album.json` manifest with tags, side
+    order, optional split plan, and an optional `cover.jpg`. Editing tags
+    in the UI patches the manifest, not the audio. Demote moves the sides
+    back into `raw/`.
   - `music/` — final tracks in `Artist/Album (Year)/NN - Title.flac` shape
-    that Jellyfin scans natively
+    that Jellyfin scans natively. Tags + cover are embedded *only* at this
+    step; you can also drop pre-tagged folders here directly.
 - Direct MusicBrainz lookup, enriched with Discogs (catalog #, country,
   format, matrix/runout) when MB has linked the release. No tokens or
   setup — uses both services' public APIs.
