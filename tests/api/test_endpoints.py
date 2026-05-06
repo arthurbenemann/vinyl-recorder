@@ -16,6 +16,15 @@ def _client():
     return TestClient(app)
 
 
+# ── /health ──────────────────────────────────────────────────────────────
+def test_health_returns_ok():
+    # Probed by the Dockerfile HEALTHCHECK — must stay cheap, 200, and
+    # independent of upstream/disk state.
+    r = _client().get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok"}
+
+
 # ── /api/config ──────────────────────────────────────────────────────────
 def test_config_returns_known_shape():
     r = _client().get("/api/config")
