@@ -58,18 +58,11 @@ services:
       # test_auto_stop. Pre-roll has its own unit-test coverage; this overlay's
       # job is to make timing assertions reproducible.
       PRE_ROLL_SECONDS: "0"
-    # Healthcheck so `docker compose up --wait` blocks until the recorder is
-    # actually serving HTTP, not just "container started". Eliminates the
-    # race where e2e tests beat the FastAPI lifespan to /api/status.
-    # /api/status returns 200 even before AUTO_CONNECT completes — the test
-    # fixture polls for upstream.connected separately.
-    healthcheck:
-      test: ["CMD", "python3", "-c",
-             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/status', timeout=2)"]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-      start_period: 5s
+    # No healthcheck override — inherits the Dockerfile's HEALTHCHECK (probes
+    # /health). `compose up --wait` blocks until that flips to healthy, so
+    # e2e tests can't race the FastAPI lifespan. The fixture still polls
+    # /api/status separately for upstream.connected — a stricter readiness
+    # signal that AUTO_CONNECT has actually completed.
 
 networks:
   vinyl-test:
