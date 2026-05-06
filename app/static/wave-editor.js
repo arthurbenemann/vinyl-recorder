@@ -171,7 +171,7 @@ function openWaveEditor(fname) {
 }
 
 // If this album has already been split, repopulate cuts, titles, and skip
-// flags from the embedded VR_SPLIT_PLAN so the user can adjust the split
+// flags from the sidecar split plan so the user can adjust the split
 // rather than redo it from scratch.
 async function weLoadExistingSplit(fname) {
   try {

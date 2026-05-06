@@ -151,7 +151,7 @@ For multi-side LP rips:
    suggested cuts; the user adjusts and labels tracks.
 3. `/api/album/split` writes one FLAC per track into
    `music/{Artist}/{Album} (Year)/NN - Title.flac` (Jellyfin-shaped),
-   persists the full plan as a `VR_SPLIT_PLAN` Vorbis tag on the source FLAC,
+   persists the full plan as a `<stem>.split.json` sidecar next to the source FLAC,
    and moves the source from `in-progress/` into `raw-album/` so the editor
    can still re-load + re-edit it later without duplicating audio.
 
@@ -175,7 +175,7 @@ For multi-side LP rips:
 ├── raw/         fresh side recordings, named by timestamp
 ├── in-progress/ combined album FLACs not yet split (wave-editor workspace)
 ├── raw-album/   combined sources after split — kept for re-edit. Each
-│                FLAC carries a VR_SPLIT_PLAN Vorbis tag with the full
+│                FLAC has a `<stem>.split.json` sidecar with the full
 │                plan (titles, durations, skip flags, normalize knobs)
 └── music/       Jellyfin-shaped output:
                    music/{Artist}/{Album} (Year)/NN - Title.flac

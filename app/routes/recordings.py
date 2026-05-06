@@ -16,7 +16,7 @@ from services.eventbus import bus
 from services.ffmpeg import (
     LOW_SPACE_GB, disk_free_gb, disk_space_error, find_file, list_recordings,
     move_to, parse_split_plan, read_tags, rename_to_match_tags, safe_name,
-    write_tags,
+    split_plan_path, write_tags,
 )
 from state import (
     BulkDelete, IN_PROGRESS_DIR, LOG_DIR, MUSIC_DIR, RAW_ALBUM_DIR, RAW_DIR,
@@ -517,8 +517,13 @@ async def rename_recording(filename: str, req: RenameRequest):
 
 def _cleanup_music_for(album_path: Path) -> None:
     """Remove the per-album dir under MUSIC_DIR (if any) recorded in this
-    album's split plan, and prune the now-empty parent artist dir."""
+    album's split plan, the plan sidecar JSON, and the now-empty parent
+    artist dir. Called from both single + bulk delete paths."""
     plan = parse_split_plan(album_path)
+    sidecar = split_plan_path(album_path)
+    if sidecar.exists():
+        try: sidecar.unlink()
+        except Exception: pass
     relpath = (plan or {}).get("music_relpath")
     if not relpath:
         return

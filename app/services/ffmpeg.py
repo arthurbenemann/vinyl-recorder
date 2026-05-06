@@ -100,31 +100,32 @@ def safe_path_component(s: str) -> str:
     return s or 'Unknown'
 
 
+def split_plan_path(album_path: Path) -> Path:
+    """Sidecar JSON path next to the album FLAC: `Foo.flac` → `Foo.split.json`.
+    Kept as a single helper so move/rename/delete callers can keep the sidecar
+    in lockstep with the FLAC."""
+    return album_path.with_suffix(".split.json")
+
+
 def parse_split_plan(album_path: Path) -> Optional[dict]:
-    """Read VR_SPLIT_PLAN from a combined album FLAC, returning the parsed dict
-    or None if absent / malformed. The plan stores titles, durations, skip
-    flags, normalize/peak/bit-depth knobs, and the music_relpath under MUSIC_DIR
-    so the API can find emitted tracks even after a re-tag."""
-    raw = read_tags(album_path).get("VR_SPLIT_PLAN")
-    if not raw:
+    """Read the sidecar split plan written next to a combined album FLAC,
+    returning the parsed dict or None if absent / malformed. The plan stores
+    titles, durations, skip flags, normalize/peak/bit-depth knobs, and the
+    music_relpath under MUSIC_DIR so the API can find emitted tracks even
+    after a re-tag."""
+    p = split_plan_path(album_path)
+    if not p.exists():
         return None
     try:
-        plan = json.loads(raw)
-    except (ValueError, TypeError):
+        plan = json.loads(p.read_text())
+    except (OSError, ValueError, TypeError):
         return None
     return plan if isinstance(plan, dict) else None
 
 
 def write_split_plan(album_path: Path, plan: dict) -> None:
-    """Persist `plan` as a single-line JSON Vorbis comment on the album FLAC."""
-    subprocess.run(
-        ["metaflac", "--remove-tag=VR_SPLIT_PLAN", str(album_path)],
-        check=False, stderr=subprocess.DEVNULL,
-    )
-    subprocess.run(
-        ["metaflac", f"--set-tag=VR_SPLIT_PLAN={json.dumps(plan)}", str(album_path)],
-        check=False, stderr=subprocess.DEVNULL,
-    )
+    """Persist `plan` as a JSON sidecar next to the album FLAC."""
+    split_plan_path(album_path).write_text(json.dumps(plan, indent=2))
 
 
 LOW_SPACE_GB = 2.0  # below this threshold the UI marker turns red and writes are refused.
@@ -238,11 +239,21 @@ def write_tags(path: Path, fields: dict):
         subprocess.run(setters, check=False, stderr=subprocess.DEVNULL)
 
 
+def _move_path_with_sidecar(src: Path, dst: Path) -> None:
+    """Rename `src` → `dst` and carry the matching `<stem>.split.json` sidecar
+    alongside if one exists. Used by every move/rename helper so an album's
+    plan never gets orphaned away from its FLAC."""
+    src.rename(dst)
+    src_sidecar = split_plan_path(src)
+    if src_sidecar.exists():
+        src_sidecar.rename(split_plan_path(dst))
+
+
 def move_to(path: Path, target_dir: Path) -> Path:
     if path.parent == target_dir:
         return path
     new_path = target_dir / path.name
-    path.rename(new_path)
+    _move_path_with_sidecar(path, new_path)
     return new_path
 
 
@@ -267,7 +278,7 @@ def rename_to_match_tags(path: Path) -> Path:
                 target = candidate
                 break
             i += 1
-    path.rename(target)
+    _move_path_with_sidecar(path, target)
     return target
 
 

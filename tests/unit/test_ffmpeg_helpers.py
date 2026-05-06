@@ -3,9 +3,37 @@ from services.ffmpeg import (
     _parse_db,
     parse_astats,
     parse_silencedetect,
+    parse_split_plan,
     safe_name,
     safe_path_component,
+    split_plan_path,
+    write_split_plan,
 )
+
+
+# ── split plan sidecar round-trip ────────────────────────────────────────
+def test_split_plan_sidecar_round_trip(tmp_path):
+    flac = tmp_path / "Some Album.flac"
+    flac.write_bytes(b"")  # not a real FLAC — sidecar layer doesn't open it
+    assert parse_split_plan(flac) is None  # absent sidecar = None
+    plan = {"tracks": [{"title": "A", "skip": False}], "music_relpath": "X/Y"}
+    write_split_plan(flac, plan)
+    sidecar = split_plan_path(flac)
+    assert sidecar.exists()
+    # Sidecar lives next to the FLAC under <stem>.split.json — never inside
+    # a `.flac.something` chained extension which is harder to glob and clean
+    # up.
+    assert sidecar.name == "Some Album.split.json"
+    assert parse_split_plan(flac) == plan
+
+
+def test_split_plan_returns_none_on_malformed_json(tmp_path):
+    # A user manually editing the sidecar (or a truncated write) shouldn't
+    # 500 the server — the editor just falls back to "no existing split".
+    flac = tmp_path / "Album.flac"
+    flac.write_bytes(b"")
+    split_plan_path(flac).write_text("not-json{")
+    assert parse_split_plan(flac) is None
 
 
 # ── safe_path_component ──────────────────────────────────────────────────

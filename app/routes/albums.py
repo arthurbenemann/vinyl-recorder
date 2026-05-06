@@ -11,10 +11,11 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
 from services.ffmpeg import (
-    LOW_SPACE_GB, disk_space_error, find_file, flac_duration_seconds,
-    flac_format, list_albums, parse_astats, parse_silencedetect,
-    parse_split_plan, read_tags, run_ffmpeg_with_progress, safe_name,
-    safe_path_component, write_split_plan, write_tags,
+    LOW_SPACE_GB, _move_path_with_sidecar, disk_space_error, find_file,
+    flac_duration_seconds, flac_format, list_albums, parse_astats,
+    parse_silencedetect, parse_split_plan, read_tags,
+    run_ffmpeg_with_progress, safe_name, safe_path_component, split_plan_path,
+    write_split_plan, write_tags,
 )
 from services.jobs import finish_job, start_job
 from state import (
@@ -233,6 +234,10 @@ async def delete_album(filename: str):
         raise HTTPException(404)
     _cleanup_music_dir(parse_split_plan(p))
     p.unlink()
+    sidecar = split_plan_path(p)
+    if sidecar.exists():
+        try: sidecar.unlink()
+        except Exception: pass
     cache_dir = p.parent / ".cache"
     if cache_dir.is_dir():
         for f in cache_dir.glob(f"{p.stem}.*"):
@@ -598,7 +603,7 @@ async def split_album(req: SplitRequest):
                     new_src = cand
                     break
                 i += 1
-        src.rename(new_src)
+        _move_path_with_sidecar(src, new_src)
         src = new_src
 
     finish_job(req.job_id)
@@ -609,7 +614,7 @@ async def split_album(req: SplitRequest):
 @router.get("/api/album/{filename}/tracks")
 async def album_tracks(filename: str):
     """List the tracks an album was split into. Track titles, durations and
-    skip flags come from the album FLAC's VR_SPLIT_PLAN tag (the editor's
+    skip flags come from the sidecar split plan JSON (the editor's
     source of truth for re-edit). The matching files live under MUSIC_DIR; we
     stat them to surface size + actual encoded duration."""
     src = find_file(filename)
