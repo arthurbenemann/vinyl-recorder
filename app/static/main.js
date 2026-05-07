@@ -428,7 +428,6 @@ let recDurationSec = 0;        // 0 = unlimited
 let recTimerInterval = null;
 
 function applyRecordState({ active, paused: isPaused, sid, durationSec, elapsedSec }) {
-  const wasRecording = recording;
   recording = !!active;
   paused    = !!isPaused;
   sessionId = active ? (sid || null) : null;
@@ -447,13 +446,6 @@ function applyRecordState({ active, paused: isPaused, sid, durationSec, elapsedS
   pauseBtn.title       = paused ? 'Resume' : 'Pause';
 
   if (recording) {
-    if (!wasRecording) {
-      // Force-expand only on the inactive → active transition so the timer /
-      // progress are visible when a session starts. Pause/resume events
-      // shouldn't reopen the rail if the user has chosen to keep it slim.
-      applySidebarState(false);
-      try { localStorage.setItem(SIDEBAR_KEY, '0'); } catch (_) {}
-    }
     stext.textContent = paused ? 'paused' : 'recording';
     hint.textContent = paused ? 'paused — click ▶ to resume'
                               : 'click ■ to stop · ‖ to pause';
