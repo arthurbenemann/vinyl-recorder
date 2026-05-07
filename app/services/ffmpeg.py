@@ -1,16 +1,17 @@
 """Filesystem + FLAC tag helpers backed by metaflac/ffmpeg subprocess calls.
 Pure functions — no FastAPI deps — so they can be reused from routes and from
-the higher-level album/recording listing helpers."""
+the higher-level album/recording listing helpers. Album-folder logic lives
+in `services/albums_fs.py`; this file just deals with raw side files and
+tag/format helpers shared across the codebase."""
 import re
 import shutil
 import subprocess
 import threading
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from services.jobs import update_job
-from state import ALBUMS_DIR, OUTPUT_DIR, TAGGED_DIR, UNTAGGED_DIR
+from state import OUTPUT_DIR, RAW_DIR
 
 
 def run_ffmpeg_with_progress(
@@ -91,6 +92,14 @@ def safe_name(s: str) -> str:
     return re.sub(r'[^\w\s\-\.]', '', s).strip().replace(' ', '_') or 'untitled'
 
 
+def safe_path_component(s: str) -> str:
+    """Sanitize a string for use as a single Jellyfin-friendly path component:
+    keeps spaces, strips filesystem-hostile chars (`<>:"/\\|?*` + control
+    chars). Used for `music/{Artist}/{Album} (Year)/` directory names."""
+    s = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', s).strip().rstrip('.')
+    return s or 'Unknown'
+
+
 LOW_SPACE_GB = 2.0  # below this threshold the UI marker turns red and writes are refused.
 
 
@@ -112,15 +121,14 @@ def disk_space_error(min_needed_gb: float, op: str) -> Optional[str]:
     )
 
 
-def find_file(filename: str) -> Optional[Path]:
-    """Locate a FLAC anywhere in the output tree (sides or combined albums)."""
+def find_side(filename: str) -> Optional[Path]:
+    """Locate a side recording in `raw/` by filename. Albums are folders now
+    so they don't have a single-file handle — endpoints that need to address
+    an album do so by `album_id` via `services/albums_fs.album_dir(...)`."""
     if "/" in filename or "\\" in filename or ".." in filename:
         return None
-    for d in (TAGGED_DIR, UNTAGGED_DIR, ALBUMS_DIR):
-        p = d / filename
-        if p.exists():
-            return p
-    return None
+    p = RAW_DIR / filename
+    return p if p.exists() else None
 
 
 def flac_duration_seconds(path: Path) -> Optional[float]:
@@ -201,99 +209,24 @@ def write_tags(path: Path, fields: dict):
         subprocess.run(setters, check=False, stderr=subprocess.DEVNULL)
 
 
-def move_to(path: Path, target_dir: Path) -> Path:
-    if path.parent == target_dir:
-        return path
-    new_path = target_dir / path.name
-    path.rename(new_path)
-    return new_path
-
-
-def rename_to_match_tags(path: Path) -> Path:
-    """Rename `path` so its filename matches its embedded artist/album/year tags."""
-    tags = read_tags(path)
-    artist = tags.get("ARTIST", "").strip()
-    album  = tags.get("ALBUM", "").strip()
-    if not artist or not album:
-        return path
-    year = (tags.get("DATE", "").strip()[:4]) or datetime.now().strftime("%Y")
-    desired = f"{safe_name(artist)} - {safe_name(album)} ({year}).flac"
-    if desired == path.name:
-        return path
-    target = path.parent / desired
-    if target.exists() and target.resolve() != path.resolve():
-        stem, ext = target.stem, target.suffix
-        i = 2
-        while True:
-            candidate = path.parent / f"{stem} ({i}){ext}"
-            if not candidate.exists():
-                target = candidate
-                break
-            i += 1
-    path.rename(target)
-    return target
-
-
 def list_recordings() -> list[dict]:
+    """List side recordings in raw/. These are always untagged (any
+    tagging happens at the in-progress album level via album.json — sides
+    never carry Vorbis tags in the new model)."""
     files = []
-    for d in (TAGGED_DIR, UNTAGGED_DIR):
-        is_tagged = d == TAGGED_DIR
-        for f in d.glob("*.flac"):
-            stat = f.stat()
-            tags = read_tags(f)
-            fmt = flac_format(f)
-            files.append({
-                "filename":         f.name,
-                "size_mb":          round(stat.st_size / 1e6, 1),
-                "mtime":            stat.st_mtime,
-                "duration_seconds": flac_duration_seconds(f),
-                "bit_depth":        fmt.get("bit_depth"),
-                "sample_rate_khz":  fmt.get("sample_rate_khz"),
-                "artist":         tags.get("ARTIST", ""),
-                "album":          tags.get("ALBUM", ""),
-                "year":           tags.get("DATE", ""),
-                "genre":          tags.get("GENRE", ""),
-                "label":          tags.get("LABEL", ""),
-                "catalog_number": tags.get("CATALOGNUMBER", ""),
-                "country":        tags.get("RELEASECOUNTRY", ""),
-                "tracks":             tags.get("TRACKLIST", ""),
-                "musicbrainz_albumid": tags.get("MUSICBRAINZ_ALBUMID", ""),
-                "discogs_release_id":  int(tags.get("DISCOGS_RELEASE_ID") or 0) or None,
-                "tagged":             is_tagged,
-            })
-    files.sort(key=lambda x: x["mtime"], reverse=True)
-    return files
-
-
-def list_albums() -> list[dict]:
-    """List combined albums living in albums/."""
-    out = []
-    for f in ALBUMS_DIR.glob("*.flac"):
+    for f in RAW_DIR.glob("*.flac"):
         stat = f.stat()
-        tags = read_tags(f)
         fmt = flac_format(f)
-        out.append({
+        files.append({
             "filename":         f.name,
             "size_mb":          round(stat.st_size / 1e6, 1),
             "mtime":            stat.st_mtime,
             "duration_seconds": flac_duration_seconds(f),
             "bit_depth":        fmt.get("bit_depth"),
             "sample_rate_khz":  fmt.get("sample_rate_khz"),
-            "artist":           tags.get("ARTIST", ""),
-            "album":            tags.get("ALBUM", ""),
-            "year":             tags.get("DATE", ""),
-            "genre":            tags.get("GENRE", ""),
-            "label":            tags.get("LABEL", ""),
-            "catalog_number":   tags.get("CATALOGNUMBER", ""),
-            "country":          tags.get("RELEASECOUNTRY", ""),
-            "tracks":             tags.get("TRACKLIST", ""),
-            "musicbrainz_albumid": tags.get("MUSICBRAINZ_ALBUMID", ""),
-            "discogs_release_id":  int(tags.get("DISCOGS_RELEASE_ID") or 0) or None,
-            "side_count":         int(tags.get("SIDECOUNT", "0") or 0),
-            "track_count":        len(list((ALBUMS_DIR / f.stem).glob("*.flac"))) if (ALBUMS_DIR / f.stem).is_dir() else 0,
         })
-    out.sort(key=lambda x: x["mtime"], reverse=True)
-    return out
+    files.sort(key=lambda x: x["mtime"], reverse=True)
+    return files
 
 
 def parse_silencedetect(stderr: str) -> list[dict]:

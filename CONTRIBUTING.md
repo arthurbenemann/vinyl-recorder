@@ -11,6 +11,7 @@ Use one of:
 | Prefix              | Changelog section | When to use                                       |
 |---------------------|-------------------|---------------------------------------------------|
 | `feat(scope): …`    | Features          | New user-visible capability                       |
+| `feat(scope)!: …`   | ⚠ Breaking Changes | New capability that requires user action to upgrade (data wipe, env var rename, etc.). The `!` works after any prefix — `fix!:`, `refactor!:`, etc. |
 | `fix(scope): …`     | Bug Fixes         | Behaviour correction                              |
 | `perf(scope): …`    | Performance       | Speed / resource improvements with no API change  |
 | `refactor(scope): …`| Refactoring       | Internal restructure, no behaviour change         |
@@ -28,6 +29,7 @@ Anything outside this list still ends up in the changelog under
 Good:
 
 - `feat(tagging): persist Discogs release id and surface collection in split menu`
+- `feat(library)!: rename output/untagged → output/raw (requires wiping ./output/)`
 - `fix(library): keep albums in ALBUMS_DIR when applying tags`
 - `perf(stream): cache silencedetect output between split previews`
 

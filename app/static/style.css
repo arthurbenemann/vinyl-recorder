@@ -124,6 +124,14 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 
 /* Section labels */
 .label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.lib-section { margin-bottom: 18px; }
+.lib-section > summary { cursor: pointer; user-select: none; list-style: none; }
+.lib-section > summary::-webkit-details-marker { display: none; }
+.lib-section > summary::before {
+  content: '▾'; display: inline-block; width: 1em; color: var(--muted);
+  transform: translateY(-1px); transition: transform 0.15s ease;
+}
+.lib-section:not([open]) > summary::before { transform: rotate(-90deg) translateX(1px); }
 
 /* Stream config */
 .stream-row { display: flex; gap: 6px; flex-wrap: wrap; }

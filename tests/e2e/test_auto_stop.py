@@ -29,7 +29,7 @@ def _wait_for_session_reaped(sid: str, timeout: float = 20.0) -> dict:
 
 
 def test_duration_limit_auto_stops(stack):
-    untagged = stack["untagged"]
+    raw = stack["raw"]
     pre = http_json(f"{RECORDER_URL}/api/status")
     assert pre["upstream"]["connected"] is True
     assert pre["sessions"] == [], f"unexpected leftover sessions: {pre['sessions']}"
@@ -56,7 +56,7 @@ def test_duration_limit_auto_stops(stack):
     assert after["upstream"]["connected"] is True, \
         "upstream disconnected after a clean auto-stop"
 
-    fpath = untagged / fname
+    fpath = raw / fname
     assert fpath.exists(), f"FLAC missing at {fpath}"
     assert fpath.stat().st_size > 0
 

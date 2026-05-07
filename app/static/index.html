@@ -118,8 +118,8 @@
       <button class="btn-small" id="lib-filter-clear" onclick="clearLibFilter()" hidden>clear</button>
     </div>
 
-    <div>
-      <div class="label" style="margin-bottom:12px">Library — <span id="lib-count">loading…</span></div>
+    <details class="lib-section" id="raw-section" open>
+      <summary class="label" style="margin-bottom:12px">Raw — <span id="lib-count">loading…</span></summary>
       <div style="background:var(--surface);border:0.5px solid var(--border);border-radius:8px">
         <div class="bulk-bar hidden" id="bulk-bar">
           <span><span id="bulk-count">0</span> selected</span>
@@ -159,10 +159,10 @@
           </tbody>
         </table>
       </div>
-    </div>
+    </details>
 
-    <div id="albums-section" hidden>
-      <div class="label" style="margin-bottom:12px">Albums — <span id="albums-count">0</span></div>
+    <details class="lib-section" id="in-progress-section" hidden open>
+      <summary class="label" style="margin-bottom:12px">In-progress — <span id="in-progress-count">0</span></summary>
       <div style="background:var(--surface);border:0.5px solid var(--border);border-radius:8px">
         <div class="bulk-bar hidden" id="albums-bulk-bar">
           <span><span id="albums-bulk-count">0</span> selected</span>
@@ -193,7 +193,41 @@
           <tbody id="albums-tbody"></tbody>
         </table>
       </div>
-    </div>
+    </details>
+
+    <details class="lib-section" id="music-section" hidden open>
+      <summary class="label" style="margin-bottom:12px">Music — <span id="music-count">0</span></summary>
+      <div style="background:var(--surface);border:0.5px solid var(--border);border-radius:8px">
+        <div class="bulk-bar hidden" id="music-bulk-bar">
+          <span><span id="music-bulk-count">0</span> selected</span>
+          <span class="grow"></span>
+          <button class="btn-small" onclick="clearMusicSelection()">clear</button>
+          <button class="btn-small danger" onclick="bulkDeleteMusic()">delete selected</button>
+        </div>
+        <table class="lib-table">
+          <colgroup>
+            <col class="c-check"><col class="c-album"><col class="c-artist"><col class="c-year">
+            <col class="c-recorded"><col class="c-length"><col class="c-size">
+            <col class="c-fmt"><col class="c-status"><col class="c-actions">
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="music-check-all" onclick="toggleAllMusic(this.checked)"></th>
+              <th class="sortable" data-sort="album"  onclick="setSort('album')">Album<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="artist" onclick="setSort('artist')">Artist<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="year"   onclick="setSort('year')">Year<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="date"   onclick="setSort('date')">Recorded<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="length" onclick="setSort('length')">Length<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="size"   onclick="setSort('size')">Size<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')" title="Source bit depth / sample rate (kHz)">Fmt<span class="sort-arrow"></span></th>
+              <th>Tracks</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="music-tbody"></tbody>
+        </table>
+      </div>
+    </details>
   </div>
 </div>
 

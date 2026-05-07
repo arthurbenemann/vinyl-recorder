@@ -14,12 +14,12 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from services.eventbus import bus
 from services.ffmpeg import (
-    LOW_SPACE_GB, disk_free_gb, disk_space_error, find_file, list_recordings,
-    move_to, read_tags, rename_to_match_tags, safe_name, write_tags,
+    LOW_SPACE_GB, disk_free_gb, disk_space_error, find_side, list_recordings,
+    safe_name,
 )
 from state import (
-    ALBUMS_DIR, BulkDelete, LOG_DIR, RecordRequest, RenameRequest, TAGGED_DIR,
-    TagEdit, UNTAGGED_DIR, active, log_lines, log_paths, upstream,
+    BulkDelete, LOG_DIR, RAW_DIR, RecordRequest, RenameRequest, active,
+    log_lines, log_paths, upstream,
 )
 
 router = APIRouter()
@@ -198,7 +198,7 @@ async def start_recording(req: RecordRequest):
     year   = req.year   or datetime.now().strftime("%Y")
 
     fname = f"{safe_name(artist)} - {safe_name(album)} ({year}).flac"
-    outfile = str(UNTAGGED_DIR / fname)
+    outfile = str(RAW_DIR / fname)
     fmt = upstream.fmt
     sample_format = upstream.sample_format
 
@@ -474,31 +474,13 @@ async def get_recordings():
     return {"files": list_recordings(), "disk_free_gb": disk_free_gb()}
 
 
-@router.patch("/api/recordings/{filename}")
-async def edit_recording(filename: str, req: TagEdit):
-    path = find_file(filename)
-    if not path:
-        raise HTTPException(404)
-    fields = {k: v for k, v in req.dict().items() if v is not None}
-    write_tags(path, fields)
-    # An explicit edit promotes the file to "tagged" once it has at least an artist.
-    new_tags = read_tags(path)
-    if new_tags.get("ARTIST"):
-        path = move_to(path, TAGGED_DIR)
-        path = rename_to_match_tags(path)
-    return {"ok": True, "filename": path.name, "tagged": path.parent == TAGGED_DIR}
-
-
 @router.post("/api/recordings/{filename}/rename")
 async def rename_recording(filename: str, req: RenameRequest):
-    """Rename a raw (untagged) recording without going through the tag panel.
-    Tagged files should be renamed via PATCH which re-derives the filename
-    from the tags."""
-    src = find_file(filename)
+    """Rename a raw side. Albums never appear here — those are managed
+    by /api/album endpoints keyed on album_id."""
+    src = find_side(filename)
     if not src:
         raise HTTPException(404)
-    if src.parent != UNTAGGED_DIR:
-        raise HTTPException(400, "rename only supported on untagged recordings")
     stem = safe_name(req.new_name).strip()
     if not stem:
         raise HTTPException(400, "name cannot be empty")
@@ -511,7 +493,7 @@ async def rename_recording(filename: str, req: RenameRequest):
 
 @router.delete("/api/recordings/{filename}")
 async def delete_recording(filename: str):
-    path = find_file(filename)
+    path = find_side(filename)
     if not path:
         raise HTTPException(404)
     path.unlink()
@@ -522,7 +504,7 @@ async def delete_recording(filename: str):
 async def bulk_delete(req: BulkDelete):
     deleted, missing = [], []
     for fn in req.filenames:
-        p = find_file(fn)
+        p = find_side(fn)
         if p:
             try:
                 p.unlink()
@@ -535,17 +517,10 @@ async def bulk_delete(req: BulkDelete):
 
 
 @router.get("/api/download/{filename}")
-async def download(filename: str, source: str = ""):
-    # `source=album` disambiguates when an album in albums/ shares its filename
-    # with a side in tagged/ (e.g. an already-tagged side that also got combined).
-    if source == "album":
-        if "/" in filename or "\\" in filename or ".." in filename:
-            raise HTTPException(404)
-        path = ALBUMS_DIR / filename
-        if not path.exists():
-            raise HTTPException(404)
-    else:
-        path = find_file(filename)
-        if not path:
-            raise HTTPException(404)
+async def download(filename: str):
+    """Download a raw side by filename. Album-level downloads (tracks) go
+    through `/api/album/{album_id}/track/{trackname}` in albums.py."""
+    path = find_side(filename)
+    if not path:
+        raise HTTPException(404)
     return FileResponse(str(path), media_type="audio/flac", filename=filename)

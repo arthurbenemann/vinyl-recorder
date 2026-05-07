@@ -59,39 +59,70 @@ function _timeToPctFull(t) {
 }
 
 // ── Draft persistence ─────────────────────────────────────────────────────
-// Cuts, titles, and skip flags are persisted to localStorage per album. If
-// the user closes the modal mid-edit (esc, tab close, accidental nav) and
-// reopens the same album, their work is restored. Cleared on successful split.
-const DRAFT_KEY = fname => `vr-wave-draft:${fname}`;
+// Cuts, titles, and skip flags are persisted to album.json.plan on the
+// server (debounced). If the user closes the modal mid-edit, reopens the
+// album from another browser, or even hands off to someone else on the
+// same recorder install, the in-progress edit is right where they left
+// it. The plan field is the same one /api/album/split writes after a
+// successful run — the only difference is `manifest.music_relpath`, which
+// stays null until tracks have actually been emitted to music/.
+let _planSaveTimer = null;
+let _planSaveInFlight = null;
 
 function _persistDraft() {
+  // Called from every interaction (cut drag, title input, skip toggle).
+  // Debounce ~500 ms so a flurry of micro-edits collapses into one POST.
   if (!we.filename) return;
-  try {
-    localStorage.setItem(DRAFT_KEY(we.filename), JSON.stringify({
-      cuts:     we.cuts,
-      titles:   we.titles,
-      skipped:  we.skipped,
-      silences: we.silences,
-      savedAt:  Date.now(),
-    }));
-  } catch (e) { /* localStorage full / disabled — silently skip */ }
+  if (_planSaveTimer) clearTimeout(_planSaveTimer);
+  _planSaveTimer = setTimeout(_savePlanNow, 500);
 }
 
-function _loadDraft(fname, total) {
+async function _savePlanNow() {
+  _planSaveTimer = null;
+  if (!we.filename) return;
+  // Open-time race guard. openWaveEditor seeds the editor with empty
+  // defaults and then kicks off weLoadExistingSplit() to fill them in
+  // from album.json. drawAll() runs in between, which calls _persistDraft()
+  // via renderTracks(). If the debounce fires before the load completes
+  // we'd POST the empty default state and clobber the user's saved plan.
+  // we.loaded flips true the moment the load resolves (with or without
+  // a plan); until then we just re-arm the timer.
+  if (!we.loaded) {
+    _planSaveTimer = setTimeout(_savePlanNow, 200);
+    return;
+  }
+  // Snapshot the current editor state into the plan shape the server
+  // already understands (see SplitRequest / PlanUpdateRequest).
+  const tracks = _regions().map(r => ({
+    title: (r.title || '').trim(),
+    duration_seconds: Math.max(0, r.end - r.start),
+    skip: !!r.skip,
+  }));
+  const albumId = we.filename;
   try {
-    const raw = localStorage.getItem(DRAFT_KEY(fname));
-    if (!raw) return null;
-    const d = JSON.parse(raw);
-    // Sanity check: any cut beyond the source duration means the source was
-    // re-recorded or otherwise differs. Drop the draft to avoid corruption.
-    if (Array.isArray(d.cuts) && d.cuts.some(c => c < 0 || c > total + 1)) return null;
-    return d;
-  } catch (e) { return null; }
+    _planSaveInFlight = fetch(`/api/album/${albumId}/plan`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ tracks }),
+    });
+    await _planSaveInFlight;
+  } catch (e) {
+    // Network blip — the next change will retry. Silent on purpose; a
+    // toast for every transient save failure would spam the user.
+  } finally {
+    _planSaveInFlight = null;
+  }
 }
 
-function _clearDraft(fname) {
-  try { localStorage.removeItem(DRAFT_KEY(fname)); }
-  catch (e) { /* ignore */ }
+// Public hook: called on modal close so the final state is flushed even
+// if the debounce timer hadn't fired yet.
+async function _flushPlanSave() {
+  if (_planSaveTimer) {
+    clearTimeout(_planSaveTimer);
+    _planSaveTimer = null;
+    await _savePlanNow();
+  } else if (_planSaveInFlight) {
+    try { await _planSaveInFlight; } catch (e) {}
+  }
 }
 
 // ── Open / close ──────────────────────────────────────────────────────────
@@ -99,31 +130,39 @@ function openWaveEditor(fname) {
   const a = albumsByName[fname];
   if (!a) return;
   const total = a.duration_seconds || 0;
-  const draft = _loadDraft(fname, total);
+  // Initial state is the empty editor with one default track. Any prior
+  // draft / completed split is fetched server-side via weLoadExistingSplit
+  // (kicked off below) and patched in once the response arrives.
   Object.assign(we, {
     filename:    fname,
     total:       total,
     viewStart:   0,
     viewEnd:     total,
-    cuts:        draft?.cuts     ?? [],
-    titles:      draft?.titles   ?? ['Track 1'],
-    skipped:     draft?.skipped  ?? [false],
-    silences:    draft?.silences ?? [],
+    cuts:        [],
+    titles:      ['Track 1'],
+    skipped:     [false],
+    silences:    [],   // re-detected on demand via the suggest panel
     candidates:  [],
     hoverX:      null,
     isPlaying:   false,
     playingTrack: null,
     playingEnd:  null,
     measured:    null,
+    // Flips true once weLoadExistingSplit resolves. _savePlanNow gates on
+    // this so the empty default state never races ahead of the load.
+    loaded:      false,
   });
   resetMeasureUI();
   weMeasure();  // kick off in the background; UI doesn't block on it
-  document.getElementById('we-filename').textContent = fname;
+  // The "filename" field on the editor used to literally be a FLAC name; in
+  // the album-folder model `fname` is the opaque album_id. Show the album's
+  // human label in the title bar instead.
+  const headerLabel = [a.artist, a.album].filter(Boolean).join(' — ') || fname;
+  document.getElementById('we-filename').textContent = headerLabel;
   document.getElementById('we-duration').textContent = fmtMMSS(we.total);
   document.getElementById('we-mini-end').textContent = fmtMMSS(we.total);
   // Pre-fill with " - " so weRunSearch can split into artist/album. Strip a
-  // trailing "(YYYY)" from the album because MusicBrainz won't match it as
-  // part of the release title (combine writes the year into the filename).
+  // trailing "(YYYY)" from the album in case the user typed a year in.
   const albumClean = (a.album || '').replace(/\s*\(\d{4}\)\s*$/, '');
   document.getElementById('we-search-q').value =
     [a.artist, albumClean].filter(Boolean).join(' - ');
@@ -159,40 +198,45 @@ function openWaveEditor(fname) {
   drawAll();
   document.getElementById('we-modal').hidden = false;
   document.addEventListener('keydown', weKeyDown);
-  if (draft && (draft.cuts?.length || (draft.titles?.length || 0) > 1)) {
-    toast('↻ draft restored — clear cuts to start fresh', 'info');
-  } else {
-    // No draft — fall back to recreating cuts from the on-disk track list, so
-    // a previously-split album can be re-edited rather than redone from scratch.
-    // If neither source produced cuts, try the saved Discogs / MB id as a
-    // last resort so the user doesn't have to run the search manually.
-    weLoadExistingSplit(fname).then(() => _weAutoLoadFromIds(a));
-  }
+  // Repopulate the editor from the saved plan in album.json (if any). When
+  // no plan exists yet, fall back to the album's saved Discogs / MB id so a
+  // first-time open of an MB-tagged album auto-suggests a tracklist instead
+  // of forcing the user to run the search by hand.
+  weLoadExistingSplit(fname).then(() => _weAutoLoadFromIds(a));
 }
 
-// If this album has already been split, recreate the cuts and titles from
-// the on-disk track list so the user can adjust the split rather than redo it.
+// Repopulate cuts, titles, and skip flags from album.json.plan. Covers
+// both an in-progress draft (saved by _savePlanNow) and a completed
+// split (saved by /api/album/split). Leaves the empty default state in
+// place when there's nothing in the manifest.
 async function weLoadExistingSplit(fname) {
   try {
     const r = await fetch(`/api/album/${encodeURIComponent(fname)}/tracks`);
     if (!r.ok) return;
     const d = await r.json();
     if (we.filename !== fname) return;  // editor moved on while we were waiting
-    const tracks = (d.tracks || []).slice().sort(
-      (a, b) => (a.track_number || 0) - (b.track_number || 0));
-    if (tracks.length < 2) return;
+    const plan = d.plan;
+    const ptracks = (plan && Array.isArray(plan.tracks)) ? plan.tracks : null;
+    if (!ptracks || !ptracks.length) return;
+    // N tracks → N-1 cuts (between regions). A 1-track plan is valid —
+    // it's the editor's "whole album as one track" state with a chosen
+    // title or skip flag. We still need to apply titles/skipped so a
+    // single skip-marked track survives reopen.
     const cuts = [];
     let cursor = 0;
-    for (let j = 0; j < tracks.length - 1; j++) {
-      cursor += tracks[j].duration_seconds || 0;
+    for (let j = 0; j < ptracks.length - 1; j++) {
+      cursor += ptracks[j].duration_seconds || 0;
       if (cursor > 0 && cursor < we.total) cuts.push(cursor);
     }
-    if (!cuts.length) return;
     we.cuts    = cuts;
-    we.titles  = tracks.map(t => t.title || '');
-    we.skipped = we.titles.map(() => false);
+    we.titles  = ptracks.map(t => t.title || '');
+    we.skipped = ptracks.map(t => !!t.skip);
     drawAll();
   } catch (e) { /* nothing existing — leave the empty state */ }
+  finally {
+    // Always flip loaded — _savePlanNow's race guard releases either way.
+    if (we.filename === fname) we.loaded = true;
+  }
 }
 
 function closeWaveEditor() {
@@ -202,6 +246,10 @@ function closeWaveEditor() {
   document.getElementById('we-modal').hidden = true;
   document.removeEventListener('keydown', weKeyDown);
   _stopWfPoll();   // tear down any in-flight waveform progress overlay
+  // Flush any debounced plan-save in flight so a fast-close doesn't lose
+  // the user's last edit. Runs in the background; the modal is already
+  // hidden so the user isn't waiting on the network.
+  _flushPlanSave();
 }
 
 // Re-render everything that depends on viewStart/viewEnd or cuts.
@@ -953,14 +1001,14 @@ async function wePickCollectionCandidate(releaseId) {
 // file. Only called when the editor has no existing cuts (no draft, no
 // previous split). The user can still run a manual search to override.
 async function _weAutoLoadFromIds(a) {
-  if (we.filename !== a.filename) return;     // editor moved on
+  if (we.filename !== a.album_id) return;     // editor moved on
   if (we.cuts.length) return;                  // draft / existing split won
   if (a.discogs_release_id) {
     try {
       const r = await fetch(`/api/release/discogs/${a.discogs_release_id}`);
       if (!r.ok) throw new Error(await parseError(r));
       const d = await r.json();
-      if (we.filename === a.filename && !we.cuts.length) {
+      if (we.filename === a.album_id && !we.cuts.length) {
         _weApplyTracklist(d.track_details, 'auto-loaded from saved Discogs id');
       }
       return;
@@ -971,7 +1019,7 @@ async function _weAutoLoadFromIds(a) {
       const r = await fetch(`/api/release/${a.musicbrainz_albumid}`);
       if (!r.ok) return;
       const d = await r.json();
-      if (we.filename === a.filename && !we.cuts.length) {
+      if (we.filename === a.album_id && !we.cuts.length) {
         _weApplyTracklist(d.track_details, 'auto-loaded from saved MBID');
       }
     } catch (e) { /* nothing more to try */ }
@@ -998,7 +1046,7 @@ async function weDetectInternal({ replace }) {
       const r = await fetch('/api/album/detect-silences', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
-          filename: we.filename, noise_db: noise, min_silence: mindur, job_id: jobId,
+          album_id: we.filename, noise_db: noise, min_silence: mindur, job_id: jobId,
         }),
       });
       if (!r.ok) throw new Error(await parseError(r));
@@ -1088,7 +1136,7 @@ async function weApplySplit() {
   showBar(bar, 'encoding tracks');
   try {
     const d = await withJobProgress(bar, async (jobId) => {
-      const body = { filename: we.filename, tracks, bit_depth: bitDepth, job_id: jobId };
+      const body = { album_id: we.filename, tracks, bit_depth: bitDepth, job_id: jobId };
       if (normalize) {
         body.normalize         = true;
         body.target_peak_db    = we.targetPeakDb;
@@ -1102,7 +1150,9 @@ async function weApplySplit() {
       return r.json();
     });
     toast(`✓ Split into ${d.tracks.length} tracks`, 'ok');
-    _clearDraft(we.filename);
+    // No draft to clear — the split route already wrote the same plan to
+    // album.json (alongside `music_relpath`). Closing the editor leaves
+    // the plan in place so re-edit picks up where this run left off.
     closeWaveEditor();
     refreshAlbums();
   } catch (e) {
@@ -1149,7 +1199,7 @@ async function weMeasure() {
     const allIncluded = included.length === 1
       && included[0][0] <= 0.01 && included[0][1] >= we.total - 0.5;
     const d = await withJobProgress(bar, async (jobId) => {
-      const body = { filename: we.filename, job_id: jobId };
+      const body = { album_id: we.filename, job_id: jobId };
       if (!allIncluded && included.length) body.included_ranges = included;
       const r = await fetch('/api/album/measure', {
         method: 'POST', headers: {'Content-Type':'application/json'},

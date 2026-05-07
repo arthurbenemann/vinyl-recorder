@@ -10,18 +10,16 @@ from services.eventbus import bus
 from services.upstream import UpstreamSession
 
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/output"))
-UNTAGGED_DIR = OUTPUT_DIR / "untagged"
-TAGGED_DIR = OUTPUT_DIR / "tagged"
-ALBUMS_DIR = OUTPUT_DIR / "albums"
+RAW_DIR = OUTPUT_DIR / "raw"
+# in-progress/ holds one folder per album: side FLACs (untagged) + an
+# `album.json` manifest that owns metadata, side order, and the optional
+# split plan. The folder persists across multiple splits — there's no
+# separate post-split directory.
+IN_PROGRESS_DIR = OUTPUT_DIR / "in-progress"
+MUSIC_DIR = Path(os.getenv("MUSIC_OUTPUT_DIR", str(OUTPUT_DIR / "music")))
 LOG_DIR = OUTPUT_DIR / ".logs"
-for _d in (UNTAGGED_DIR, TAGGED_DIR, ALBUMS_DIR, LOG_DIR):
+for _d in (RAW_DIR, IN_PROGRESS_DIR, MUSIC_DIR, LOG_DIR):
     _d.mkdir(parents=True, exist_ok=True)
-
-# Migrate any legacy flat-layout flacs into untagged/ on startup.
-for _f in OUTPUT_DIR.glob("*.flac"):
-    target = UNTAGGED_DIR / _f.name
-    if not target.exists():
-        _f.rename(target)
 
 MB_BASE = "https://musicbrainz.org/ws/2"
 MB_UA = "VinylRecorder/0.1 ( https://github.com/arthurbenemann/vinyl-recorder )"
@@ -93,21 +91,24 @@ class SearchRequest(BaseModel):
 
 
 class ApplyRequest(BaseModel):
-    filename: str
+    # Either `filename` (raw side, will be promoted) or `album_id` (existing
+    # album, manifest patched in place). Exactly one must be set.
+    filename: Optional[str] = None
+    album_id: Optional[str] = None
     fields: TagEdit
     mbid: Optional[str] = None  # if set, fetch + embed cover art via CAA / Discogs
     discogs_release_id: Optional[int] = None  # persisted as DISCOGS_RELEASE_ID
 
 
 class CombineRequest(BaseModel):
-    filenames: list[str]              # ordered list of side filenames to concatenate
-    album: TagEdit                    # tags to write on the combined album
-    job_id: Optional[str] = None      # if set, server publishes ffmpeg progress under this id
+    filenames: list[str]              # ordered list of raw/ side filenames
+    album: TagEdit                    # tags written into album.json
+    job_id: Optional[str] = None      # reserved; combine no longer encodes
 
 
 class PromoteRequest(BaseModel):
-    filename: str                     # a side recording in tagged/ or untagged/
-    album: TagEdit                    # tags to write on the promoted album
+    filename: str                     # a side in raw/ to promote into a 1-side album
+    album: TagEdit                    # tags written into album.json
 
 
 class SplitTrack(BaseModel):
@@ -117,9 +118,8 @@ class SplitTrack(BaseModel):
 
 
 class SplitRequest(BaseModel):
-    filename: str                     # an album in albums/
+    album_id: str                     # the in-progress/ folder slug
     tracks: list[SplitTrack]
-    offset_seconds: float = 0.0       # silence-trim at the start, applied to track 1's start
     normalize: bool = False           # apply gain to hit target peak across all tracks
     target_peak_db: float = -1.0      # only used when normalize=True
     measured_peak_db: Optional[float] = None  # peak from /api/album/measure; required for normalize
@@ -128,16 +128,32 @@ class SplitRequest(BaseModel):
 
 
 class SilenceDetectRequest(BaseModel):
-    filename: str                     # an album in albums/
+    album_id: str
     noise_db: float = -40.0
     min_silence: float = 1.5
     job_id: Optional[str] = None
 
 
 class MeasureRequest(BaseModel):
-    filename: str                     # an album in albums/
+    album_id: str
     included_ranges: Optional[list[list[float]]] = None  # [[start, end], ...] in seconds; None = whole album
     job_id: Optional[str] = None
+
+
+class ReorderSidesRequest(BaseModel):
+    sides: list[str]                  # permutation of the album's current sides[]
+
+
+class PlanUpdateRequest(BaseModel):
+    """Editor draft state — saved to album.json.plan WITHOUT running split.
+    Lets users close the modal mid-edit (or move to another browser) without
+    losing their in-progress cuts. The wave-editor calls this on a debounced
+    timer as cuts/titles/skip flags change."""
+    tracks: list[SplitTrack]
+    normalize:        Optional[bool]   = None
+    target_peak_db:   Optional[float]  = None
+    measured_peak_db: Optional[float]  = None
+    bit_depth:        Optional[int]    = None
 
 
 class BulkDelete(BaseModel):

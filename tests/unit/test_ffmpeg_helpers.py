@@ -1,10 +1,39 @@
-"""Unit tests for the pure helpers in services/ffmpeg.py."""
+"""Unit tests for the pure helpers in services/ffmpeg.py.
+Album-folder + manifest helpers live in tests/unit/test_albums_fs.py."""
 from services.ffmpeg import (
     _parse_db,
     parse_astats,
     parse_silencedetect,
     safe_name,
+    safe_path_component,
 )
+
+
+# ── safe_path_component ──────────────────────────────────────────────────
+# The Jellyfin-tree path sanitizer keeps spaces (so albums/dirs read
+# naturally) but drops the chars that would break filesystems.
+def test_safe_path_component_preserves_spaces():
+    assert safe_path_component("Hello World") == "Hello World"
+
+
+def test_safe_path_component_strips_filesystem_hostile_chars():
+    # `<>:"/\|?*` are reserved on at least one of NTFS/HFS/FAT.
+    assert safe_path_component('a<b>c:d"e/f\\g|h?i*j') == "abcdefghij"
+
+
+def test_safe_path_component_strips_control_chars():
+    assert safe_path_component("a\x00b\x1fc") == "abc"
+
+
+def test_safe_path_component_strips_trailing_dots():
+    # Trailing dots are illegal on Windows (silently stripped). Strip them
+    # ourselves so cross-OS-mounted output dirs behave the same.
+    assert safe_path_component("Album.") == "Album"
+
+
+def test_safe_path_component_empty_falls_back_to_unknown():
+    assert safe_path_component("") == "Unknown"
+    assert safe_path_component("///") == "Unknown"
 
 
 # ── safe_name ────────────────────────────────────────────────────────────

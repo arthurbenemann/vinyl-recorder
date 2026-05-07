@@ -17,7 +17,7 @@ Single-user, no auth, runs in Docker. Three components:
                                        │
                                        ▼
                                  /data on disk
-                          (untagged/ tagged/ sides/ tracks/)
+                       (raw/ in-progress/ raw-album/ music/)
 ```
 
 ## Components
@@ -132,7 +132,7 @@ the recording path. The playback subscriber starts at "now" with no prepend.
         │
         ▼
    /api/apply → metaflac writes Vorbis tags + embeds cover
-              → file moves untagged/ → tagged/
+              → file moves raw/ → in-progress/ (tagging promotes)
               → renamed "Artist - Album (Year).flac"
 ```
 
@@ -146,10 +146,14 @@ artist/album against owned releases uses normalised token overlap (stdlib only).
 For multi-side LP rips:
 
 1. User selects N recordings → `/api/album/combine` concatenates them into one
-   FLAC (re-encoded so concat boundaries are clean).
+   FLAC in `in-progress/` (re-encoded so concat boundaries are clean).
 2. The combined file opens in `wave-editor.js`. Auto-detected silences seed
    suggested cuts; the user adjusts and labels tracks.
-3. `/api/album/split` writes one FLAC per track with copied metadata.
+3. `/api/album/split` writes one FLAC per track into
+   `music/{Artist}/{Album} (Year)/NN - Title.flac` (Jellyfin-shaped),
+   persists the full plan as a `<stem>.split.json` sidecar next to the source FLAC,
+   and moves the source from `in-progress/` into `raw-album/` so the editor
+   can still re-load + re-edit it later without duplicating audio.
 
 ## WebSocket event reference
 
@@ -164,15 +168,38 @@ For multi-side LP rips:
 | `log`      | on event         | `{level, msg}`                                                                 |
 | `ping`     | keepalive        | `{}`                                                                           |
 
-## File layout (`/data` inside the container)
+## File layout (`/output` inside the container)
 
 ```
-/data
-├── untagged/    fresh recordings, named by timestamp; auto-tag target
-├── tagged/      post-tag, renamed "Artist - Album (Year).flac"
-├── sides/       intermediate per-side files for album combine
-└── tracks/      per-track outputs from album split
+/output
+├── raw/                        fresh side recordings, untagged
+│   └── 20251104_191205.flac
+├── in-progress/                ONE FOLDER PER ALBUM (workspace)
+│   └── 7f3a8c91/               opaque hex slug, stable URL handle
+│       ├── album.json          tags, side order, optional split plan
+│       ├── 20251104_141522.flac   original side filename, no Vorbis tags
+│       ├── 20251104_142105.flac
+│       ├── cover.jpg           optional, written at tag-time
+│       └── .cache/concat.flac  rebuilt on demand for the wave editor
+└── music/                      FINAL Jellyfin tree
+    └── Artist Name/
+        └── Album Name (2003)/
+            ├── 01 - Track1.flac    tags + cover embedded HERE only
+            └── 02 - Track2.flac
 ```
+
+Tags, cover art, and split plans live in `album.json` while the album is
+in progress. The side FLACs are never touched. At the split-emit step the
+wave editor concatenates the sides per the manifest's order, slices into
+per-track FLACs in `music/`, and embeds tags + cover into each one.
+
+`/api/album/{album_id}/demote` moves the sides back to `raw/` and removes
+the album dir; if the album was already split, the existing `music/`
+subtree is preserved (the user's already-finished export).
+
+The location of `music/` can be overridden with `MUSIC_OUTPUT_DIR` so
+the Jellyfin tree can sit on a network share separate from the workspace
+data.
 
 Disk-free is monitored; recording start is blocked under 2 GB free.
 

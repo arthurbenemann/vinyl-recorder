@@ -1,24 +1,17 @@
 """Tagging workflow: MB+Discogs search, release detail, cover proxy, apply."""
 import asyncio
 import re
-import subprocess
-import uuid
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
-from services import discogs
-from services.ffmpeg import (
-    find_file, move_to, read_tags, rename_to_match_tags, write_tags,
-)
+from services import albums_fs, discogs
 from services.musicbrainz import (
     _http_bytes, caa_front, extract_discogs_id, release_full, search_releases,
 )
 from state import (
-    ALBUMS_DIR, ApplyRequest, DISCOGS_TOKEN, DISCOGS_USERNAME, SearchRequest,
-    TAGGED_DIR,
+    ApplyRequest, DISCOGS_TOKEN, DISCOGS_USERNAME, SearchRequest,
 )
 
 router = APIRouter()
@@ -270,113 +263,117 @@ async def cover(mbid: str):
     return StreamingResponse(iter([art]), media_type="image/jpeg")
 
 
-@router.get("/api/file-cover/{filename}")
-async def file_cover(filename: str):
-    """Serve cover art for any FLAC in the library/albums dirs. Tries the
-    embedded picture first (extracted via metaflac), then falls back to CAA
-    via the MUSICBRAINZ_ALBUMID tag if present."""
-    src = find_file(filename)
-    if not src:
-        raise HTTPException(404, "file not found")
-
-    tmp = Path(f"/tmp/cover_{uuid.uuid4().hex[:8]}.bin")
-    try:
-        r = await asyncio.to_thread(
-            subprocess.run,
-            ["metaflac", f"--export-picture-to={tmp}", str(src)],
-            capture_output=True,
-        )
-        if r.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
-            data = tmp.read_bytes()
-            return StreamingResponse(iter([data]), media_type="image/jpeg")
-    finally:
-        try: tmp.unlink()
-        except Exception: pass
-
-    mbid = (read_tags(src).get("MUSICBRAINZ_ALBUMID") or "").strip()
+@router.get("/api/file-cover/{album_id}")
+async def album_cover(album_id: str):
+    """Serve cover art for an album. Returns `cover.jpg` from the album
+    dir if present; otherwise falls back to a CAA fetch via
+    `tags.musicbrainz_albumid` from the manifest."""
+    if not albums_fs.is_valid_album_id(album_id):
+        raise HTTPException(404, "album not found")
+    if not albums_fs.album_dir(album_id).is_dir():
+        raise HTTPException(404, "album not found")
+    cover = albums_fs.cover_path(album_id)
+    if cover:
+        return FileResponse(str(cover), media_type="image/jpeg")
+    manifest = albums_fs.read_manifest(album_id)
+    mbid = ((manifest.get("tags") or {}).get("musicbrainz_albumid") or "").strip()
     if mbid and re.fullmatch(r"[0-9a-f-]{36}", mbid):
         art = await asyncio.to_thread(caa_front, mbid)
         if art:
+            # Cache for future calls so we don't keep hitting CAA.
+            try: albums_fs.write_cover(album_id, art)
+            except Exception: pass
             return StreamingResponse(iter([art]), media_type="image/jpeg")
-
     raise HTTPException(404, "no cover available")
+
+
+async def _fetch_cover_bytes(
+    mbid: Optional[str],
+    discogs_id: Optional[int],
+) -> Optional[bytes]:
+    """Resolve cover art from CAA first, falling back to Discogs primary
+    image. Returns raw image bytes or None. Used by /api/apply when the
+    user has just picked a release; the bytes get written to the album's
+    cover.jpg (no FLAC embedding at this stage)."""
+    if mbid and re.fullmatch(r"[0-9a-f-]{36}", mbid):
+        art = await asyncio.to_thread(caa_front, mbid)
+        if art:
+            return art
+    if discogs_id and discogs_id > 0:
+        try:
+            d = await asyncio.to_thread(discogs.release, discogs_id)
+            images = (d or {}).get("images") or []
+            primary = next((i for i in images if i.get("type") == "primary"),
+                           images[0] if images else None)
+            if primary and primary.get("uri"):
+                return await asyncio.to_thread(_http_bytes, primary["uri"])
+        except Exception:
+            return None
+    return None
 
 
 @router.post("/api/apply")
 async def apply_tags(req: ApplyRequest):
-    """Write the chosen tag set to a file, embed cover art if mbid is given,
-    move into tagged/, and rename to match."""
-    path = find_file(req.filename)
-    if not path:
-        raise HTTPException(404, "file not found")
+    """Apply a chosen tag set. Two modes:
+
+    - `album_id` set: patch the in-progress album's `album.json` tags.
+      Optionally fetch cover art via CAA/Discogs and save to cover.jpg.
+    - `filename` set: promote a raw side into a new in-progress album with
+      these tags (calls `albums_fs.create_album`). Same cover handling.
+
+    Tags never touch FLAC bitstreams here — that only happens at the
+    split-emit step."""
+    if not (req.album_id or req.filename):
+        raise HTTPException(400, "supply either album_id or filename")
+    if req.album_id and req.filename:
+        raise HTTPException(400, "supply album_id OR filename, not both")
 
     fields = {k: v for k, v in req.fields.dict().items() if v is not None}
-    write_tags(path, fields)
-
-    # Track the Discogs release id we'll persist alongside the MB id, if any.
-    # The user may have explicitly picked a Discogs candidate; otherwise fall
-    # back to the id linked from the MB release (also reused for cover art).
-    discogs_id: Optional[int] = (
-        req.discogs_release_id if req.discogs_release_id and req.discogs_release_id > 0
-        else None
-    )
-
     if req.mbid:
         if not re.fullmatch(r"[0-9a-f-]{36}", req.mbid):
             raise HTTPException(400, "invalid mbid")
-        subprocess.run(
-            ["metaflac", "--remove-tag=MUSICBRAINZ_ALBUMID",
-             f"--set-tag=MUSICBRAINZ_ALBUMID={req.mbid}", str(path)],
-            check=False, stderr=subprocess.DEVNULL,
-        )
-        art = await asyncio.to_thread(caa_front, req.mbid)
-        if not art or discogs_id is None:
-            try:
-                mb = await asyncio.to_thread(release_full, req.mbid)
-                did = extract_discogs_id(mb)
-                if did:
-                    if discogs_id is None:
-                        discogs_id = did
-                    if not art:
-                        d = await asyncio.to_thread(discogs.release, did)
-                        images = (d or {}).get("images") or []
-                        primary = next((i for i in images if i.get("type") == "primary"), images[0] if images else None)
-                        if primary and primary.get("uri"):
-                            art = await asyncio.to_thread(_http_bytes, primary["uri"])
-            except Exception:
-                pass
-        if art:
-            tmp = Path(f"/tmp/cover_{uuid.uuid4().hex[:8]}.jpg")
-            tmp.write_bytes(art)
-            subprocess.run(["metaflac", "--remove", "--block-type=PICTURE", str(path)],
-                           check=False, stderr=subprocess.DEVNULL)
-            subprocess.run(["metaflac", f"--import-picture-from={tmp}", str(path)],
-                           check=False, stderr=subprocess.DEVNULL)
-            try: tmp.unlink()
-            except Exception: pass
+        fields["musicbrainz_albumid"] = req.mbid
 
+    discogs_id = (
+        req.discogs_release_id if req.discogs_release_id and req.discogs_release_id > 0
+        else None
+    )
+    # When an MB pick is on the table but discogs_id wasn't supplied, see if
+    # MB has the Discogs link recorded for us so we can persist + use it.
+    if req.mbid and discogs_id is None:
+        try:
+            mb = await asyncio.to_thread(release_full, req.mbid)
+            did = extract_discogs_id(mb)
+            if did:
+                discogs_id = did
+        except Exception:
+            pass
     if discogs_id is not None:
-        subprocess.run(
-            ["metaflac", "--remove-tag=DISCOGS_RELEASE_ID",
-             f"--set-tag=DISCOGS_RELEASE_ID={discogs_id}", str(path)],
-            check=False, stderr=subprocess.DEVNULL,
-        )
+        fields["discogs_release_id"] = discogs_id
 
-    # Albums live in ALBUMS_DIR and stay there after re-tagging — moving them
-    # to TAGGED_DIR would make them disappear from the Albums section and
-    # resurface in the Library list. Untagged sides still get promoted to
-    # TAGGED_DIR once they have an ARTIST tag.
-    if path.parent == ALBUMS_DIR:
-        new_path = path
-    elif read_tags(path).get("ARTIST"):
-        new_path = move_to(path, TAGGED_DIR)
+    if req.album_id:
+        if not albums_fs.is_valid_album_id(req.album_id):
+            raise HTTPException(404, "album not found")
+        if not albums_fs.album_dir(req.album_id).is_dir():
+            raise HTTPException(404, "album not found")
+        manifest = albums_fs.read_manifest(req.album_id)
+        manifest_tags = dict(manifest.get("tags") or {})
+        manifest_tags.update(fields)
+        manifest["tags"] = manifest_tags
+        albums_fs.write_manifest(req.album_id, manifest)
+        album_id = req.album_id
     else:
-        new_path = path
-    renamed = (rename_to_match_tags(new_path)
-               if new_path.parent in (TAGGED_DIR, ALBUMS_DIR) else new_path)
-    return {
-        "ok":       True,
-        "filename": renamed.name,
-        "tagged":   renamed.parent == TAGGED_DIR,
-        "album":    renamed.parent == ALBUMS_DIR,
-    }
+        # Promote a raw side into a new album with these tags.
+        try:
+            album_id, _ = albums_fs.create_album([req.filename], fields)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    art = await _fetch_cover_bytes(req.mbid, discogs_id)
+    if art:
+        try: albums_fs.write_cover(album_id, art)
+        except Exception: pass
+
+    return {"ok": True, "album_id": album_id}

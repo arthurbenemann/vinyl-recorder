@@ -10,10 +10,9 @@ Exercises the full path that the in-process unit tests can't reach:
     -> GET /api/jobs/{id} returns done=true progress=1.0
 
 Records a short clip from /album (which has built-in silences), promotes
-it into albums/, then runs silence detection + measure with a job_id
-attached. After each call returns, the registry must show the job as
-done. This covers most of the "still manual" backend items from the
-test plan on PR #41.
+it into a one-side in-progress album, then runs silence detection +
+measure with a job_id attached. After each call returns, the registry
+must show the job as done.
 """
 import time
 
@@ -25,7 +24,7 @@ pytestmark = pytest.mark.e2e
 
 
 def _record_clip(seconds: int, album: str) -> str:
-    """Record `seconds` of /album, return the resulting filename in untagged/."""
+    """Record `seconds` of /album, return the resulting filename in raw/."""
     started = http_json(
         f"{RECORDER_URL}/api/record/start", method="POST",
         body={
@@ -42,7 +41,8 @@ def _record_clip(seconds: int, album: str) -> str:
 
 
 def _promote(filename: str, album: str) -> str:
-    """Promote a recording in untagged/ → albums/. Returns the album filename."""
+    """Promote a raw side into a fresh in-progress album. Returns the new
+    album_id (the opaque hex slug used everywhere downstream)."""
     body = http_json(
         f"{RECORDER_URL}/api/promote", method="POST",
         body={
@@ -52,7 +52,7 @@ def _promote(filename: str, album: str) -> str:
             },
         },
     )
-    return body["filename"]
+    return body["album_id"]
 
 
 def test_silence_detect_progress_lifecycle(stack):
@@ -61,16 +61,16 @@ def test_silence_detect_progress_lifecycle(stack):
     # /album opens with 5 s of silence then a tone at 5 s — recording 6 s
     # gives silencedetect one complete interval (silence ends when tone starts).
     rec_fname = _record_clip(seconds=6, album="progress-silence")
-    album_fname = _promote(rec_fname, "progress-silence")
+    album_id = _promote(rec_fname, "progress-silence")
     job_id = "e2e-silence-1"
 
     body = http_json(
         f"{RECORDER_URL}/api/album/detect-silences", method="POST",
         body={
-            "filename": album_fname,
-            "noise_db": -40.0,
+            "album_id":    album_id,
+            "noise_db":    -40.0,
             "min_silence": 1.0,
-            "job_id":     job_id,
+            "job_id":      job_id,
         },
         timeout=60,
     )
@@ -89,12 +89,12 @@ def test_measure_progress_lifecycle(stack):
     """astats measure with job_id. Same shape as silence detect — confirms
     the progress wiring isn't endpoint-specific."""
     rec_fname = _record_clip(seconds=3, album="progress-measure")
-    album_fname = _promote(rec_fname, "progress-measure")
+    album_id = _promote(rec_fname, "progress-measure")
     job_id = "e2e-measure-1"
 
     http_json(
         f"{RECORDER_URL}/api/album/measure", method="POST",
-        body={"filename": album_fname, "job_id": job_id},
+        body={"album_id": album_id, "job_id": job_id},
         timeout=60,
     )
     j = http_json(f"{RECORDER_URL}/api/jobs/{job_id}")

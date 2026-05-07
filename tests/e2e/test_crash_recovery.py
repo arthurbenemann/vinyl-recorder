@@ -52,7 +52,7 @@ def _wait_for_session_reaped(sid: str, timeout: float = 30.0) -> dict:
 
 
 def test_kill_upstream_mid_recording_reaps_session(stack):
-    untagged = stack["untagged"]
+    raw = stack["raw"]
 
     # Confirm we're starting from a healthy connected stack — the session
     # fixture set this up, but a previous test in this module could have
@@ -61,7 +61,7 @@ def test_kill_upstream_mid_recording_reaps_session(stack):
     assert pre["upstream"]["connected"] is True
     assert pre["sessions"] == [], f"unexpected leftover sessions: {pre['sessions']}"
 
-    pre_files = set(untagged.glob("*.flac")) if untagged.exists() else set()
+    pre_files = set(raw.glob("*.flac")) if raw.exists() else set()
 
     started = http_json(
         f"{RECORDER_URL}/api/record/start", method="POST",
@@ -96,7 +96,7 @@ def test_kill_upstream_mid_recording_reaps_session(stack):
 
         # FLAC should exist on disk — could be a clean auto-stop or a
         # truncated crash file. Either way, must be non-empty and parseable.
-        fpath = untagged / fname
+        fpath = raw / fname
         assert fpath.exists(), f"FLAC missing at {fpath}"
         assert fpath not in pre_files
         assert fpath.stat().st_size > 0, "FLAC is 0 bytes — finalize didn't flush"
