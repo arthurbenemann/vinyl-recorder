@@ -111,29 +111,28 @@ function drawPeaks(canvas, peaks, viewStart, viewEnd, color) {
   const channels = Math.max(1, peaks.channels || 1);
   const bucketBytes = 2 * channels;
 
-  // Per-column min/max accumulators, in int8 space.
-  const cols = new Int16Array(W * 2);
-  for (let i = 0; i < W * 2; i += 2) { cols[i] = 127; cols[i + 1] = -128; }
-  for (let i = i0; i < i1; i++) {
-    const t = i * bucketSec;
-    const col = Math.floor(((t - viewStart) / len) * W);
-    if (col < 0 || col >= W) continue;
-    const base = i * bucketBytes;
-    let minV = 127, maxV = -128;
-    for (let c = 0; c < channels; c++) {
-      const m1 = body[base + 2 * c];
-      const m2 = body[base + 2 * c + 1];
-      if (m1 < minV) minV = m1;
-      if (m2 > maxV) maxV = m2;
-    }
-    const j = col * 2;
-    if (minV < cols[j])     cols[j]     = minV;
-    if (maxV > cols[j + 1]) cols[j + 1] = maxV;
-  }
+  // Iterate pixel columns and reduce every bucket whose time range
+  // intersects the column into its (min, max). This handles both
+  // bucket-per-pixel densities uniformly: when zoomed out a column spans
+  // many buckets (envelope summary), when zoomed in many columns share
+  // one bucket (the envelope reads as a continuous bar at full extent
+  // rather than a comb of one-pixel spikes).
   for (let c = 0; c < W; c++) {
-    const j = c * 2;
-    const minV = cols[j];
-    const maxV = cols[j + 1];
+    const tStart = viewStart + (c / W) * len;
+    const tEnd   = viewStart + ((c + 1) / W) * len;
+    const b0 = Math.max(i0, Math.floor(tStart / bucketSec));
+    let b1 = Math.min(i1, Math.ceil(tEnd / bucketSec));
+    if (b1 <= b0) b1 = Math.min(i1, b0 + 1);  // ensure ≥1 bucket per column
+    let minV = 127, maxV = -128;
+    for (let i = b0; i < b1; i++) {
+      const base = i * bucketBytes;
+      for (let ch = 0; ch < channels; ch++) {
+        const m1 = body[base + 2 * ch];
+        const m2 = body[base + 2 * ch + 1];
+        if (m1 < minV) minV = m1;
+        if (m2 > maxV) maxV = m2;
+      }
+    }
     if (minV > maxV) continue;
     const yMin = mid - (maxV / 127) * (H / 2);
     const yMax = mid - (minV / 127) * (H / 2);
