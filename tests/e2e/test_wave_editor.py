@@ -285,7 +285,7 @@ def _combine_then_open_editor(page, sides, *, artist, album, year="2026"):
     )
     page.wait_for_selector('#we-modal:not([hidden])')
     page.wait_for_function(
-        "() => typeof we !== 'undefined' && we.loaded === true",
+        "() => typeof we !== 'undefined' && we.loaded === true && we.total > 0",
         timeout=20_000,
     )
     return album_id
@@ -333,7 +333,6 @@ def test_wave_editor_open_close_does_not_write_default_plan(stack, page):
 
 
 # ── PR B: re-open after edit restores the draft ──────────────────────────
-@pytest.mark.skip(reason="diagnostic-skip: isolating CI failure on #82, see commit msg")
 def test_wave_editor_reopen_restores_cut_skip_title(stack, page):
     """The user's edits — a cut, a skip flag, and a renamed track — must
     survive close + reopen. This walks the same flow that surfaced the
