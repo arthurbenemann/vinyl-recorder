@@ -655,7 +655,6 @@ const SORT_KEYS = {
   size:   f => f.size_mb || 0,
   // Sort by total information rate (bps × Hz) so 24/96 ranks above 16/44.1.
   fmt:    f => (f.bit_depth || 0) * (f.sample_rate_khz || 0),
-  status: f => (f.tagged ? 1 : 0),
   date:   f => f.mtime || 0,
 };
 
@@ -865,29 +864,26 @@ function refreshLibRender() {
     const msg = total === 0
       ? 'No recordings yet. Drop the needle!'
       : 'No matches for current filter.';
-    tbody.innerHTML = `<tr><td colspan="10" class="empty-lib">${msg}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="empty-lib">${msg}</td></tr>`;
     updateBulkBar();
     return;
   }
   tbody.innerHTML = files.map(f => {
       const fn = htmlEscape(f.filename);
       const isSel = selected.has(f.filename) ? 'checked' : '';
-      const rowClass = f.tagged ? 'row-tagged' : 'row-untagged';
       const playing = previewIs(f.filename, 'lib') ? 'playing' : '';
       const playGlyph = previewIs(f.filename, 'lib') ? '⏸' : '▶';
       const titleText = htmlEscape(f.album || f.filename.replace('.flac',''));
-      // Untagged rows allow double-click rename in place (no tag panel needed).
-      // Handler lives on the whole <td> so the entire cell (including padding
-      // and whitespace to the right of short titles) is a click target —
-      // clicks elsewhere on the row still bubble normally.
-      const cellAttrs = f.tagged
-        ? ''
-        : ` ondblclick="startInlineRename(this.dataset.fname, this.querySelector('.row-title-text'))" data-fname="${fn}" title="Double-click to rename"`;
+      // Raw rows are by definition untagged: the dblclick rename always
+      // applies, the amber accent bar (.row-untagged in style.css) is
+      // unconditional. The handler lives on the whole <td> so the entire
+      // cell — including padding and whitespace to the right of short
+      // titles — is a click target.
       return `
-      <tr class="${rowClass}">
+      <tr class="row-untagged">
         <td class="col-check"><input type="checkbox" class="row-check" data-fname="${fn}" ${isSel}
             onclick="toggleRow(this.dataset.fname, this.checked)"></td>
-        <td style="font-weight:500"${cellAttrs}>
+        <td style="font-weight:500" ondblclick="startInlineRename(this.dataset.fname, this.querySelector('.row-title-text'))" data-fname="${fn}" title="Double-click to rename">
           <div class="row-title">
             <span class="row-thumb"><img src="/api/file-cover/${encodeURIComponent(f.filename)}" loading="lazy" onerror="this.remove()"></span>
             <span class="row-title-text">${titleText}</span>
@@ -899,9 +895,6 @@ function refreshLibRender() {
         <td style="color:var(--muted)">${fmtDuration(f.duration_seconds)}</td>
         <td style="color:var(--muted)">${f.size_mb} MB</td>
         <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="bit depth / sample rate (kHz)">${fmtSourceFormat(f)}</td>
-        <td>
-          <span class="badge ${f.tagged ? 'tagged' : 'raw'}">${f.tagged ? 'tagged' : 'untagged'}</span>
-        </td>
         <td style="white-space:nowrap;text-align:right">
           <button class="icon-btn preview-btn ${playing}" data-fname="${fn}" data-kind="lib" title="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>
           <button class="icon-btn" title="Tag album" onclick="openTag('${fn}')">✎</button>
@@ -928,7 +921,7 @@ async function deleteFile(fname) {
 // input; Enter saves, Esc / blur cancels.
 function startInlineRename(fname, el) {
   const f = filesByName[fname];
-  if (!f || f.tagged) return;
+  if (!f) return;
   const current = (f.album || f.filename.replace(/\.flac$/, '')).trim();
   const input = document.createElement('input');
   input.className = 'inline-rename';
