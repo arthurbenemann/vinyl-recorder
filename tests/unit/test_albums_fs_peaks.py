@@ -5,9 +5,31 @@ and asserts the cache-freshness behaviour: if `.peaks.dat` is newer than
 the concat cache, return immediately; otherwise call render_peaks once
 and cache the result.
 """
+import importlib
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _restore_state_modules():
+    # state.py and albums_fs.py cache OUTPUT_DIR-derived paths at import
+    # time. Each test in this file reloads them against a per-test tmp dir
+    # (see _seed_album); restore the conftest-set OUTPUT_DIR afterwards so
+    # unrelated tests keep seeing the shared throwaway dir.
+    saved = os.environ.get("OUTPUT_DIR")
+    yield
+    if saved is not None:
+        os.environ["OUTPUT_DIR"] = saved
+    else:
+        os.environ.pop("OUTPUT_DIR", None)
+    import state
+    import services.albums_fs as albums_fs
+    importlib.reload(state)
+    importlib.reload(albums_fs)
 
 
 def _seed_album(tmp_path: Path, monkeypatch, sides: list[str]) -> str:
@@ -16,7 +38,6 @@ def _seed_album(tmp_path: Path, monkeypatch, sides: list[str]) -> str:
     monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
     # state.py mkdirs at import time and caches the path constants — reload
     # so RAW_DIR / IN_PROGRESS_DIR pick up the new env.
-    import importlib
     import state
     importlib.reload(state)
     import services.albums_fs as albums_fs
