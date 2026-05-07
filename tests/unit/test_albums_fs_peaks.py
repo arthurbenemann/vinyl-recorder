@@ -34,16 +34,29 @@ def _restore_state_modules():
 
 def _seed_album(tmp_path: Path, monkeypatch, sides: list[str]) -> str:
     """Build a minimal in-progress/<id>/ tree with empty side FLACs and a
-    pre-built concat.flac so ensure_peaks_cache doesn't try to run ffmpeg."""
-    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
-    # state.py mkdirs at import time and caches the path constants — reload
-    # so RAW_DIR / IN_PROGRESS_DIR pick up the new env.
-    import state
-    importlib.reload(state)
-    import services.albums_fs as albums_fs
-    importlib.reload(albums_fs)
+    pre-built concat.flac so ensure_peaks_cache doesn't try to run ffmpeg.
 
+    Path constants are patched per-attribute via `monkeypatch.setattr` so
+    the cleanup is automatic. An earlier version reloaded the `state`
+    module after `monkeypatch.setenv`, which left a stale RAW_DIR pointing
+    at the now-deleted tmp_path even after monkeypatch reverted the env
+    var, breaking unrelated API tests (`test_recordings_lists_files_in_raw`)
+    that ran later in the suite."""
     ip = tmp_path / "in-progress"
+    raw = tmp_path / "raw"
+    music = tmp_path / "music"
+    log_dir = tmp_path / ".logs"
+    for _d in (ip, raw, music, log_dir):
+        _d.mkdir(parents=True, exist_ok=True)
+    import services.albums_fs as albums_fs
+    import state
+    monkeypatch.setattr(state, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(state, "IN_PROGRESS_DIR", ip)
+    monkeypatch.setattr(state, "RAW_DIR", raw)
+    monkeypatch.setattr(state, "MUSIC_DIR", music)
+    monkeypatch.setattr(state, "LOG_DIR", log_dir)
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", ip)
+
     album_id = "ab12cd34"
     d = ip / album_id
     d.mkdir(parents=True)

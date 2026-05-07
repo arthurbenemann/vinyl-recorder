@@ -89,6 +89,25 @@ def ffprobe(host_path: Path) -> dict:
     return json.loads(r.stdout)
 
 
+@pytest.fixture
+def page(page):  # noqa: F811 — intentional override of pytest-playwright's `page`
+    """Wrap pytest-playwright's `page` fixture to fail any test whose page
+    raises an uncaught JS exception. Console errors aren't enough — a
+    `ReferenceError` thrown inside an event handler aborts the handler
+    silently and only surfaces via `page.on('pageerror')`. The dead-`draft`
+    bug that shipped pre-#71 was exactly this class; trapping in the
+    fixture makes every e2e test catch this kind of regression at the
+    door without each test having to remember to register a listener."""
+    pageerrors: list[str] = []
+    page.on("pageerror", lambda e: pageerrors.append(e.message))
+    yield page
+    if pageerrors:
+        # Truncate to keep the failure summary readable.
+        joined = " · ".join(pageerrors[:5])
+        more = "" if len(pageerrors) <= 5 else f" (+{len(pageerrors) - 5} more)"
+        pytest.fail(f"uncaught JS exceptions in page: {joined}{more}")
+
+
 @pytest.fixture(scope="session")
 def stack():
     """Bring the full vinyl-recorder + test-streams compose stack up

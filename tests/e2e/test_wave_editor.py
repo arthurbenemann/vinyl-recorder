@@ -225,4 +225,173 @@ def _drive(page, sides):
     assert audio['readyState'] >= 1 and audio['duration'] > 0, audio
 
     # ── No JS pageerrors fired across the whole flow ──────────────────
+    # Belt-and-braces — the conftest `page` fixture also asserts no
+    # pageerrors on teardown, but pinning it inline here keeps the
+    # original test self-documenting.
     assert not pageerrors, "console pageerrors: " + " · ".join(pageerrors[:3])
+
+
+# ── Helpers shared by the smaller editor flows ───────────────────────────
+def _combine_then_open_editor(page, sides, *, artist, album, year="2026"):
+    """Drive combine modal + click split-into-tracks; returns the new
+    album_id. Filters the album row by title so multiple tests in the
+    same suite don't pick each other's rows up."""
+    side_names = [s.name for s in sides]
+    page.wait_for_function(
+        f"() => document.querySelectorAll('input.row-check[data-fname]').length >= {len(sides)}",
+        timeout=10_000,
+    )
+    page.evaluate(
+        """
+        (names) => {
+            for (const n of names) {
+                const cb = document.querySelector(
+                    `input.row-check[data-fname="${n}"]`);
+                cb.checked = true;
+                cb.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }
+        """,
+        side_names,
+    )
+    page.wait_for_selector('#combine-btn:not([disabled])', timeout=5_000)
+    page.click('#combine-btn')
+    page.wait_for_selector('#combine-modal:not([hidden])')
+    page.fill('#c-artist', artist)
+    page.fill('#c-album',  album)
+    page.fill('#c-year',   year)
+    page.click('#combine-go')
+    page.wait_for_function(
+        "() => document.getElementById('combine-modal').hasAttribute('hidden')",
+        timeout=20_000,
+    )
+    # Find the row by album text (not just first match — earlier tests
+    # in the session may have left their own album rows behind).
+    page.wait_for_function(
+        "(album) => Array.from(document.querySelectorAll('tr[data-album-id]'))"
+        ".some(r => r.textContent.includes(album))",
+        arg=album,
+        timeout=10_000,
+    )
+    album_id = page.evaluate(
+        "(album) => Array.from(document.querySelectorAll('tr[data-album-id]'))"
+        ".find(r => r.textContent.includes(album)).getAttribute('data-album-id')",
+        album,
+    )
+    assert album_id, f"combine produced no row for {album!r}"
+    page.click(
+        f'tr[data-album-id="{album_id}"] button[title*="plit into tracks"]'
+    )
+    page.wait_for_selector('#we-modal:not([hidden])')
+    page.wait_for_function(
+        "() => typeof we !== 'undefined' && we.loaded === true",
+        timeout=20_000,
+    )
+    return album_id
+
+
+# ── PR B: ghost-plan guard ───────────────────────────────────────────────
+def test_wave_editor_open_close_does_not_write_default_plan(stack, page):
+    """Reproduces the "ghost plan" issue: opening + closing the editor on
+    a freshly-combined album, without touching cuts/titles/skip, must not
+    POST a default-state plan to the server. A regression here pollutes
+    `album.json.has_draft` (and the future "draft" UI pill) for every
+    album the user merely peeked at."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    plan_posts: list[str] = []
+    page.on("request", lambda r: plan_posts.append(r.url)
+            if r.method == "POST" and "/plan" in r.url else None)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        album_id = _combine_then_open_editor(
+            page, sides, artist="GhostPlanArtist", album="GhostPlanAlbum"
+        )
+        # Sit in the editor for longer than the 500 ms debounce so any
+        # accidental _persistDraft would have fired by now.
+        page.wait_for_timeout(1_000)
+        page.evaluate("closeWaveEditor()")
+        # closeWaveEditor calls _flushPlanSave; give the in-flight POST
+        # (if any) a moment to land before we assert.
+        page.wait_for_timeout(500)
+        # Hit the manifest endpoint to confirm `plan` is still null.
+        plan = page.evaluate(
+            f"async () => {{ "
+            f"const r = await fetch('/api/album/{album_id}/tracks'); "
+            f"const d = await r.json(); return d.plan; }}"
+        )
+        assert plan is None, f"editor wrote a ghost plan: {plan!r}"
+        # And no /plan POST should have hit the wire at all — the dirty
+        # gate runs before the network call.
+        assert not plan_posts, f"editor POSTed /plan with no edits: {plan_posts}"
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
+# ── PR B: re-open after edit restores the draft ──────────────────────────
+def test_wave_editor_reopen_restores_cut_skip_title(stack, page):
+    """The user's edits — a cut, a skip flag, and a renamed track — must
+    survive close + reopen. This walks the same flow that surfaced the
+    `we.loaded` race in PR #71 and pins it down with state assertions."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        album_id = _combine_then_open_editor(
+            page, sides, artist="ReopenArtist", album="ReopenAlbum"
+        )
+        # Edit: drop a cut roughly mid-album, mark the first region as
+        # skip, and rename the second region. The save is debounced ~500ms
+        # so we wait for the resulting /plan POST to settle.
+        plan_posts: list[str] = []
+        page.on("response", lambda r: plan_posts.append(r.url)
+                if r.request.method == "POST" and "/plan" in r.url else None)
+        page.evaluate(
+            """
+            () => {
+                const t = (we.total || 0) / 2;
+                weAddCutAtTime(t);
+                weToggleSkip(0);
+                weSetTitle(1, 'Track Beta');
+            }
+            """
+        )
+        # Poll plan_posts in the runner (Playwright's wait_for_function
+        # runs in the page; the network listener lives here).
+        deadline = time.time() + 4.0
+        while time.time() < deadline and not plan_posts:
+            page.wait_for_timeout(100)
+        assert plan_posts, "no /plan POST after editing — debounce never fired"
+        # Close + reopen.
+        page.evaluate("closeWaveEditor()")
+        page.wait_for_function(
+            "() => document.getElementById('we-modal').hasAttribute('hidden')",
+            timeout=4_000,
+        )
+        page.click(
+            f'tr[data-album-id="{album_id}"] button[title*="e-edit splits"], '
+            f'tr[data-album-id="{album_id}"] button[title*="plit into tracks"]'
+        )
+        page.wait_for_selector('#we-modal:not([hidden])')
+        page.wait_for_function(
+            "() => we.loaded === true",
+            timeout=10_000,
+        )
+        # State must match what we set — exercises both the manifest
+        # write and weLoadExistingSplit's repopulate path.
+        state = page.evaluate(
+            "() => ({ cuts: we.cuts.slice(), titles: we.titles.slice(), "
+            "skipped: we.skipped.slice() })"
+        )
+        assert len(state['cuts']) == 1, f"expected 1 cut, got {state['cuts']!r}"
+        assert state['skipped'][0] is True, f"first region should still be skipped: {state['skipped']!r}"
+        assert state['titles'][1] == 'Track Beta', \
+            f"second region title not preserved: {state['titles']!r}"
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
