@@ -80,6 +80,17 @@ function _persistDraft() {
 async function _savePlanNow() {
   _planSaveTimer = null;
   if (!we.filename) return;
+  // Open-time race guard. openWaveEditor seeds the editor with empty
+  // defaults and then kicks off weLoadExistingSplit() to fill them in
+  // from album.json. drawAll() runs in between, which calls _persistDraft()
+  // via renderTracks(). If the debounce fires before the load completes
+  // we'd POST the empty default state and clobber the user's saved plan.
+  // we.loaded flips true the moment the load resolves (with or without
+  // a plan); until then we just re-arm the timer.
+  if (!we.loaded) {
+    _planSaveTimer = setTimeout(_savePlanNow, 200);
+    return;
+  }
   // Snapshot the current editor state into the plan shape the server
   // already understands (see SplitRequest / PlanUpdateRequest).
   const tracks = _regions().map(r => ({
@@ -137,6 +148,9 @@ function openWaveEditor(fname) {
     playingTrack: null,
     playingEnd:  null,
     measured:    null,
+    // Flips true once weLoadExistingSplit resolves. _savePlanNow gates on
+    // this so the empty default state never races ahead of the load.
+    loaded:      false,
   });
   resetMeasureUI();
   weMeasure();  // kick off in the background; UI doesn't block on it
@@ -195,9 +209,10 @@ function openWaveEditor(fname) {
   }
 }
 
-// If this album has already been split, repopulate cuts, titles, and skip
-// flags from the sidecar split plan so the user can adjust the split
-// rather than redo it from scratch.
+// Repopulate cuts, titles, and skip flags from album.json.plan. Covers
+// both an in-progress draft (saved by _savePlanNow) and a completed
+// split (saved by /api/album/split). Leaves the empty default state in
+// place when there's nothing in the manifest.
 async function weLoadExistingSplit(fname) {
   try {
     const r = await fetch(`/api/album/${encodeURIComponent(fname)}/tracks`);
@@ -205,20 +220,27 @@ async function weLoadExistingSplit(fname) {
     const d = await r.json();
     if (we.filename !== fname) return;  // editor moved on while we were waiting
     const plan = d.plan;
-    if (!plan || !plan.tracks || plan.tracks.length < 2) return;
-    const ptracks = plan.tracks;
+    const ptracks = (plan && Array.isArray(plan.tracks)) ? plan.tracks : null;
+    if (!ptracks || !ptracks.length) return;
+    // N tracks → N-1 cuts (between regions). A 1-track plan is valid —
+    // it's the editor's "whole album as one track" state with a chosen
+    // title or skip flag. We still need to apply titles/skipped so a
+    // single skip-marked track survives reopen.
     const cuts = [];
     let cursor = 0;
     for (let j = 0; j < ptracks.length - 1; j++) {
       cursor += ptracks[j].duration_seconds || 0;
       if (cursor > 0 && cursor < we.total) cuts.push(cursor);
     }
-    if (!cuts.length) return;
     we.cuts    = cuts;
     we.titles  = ptracks.map(t => t.title || '');
     we.skipped = ptracks.map(t => !!t.skip);
     drawAll();
   } catch (e) { /* nothing existing — leave the empty state */ }
+  finally {
+    // Always flip loaded — _savePlanNow's race guard releases either way.
+    if (we.filename === fname) we.loaded = true;
+  }
 }
 
 function closeWaveEditor() {
