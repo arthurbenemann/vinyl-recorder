@@ -23,8 +23,8 @@ from services.ffmpeg import (
 )
 from services.jobs import finish_job, start_job
 from state import (
-    CombineRequest, MUSIC_DIR, MeasureRequest, PromoteRequest,
-    ReorderSidesRequest, SilenceDetectRequest, SplitRequest,
+    CombineRequest, MUSIC_DIR, MeasureRequest, PlanUpdateRequest,
+    PromoteRequest, ReorderSidesRequest, SilenceDetectRequest, SplitRequest,
 )
 
 router = APIRouter()
@@ -124,6 +124,31 @@ async def demote_album(album_id: str):
     dialog warns about this so the user is never surprised."""
     _require_album(album_id)
     return {"ok": True, **albums_fs.demote_album(album_id)}
+
+
+@router.post("/api/album/{album_id}/plan")
+async def update_plan(album_id: str, req: PlanUpdateRequest):
+    """Persist editor draft state to `album.json.plan` without running the
+    split. The wave-editor calls this on a debounced timer as the user
+    edits cuts/titles/skip flags so their work survives a tab close, a
+    page reload, or moving to a different browser. The shape lines up
+    with what `/api/album/split` already writes after a successful run —
+    `music_relpath` (the "split has been emitted" signal) is left
+    untouched here. Only the editor's intent gets written."""
+    _require_album(album_id)
+    manifest = albums_fs.read_manifest(album_id)
+    plan = dict(manifest.get("plan") or {})
+    plan["tracks"] = [
+        {"title": t.title, "duration_seconds": t.duration_seconds, "skip": t.skip}
+        for t in req.tracks
+    ]
+    if req.normalize        is not None: plan["normalize"]        = req.normalize
+    if req.target_peak_db   is not None: plan["target_peak_db"]   = req.target_peak_db
+    if req.measured_peak_db is not None: plan["measured_peak_db"] = req.measured_peak_db
+    if req.bit_depth        is not None: plan["bit_depth"]        = req.bit_depth
+    manifest["plan"] = plan
+    albums_fs.write_manifest(album_id, manifest)
+    return {"ok": True, "plan": plan}
 
 
 @router.post("/api/album/{album_id}/sides/reorder")

@@ -59,39 +59,59 @@ function _timeToPctFull(t) {
 }
 
 // ── Draft persistence ─────────────────────────────────────────────────────
-// Cuts, titles, and skip flags are persisted to localStorage per album. If
-// the user closes the modal mid-edit (esc, tab close, accidental nav) and
-// reopens the same album, their work is restored. Cleared on successful split.
-const DRAFT_KEY = fname => `vr-wave-draft:${fname}`;
+// Cuts, titles, and skip flags are persisted to album.json.plan on the
+// server (debounced). If the user closes the modal mid-edit, reopens the
+// album from another browser, or even hands off to someone else on the
+// same recorder install, the in-progress edit is right where they left
+// it. The plan field is the same one /api/album/split writes after a
+// successful run — the only difference is `manifest.music_relpath`, which
+// stays null until tracks have actually been emitted to music/.
+let _planSaveTimer = null;
+let _planSaveInFlight = null;
 
 function _persistDraft() {
+  // Called from every interaction (cut drag, title input, skip toggle).
+  // Debounce ~500 ms so a flurry of micro-edits collapses into one POST.
   if (!we.filename) return;
-  try {
-    localStorage.setItem(DRAFT_KEY(we.filename), JSON.stringify({
-      cuts:     we.cuts,
-      titles:   we.titles,
-      skipped:  we.skipped,
-      silences: we.silences,
-      savedAt:  Date.now(),
-    }));
-  } catch (e) { /* localStorage full / disabled — silently skip */ }
+  if (_planSaveTimer) clearTimeout(_planSaveTimer);
+  _planSaveTimer = setTimeout(_savePlanNow, 500);
 }
 
-function _loadDraft(fname, total) {
+async function _savePlanNow() {
+  _planSaveTimer = null;
+  if (!we.filename) return;
+  // Snapshot the current editor state into the plan shape the server
+  // already understands (see SplitRequest / PlanUpdateRequest).
+  const tracks = _regions().map(r => ({
+    title: (r.title || '').trim(),
+    duration_seconds: Math.max(0, r.end - r.start),
+    skip: !!r.skip,
+  }));
+  const albumId = we.filename;
   try {
-    const raw = localStorage.getItem(DRAFT_KEY(fname));
-    if (!raw) return null;
-    const d = JSON.parse(raw);
-    // Sanity check: any cut beyond the source duration means the source was
-    // re-recorded or otherwise differs. Drop the draft to avoid corruption.
-    if (Array.isArray(d.cuts) && d.cuts.some(c => c < 0 || c > total + 1)) return null;
-    return d;
-  } catch (e) { return null; }
+    _planSaveInFlight = fetch(`/api/album/${albumId}/plan`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ tracks }),
+    });
+    await _planSaveInFlight;
+  } catch (e) {
+    // Network blip — the next change will retry. Silent on purpose; a
+    // toast for every transient save failure would spam the user.
+  } finally {
+    _planSaveInFlight = null;
+  }
 }
 
-function _clearDraft(fname) {
-  try { localStorage.removeItem(DRAFT_KEY(fname)); }
-  catch (e) { /* ignore */ }
+// Public hook: called on modal close so the final state is flushed even
+// if the debounce timer hadn't fired yet.
+async function _flushPlanSave() {
+  if (_planSaveTimer) {
+    clearTimeout(_planSaveTimer);
+    _planSaveTimer = null;
+    await _savePlanNow();
+  } else if (_planSaveInFlight) {
+    try { await _planSaveInFlight; } catch (e) {}
+  }
 }
 
 // ── Open / close ──────────────────────────────────────────────────────────
@@ -99,16 +119,18 @@ function openWaveEditor(fname) {
   const a = albumsByName[fname];
   if (!a) return;
   const total = a.duration_seconds || 0;
-  const draft = _loadDraft(fname, total);
+  // Initial state is the empty editor with one default track. Any prior
+  // draft / completed split is fetched server-side via weLoadExistingSplit
+  // (kicked off below) and patched in once the response arrives.
   Object.assign(we, {
     filename:    fname,
     total:       total,
     viewStart:   0,
     viewEnd:     total,
-    cuts:        draft?.cuts     ?? [],
-    titles:      draft?.titles   ?? ['Track 1'],
-    skipped:     draft?.skipped  ?? [false],
-    silences:    draft?.silences ?? [],
+    cuts:        [],
+    titles:      ['Track 1'],
+    skipped:     [false],
+    silences:    [],   // re-detected on demand via the suggest panel
     candidates:  [],
     hoverX:      null,
     isPlaying:   false,
@@ -206,6 +228,10 @@ function closeWaveEditor() {
   document.getElementById('we-modal').hidden = true;
   document.removeEventListener('keydown', weKeyDown);
   _stopWfPoll();   // tear down any in-flight waveform progress overlay
+  // Flush any debounced plan-save in flight so a fast-close doesn't lose
+  // the user's last edit. Runs in the background; the modal is already
+  // hidden so the user isn't waiting on the network.
+  _flushPlanSave();
 }
 
 // Re-render everything that depends on viewStart/viewEnd or cuts.
@@ -1106,7 +1132,9 @@ async function weApplySplit() {
       return r.json();
     });
     toast(`✓ Split into ${d.tracks.length} tracks`, 'ok');
-    _clearDraft(we.filename);
+    // No draft to clear — the split route already wrote the same plan to
+    // album.json (alongside `music_relpath`). Closing the editor leaves
+    // the plan in place so re-edit picks up where this run left off.
     closeWaveEditor();
     refreshAlbums();
   } catch (e) {

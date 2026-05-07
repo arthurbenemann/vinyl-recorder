@@ -247,6 +247,12 @@ def _summarize_album(album_id: str, manifest: dict) -> dict:
     plan = manifest.get("plan")
     kept_tracks = [t for t in (plan or {}).get("tracks", []) if not t.get("skip")]
     tags = manifest.get("tags") or {}
+    music_relpath = manifest.get("music_relpath")
+    # `split` is the "tracks have been emitted to music/" signal — drives
+    # the UI's In-progress vs Music partition. A plan can exist as a pure
+    # draft (saved by the editor mid-edit) without an emit having happened
+    # yet; that still belongs in the In-progress section. Once split runs
+    # successfully, music_relpath gets set and the row jumps to Music.
     return {
         "album_id":         album_id,
         "mtime":            d.stat().st_mtime,
@@ -264,8 +270,9 @@ def _summarize_album(album_id: str, manifest: dict) -> dict:
         "musicbrainz_albumid": tags.get("musicbrainz_albumid", ""),
         "discogs_release_id":  tags.get("discogs_release_id"),
         "side_count":       len(sides),
-        "split":            plan is not None,
-        "music_relpath":    manifest.get("music_relpath"),
+        "split":            bool(music_relpath),
+        "has_draft":        plan is not None and not music_relpath,
+        "music_relpath":    music_relpath,
         "track_count":      len(kept_tracks),
     }
 

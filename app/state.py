@@ -144,6 +144,18 @@ class ReorderSidesRequest(BaseModel):
     sides: list[str]                  # permutation of the album's current sides[]
 
 
+class PlanUpdateRequest(BaseModel):
+    """Editor draft state — saved to album.json.plan WITHOUT running split.
+    Lets users close the modal mid-edit (or move to another browser) without
+    losing their in-progress cuts. The wave-editor calls this on a debounced
+    timer as cuts/titles/skip flags change."""
+    tracks: list[SplitTrack]
+    normalize:        Optional[bool]   = None
+    target_peak_db:   Optional[float]  = None
+    measured_peak_db: Optional[float]  = None
+    bit_depth:        Optional[int]    = None
+
+
 class BulkDelete(BaseModel):
     filenames: list[str]
 
