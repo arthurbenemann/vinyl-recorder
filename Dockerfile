@@ -13,6 +13,27 @@ RUN (git update-index --refresh >/dev/null 2>&1 || true) \
     || echo "dev" > /VERSION
 
 
+# Build audiowaveform from source. We dropped the apk-add path because the
+# package's availability across alpine versions is too brittle for CI:
+# Alpine 3.23 (the current python:3.12-alpine target) doesn't carry it,
+# 3.21 was inconsistent in CI, and pinning to an older base risks security
+# updates lagging. Building from a pinned upstream tag instead keeps us
+# decoupled from alpine's package timeline.
+#
+# The result is a single ~2 MB binary copied into the runtime stage; build
+# tools (cmake, g++, boost-dev, …) stay in the builder layer and never ship.
+FROM alpine:3.21 AS aw-builder
+RUN apk add --no-cache \
+        build-base cmake git \
+        boost-dev libsndfile-dev gd-dev libid3tag-dev libmad-dev
+WORKDIR /build
+RUN git clone --depth=1 --branch=1.10.2 https://github.com/bbc/audiowaveform.git
+WORKDIR /build/audiowaveform
+RUN cmake -DENABLE_TESTS=0 -DBUILD_STATIC=0 . \
+ && make -j"$(nproc)" \
+ && strip audiowaveform
+
+
 FROM python:3.12-alpine3.21
 
 ENV PYTHONUNBUFFERED=1 \
@@ -20,33 +41,18 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Alpine's ffmpeg is built with --enable-libmp3lame and ships every filter
 # the app uses (silencedetect, astats, aformat, volume, atrim, asetpts,
-# concat). flac provides metaflac. audiowaveform precomputes the 8-bit
-# min/max peak data the wave editor renders client-side.
-#
-# audiowaveform lives in Alpine's community repo. python:3.x-alpine bases
-# don't always include community in /etc/apk/repositories, so we add it
-# explicitly using the matching alpine version detected from /etc/os-release
-# — pulling from edge would risk mixing musl/libstdc++ versions across the
-# rest of the image.
-# Try the configured repos first; if the package isn't there, append the
-# matching alpine community URL and retry. The diagnostic prints land in
-# the build log so a future failure surfaces /etc/apk/repositories and
-# /etc/os-release contents inline. Comments inside the RUN are forbidden
-# (Docker joins line-continued shells; a # mid-command swallows the rest).
-RUN set -eux \
- && apk add --no-cache ffmpeg flac \
- && cat /etc/os-release \
- && cat /etc/apk/repositories \
- && if ! apk add --no-cache audiowaveform; then \
-        echo "primary install failed; appending matching community repo"; \
-        . /etc/os-release; \
-        ALPINE_VER=$(echo "$VERSION_ID" | cut -d. -f1-2); \
-        echo "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER}/community" \
-            >> /etc/apk/repositories; \
-        apk update; \
-        apk add --no-cache audiowaveform; \
-    fi \
- && audiowaveform --version
+# concat). flac provides metaflac. The runtime libs match the dynamically-
+# linked deps of the audiowaveform binary copied from the builder stage —
+# omitting any of them would surface as a "library not found" at first
+# invocation rather than at image build.
+RUN apk add --no-cache \
+        ffmpeg flac \
+        libstdc++ \
+        boost-program_options boost-filesystem boost-regex \
+        libsndfile gd libid3tag libmad
+
+COPY --from=aw-builder /build/audiowaveform/audiowaveform /usr/local/bin/audiowaveform
+RUN audiowaveform --version
 
 RUN pip install --no-cache-dir \
     fastapi \
