@@ -212,15 +212,11 @@ function openWaveEditor(fname) {
   drawAll();
   document.getElementById('we-modal').hidden = false;
   document.addEventListener('keydown', weKeyDown);
-  if (draft && (draft.cuts?.length || (draft.titles?.length || 0) > 1)) {
-    toast('↻ draft restored — clear cuts to start fresh', 'info');
-  } else {
-    // No draft — fall back to recreating cuts from the on-disk track list, so
-    // a previously-split album can be re-edited rather than redone from scratch.
-    // If neither source produced cuts, try the saved Discogs / MB id as a
-    // last resort so the user doesn't have to run the search manually.
-    weLoadExistingSplit(fname).then(() => _weAutoLoadFromIds(a));
-  }
+  // Recreate cuts from album.json's saved plan (a prior in-editor draft or
+  // a completed split). If nothing's there, fall back to auto-loading a
+  // tracklist from a saved Discogs / MBID. The localStorage-based draft
+  // path is gone — #71 moved drafts to server-side `album.json.plan`.
+  weLoadExistingSplit(fname).then(() => _weAutoLoadFromIds(a));
 }
 
 // Repopulate cuts, titles, and skip flags from album.json.plan. Covers
