@@ -292,7 +292,6 @@ def _combine_then_open_editor(page, sides, *, artist, album, year="2026"):
 
 
 # ── PR B: ghost-plan guard ───────────────────────────────────────────────
-@pytest.mark.skip(reason="diagnostic-skip: isolating CI failure on #82, see commit msg")
 def test_wave_editor_open_close_does_not_write_default_plan(stack, page):
     """Reproduces the "ghost plan" issue: opening + closing the editor on
     a freshly-combined album, without touching cuts/titles/skip, must not
