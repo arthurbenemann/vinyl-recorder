@@ -8,28 +8,51 @@
 
 'use strict';
 
-// Parse the BBC audiowaveform binary v2 format (8-bit min/max).
-//   header (24 bytes, little-endian):
-//     i32 version, u32 flags, i32 sample_rate, i32 samples_per_pixel,
-//     u32 length, i32 channels.
-//   body: 2 * length signed bytes (interleaved min, max), per channel.
+// Parse a BBC audiowaveform binary dat (8-bit min/max). The format has two
+// header layouts (see WaveformBuffer.cpp `version = channels==1 ? 1 : 2`):
 //
-// We always pre-mix to mono on the server side via `ffmpeg -ac 1 |
-// audiowaveform` so length * 2 bytes is the expected payload length.
+//   v1 (mono, 20-byte header, body starts at offset 20):
+//     i32 version=1, u32 flags, i32 sample_rate, i32 samples_per_pixel,
+//     u32 length
+//
+//   v2 (multi-channel, 24-byte header, body starts at offset 24):
+//     i32 version=2, u32 flags, i32 sample_rate, i32 samples_per_pixel,
+//     u32 length, i32 channels
+//
+// audiowaveform downmixes to mono by default, so the common case is v1.
+// Misreading a v1 file as v2 produces a bogus `channels` (the first 4
+// body bytes interpreted as int32) — that overflowed the Int8Array
+// length parameter and surfaced as "Invalid typed array length".
 function parsePeaks(arrayBuffer) {
   const view = new DataView(arrayBuffer);
-  if (view.byteLength < 24) throw new Error('peak file too short');
+  if (view.byteLength < 20) throw new Error('peak file too short');
   const version          = view.getInt32(0,  true);
   const flags            = view.getUint32(4, true);
   const sampleRate       = view.getInt32(8,  true);
   const samplesPerPixel  = view.getInt32(12, true);
   const length           = view.getUint32(16, true);
-  const channels         = view.getInt32(20, true);
+  let channels, headerSize;
+  if (version === 1) {
+    channels = 1;
+    headerSize = 20;
+  } else if (version === 2) {
+    if (view.byteLength < 24) throw new Error('short v2 audiowaveform header');
+    channels = view.getInt32(20, true);
+    headerSize = 24;
+  } else {
+    throw new Error('unsupported audiowaveform dat version: ' + version);
+  }
   const bits = (flags & 0x1) ? 8 : 16;
   if (bits !== 8) throw new Error('expected 8-bit peak data; got ' + bits);
-  const expected = length * 2 * (channels || 1);
-  const body = new Int8Array(arrayBuffer, 24,
-    Math.min(expected, arrayBuffer.byteLength - 24));
+  if (channels < 1 || channels > 8) {
+    throw new Error('unexpected channel count: ' + channels);
+  }
+  const expectedBody = length * 2 * channels;
+  const availableBody = arrayBuffer.byteLength - headerSize;
+  // Trust the smaller of the two so a truncated payload doesn't blow up
+  // the Int8Array constructor; clamp to >=0 so it can never go negative.
+  const bodyBytes = Math.max(0, Math.min(expectedBody, availableBody));
+  const body = new Int8Array(arrayBuffer, headerSize, bodyBytes);
   const duration = sampleRate > 0
     ? (length * samplesPerPixel) / sampleRate
     : 0;
@@ -81,6 +104,12 @@ function drawPeaks(canvas, peaks, viewStart, viewEnd, color) {
   const i0 = Math.max(0, Math.floor(viewStart / bucketSec));
   const i1 = Math.min(peaks.length, Math.ceil(viewEnd / bucketSec));
   const body = peaks.body;
+  // For multi-channel dats every bucket holds (min,max) per channel
+  // contiguously. Combine into a single envelope by taking the min across
+  // all channels' min and max across all channels' max, so the rendered
+  // wave shows the loudest extreme.
+  const channels = Math.max(1, peaks.channels || 1);
+  const bucketBytes = 2 * channels;
 
   // Per-column min/max accumulators, in int8 space.
   const cols = new Int16Array(W * 2);
@@ -89,8 +118,14 @@ function drawPeaks(canvas, peaks, viewStart, viewEnd, color) {
     const t = i * bucketSec;
     const col = Math.floor(((t - viewStart) / len) * W);
     if (col < 0 || col >= W) continue;
-    const minV = body[2 * i];
-    const maxV = body[2 * i + 1];
+    const base = i * bucketBytes;
+    let minV = 127, maxV = -128;
+    for (let c = 0; c < channels; c++) {
+      const m1 = body[base + 2 * c];
+      const m2 = body[base + 2 * c + 1];
+      if (m1 < minV) minV = m1;
+      if (m2 > maxV) maxV = m2;
+    }
     const j = col * 2;
     if (minV < cols[j])     cols[j]     = minV;
     if (maxV > cols[j + 1]) cols[j + 1] = maxV;

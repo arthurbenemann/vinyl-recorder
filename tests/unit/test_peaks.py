@@ -15,40 +15,88 @@ from services.peaks import (
 
 
 def _write_dat(path: Path, sample_rate: int, samples_per_pixel: int,
-               buckets: list[tuple[int, int]], channels: int = 1,
-               flags_bits8: bool = True) -> Path:
-    """Write a synthetic audiowaveform v2 binary peak file. Each entry in
-    `buckets` is (min_int8, max_int8). Caller picks values in [-128, 127]."""
+               buckets, channels: int = 1, flags_bits8: bool = True,
+               version: int = 1) -> Path:
+    """Write a synthetic audiowaveform binary peak file.
+
+    Defaults to **v1 mono** because that's what audiowaveform produces by
+    default (it downmixes to mono unless --split-channels is passed). For
+    v1: 20-byte header, no `channels` field, body = 2*length int8 bytes.
+    For v2: 24-byte header with channels, body = 2*length*channels int8.
+    Each entry in `buckets` is either (min, max) for mono or
+    [(minC0, maxC0), (minC1, maxC1)…] for multi-channel.
+    """
     flags = 0x1 if flags_bits8 else 0x0
-    header = struct.pack(
-        "<iIiIIi",
-        2, flags, sample_rate, samples_per_pixel, len(buckets), channels,
-    )
+    if version == 1:
+        header = struct.pack("<iIiII", 1, flags, sample_rate, samples_per_pixel, len(buckets))
+    elif version == 2:
+        header = struct.pack(
+            "<iIiIIi",
+            2, flags, sample_rate, samples_per_pixel, len(buckets), channels,
+        )
+    else:
+        raise ValueError(f"unsupported version: {version}")
     body = bytearray()
-    for mn, mx in buckets:
-        body.append(mn & 0xFF)
-        body.append(mx & 0xFF)
+    for entry in buckets:
+        if version == 1 or channels == 1:
+            mn, mx = entry
+            body.append(mn & 0xFF)
+            body.append(mx & 0xFF)
+        else:
+            for mn, mx in entry:
+                body.append(mn & 0xFF)
+                body.append(mx & 0xFF)
     path.write_bytes(header + bytes(body))
     return path
 
 
 # ── Header / payload parsing ─────────────────────────────────────────────
 
-def test_read_header_decodes_v2_layout(tmp_path):
-    dat = _write_dat(tmp_path / "side.peaks.dat", 96000, 256, [(-10, 12), (-2, 5)])
+def test_read_header_v1_mono(tmp_path):
+    # The default audiowaveform output: v1 with a 20-byte header and an
+    # implicit channels=1 (no explicit field on the wire).
+    dat = _write_dat(tmp_path / "mono.peaks.dat", 96000, 256, [(-10, 12), (-2, 5)])
     head = read_header(dat)
     assert head == {
-        "version": 2, "flags": 1, "sample_rate": 96000,
+        "version": 1, "flags": 1, "sample_rate": 96000,
         "samples_per_pixel": 256, "length": 2, "channels": 1, "bits": 8,
+        "header_size": 20,
     }
 
 
-def test_read_peaks_int8_returns_payload(tmp_path):
-    # Round-trip a known sequence to confirm the bytes survive verbatim.
+def test_read_header_v2_stereo(tmp_path):
+    # v2 path covers the case where audiowaveform was invoked with
+    # --split-channels (we don't, but the parser must still handle it).
+    dat = _write_dat(tmp_path / "stereo.peaks.dat", 96000, 256,
+                     [[(-10, 12), (-8, 10)], [(-2, 5), (-1, 4)]],
+                     channels=2, version=2)
+    head = read_header(dat)
+    assert head["version"] == 2
+    assert head["channels"] == 2
+    assert head["length"] == 2
+    assert head["header_size"] == 24
+
+
+def test_read_header_rejects_unsupported_version(tmp_path):
+    # Any version that isn't 1 or 2 is malformed; refuse rather than
+    # mis-render. The wave editor surfaces this as "waveform unavailable".
+    bad = tmp_path / "bad.dat"
+    bad.write_bytes(struct.pack("<iIiII", 99, 1, 48000, 256, 0))
+    with pytest.raises(ValueError, match="version"):
+        read_header(bad)
+
+
+def test_read_peaks_int8_v1_payload(tmp_path):
+    # Round-trip a known v1 sequence to confirm the bytes survive verbatim
+    # AND the body offset is 20 (not 24) — the bug that caused the editor's
+    # "Invalid typed array length" was reading 4 body bytes as an int32
+    # `channels` field at offset 20.
     dat = _write_dat(tmp_path / "p.dat", 48000, 128, [(-50, 70), (5, 120), (-127, -5)])
     head, body = read_peaks_int8(dat)
+    assert head["version"] == 1
+    assert head["header_size"] == 20
     assert head["length"] == 3
-    assert list(body) == [206, 70, 5, 120, 129, 251]  # signed -> unsigned bytes
+    assert list(body) == [206, 70, 5, 120, 129, 251]
 
 
 def test_read_peaks_int8_rejects_16bit(tmp_path):
@@ -154,3 +202,75 @@ def test_silence_loud_album_returns_no_runs(tmp_path):
     # Threshold below every bucket's envelope -> no runs detected.
     dat = _write_dat(tmp_path / "loud.dat", 256, 256, [(-100, 100)] * 5)
     assert silence_runs_from_dat(dat, threshold_int8=10, min_duration_s=1.0) == []
+
+
+def test_silence_v2_stereo_combines_channels(tmp_path):
+    # v2 stereo: each bucket holds (min,max) per channel contiguously. The
+    # scanner's envelope is the loudest extreme across both channels — a
+    # quiet left + loud right must NOT be flagged as silence even if left
+    # alone would qualify. Without the channel-combine fix the scanner
+    # would treat each channel's bytes as a separate bucket and over-detect.
+    dat = _write_dat(
+        tmp_path / "stereo.peaks.dat", 256, 256,
+        [
+            [(-50, 50), (-48, 48)],   # bucket 0: loud both
+            [(-1, 1),   (-1, 1)],     # bucket 1: quiet both
+            [(-1, 1),   (-1, 1)],     # bucket 2: quiet both
+            [(-50, 50), (-1, 1)],     # bucket 3: loud L (despite quiet R) → not silence
+            [(-1, 1),   (-1, 1)],     # bucket 4: quiet both
+            [(-50, 50), (-50, 50)],   # bucket 5: loud
+        ],
+        channels=2, version=2,
+    )
+    runs = silence_runs_from_dat(dat, threshold_int8=8, min_duration_s=1.5)
+    # Only buckets 1+2 (2 s) qualify; bucket 4 alone (1 s) is too short.
+    assert len(runs) == 1
+    assert runs[0]["start"] == pytest.approx(1.0)
+    assert runs[0]["end"]   == pytest.approx(3.0)
+
+
+# ── Integration: real audiowaveform binary ───────────────────────────────
+# Skipped when audiowaveform isn't on PATH so a fresh dev install (no apt
+# / brew needed) still passes the unit suite. The Docker image always
+# carries audiowaveform so the CI e2e job exercises this path implicitly;
+# this test is a fast local guard against regressions in the
+# audiowaveform-output → parser handshake.
+
+import shutil
+_AW_AVAILABLE = (shutil.which("audiowaveform") is not None
+                 and shutil.which("ffmpeg") is not None)
+
+
+@pytest.mark.skipif(not _AW_AVAILABLE,
+                    reason="audiowaveform/ffmpeg not on PATH")
+def test_audiowaveform_v1_output_round_trips(tmp_path):
+    # Generate a real FLAC, run audiowaveform exactly as render_peaks does,
+    # then verify the parser reads coherent values. Catches the v1/v2
+    # regression that produced "Invalid typed array length" in the editor.
+    import subprocess
+    from services.peaks import render_peaks
+    flac = tmp_path / "sine.flac"
+    subprocess.run(
+        ["ffmpeg", "-f", "lavfi", "-i", "sine=f=440:duration=2",
+         "-ar", "48000", "-ac", "2", "-c:a", "flac", "-y", str(flac)],
+        check=True, capture_output=True,
+    )
+    dat = tmp_path / "sine.peaks.dat"
+    render_peaks(flac, dat)
+    head = read_header(dat)
+    # audiowaveform downmixes to mono → v1 by default. If this ever flips
+    # to v2, the JS parser's v1 branch becomes dead code and we should
+    # re-evaluate the editor's channel-combine path.
+    assert head["version"] == 1
+    assert head["channels"] == 1
+    assert head["sample_rate"] == 48000
+    assert head["samples_per_pixel"] == 256
+    assert head["length"] > 0
+    # The body has exactly 2*length bytes (min/max int8 per bucket).
+    body_bytes = dat.stat().st_size - head["header_size"]
+    assert body_bytes == head["length"] * 2
+    # ffmpeg's lavfi sine generator outputs around -20 dBFS by default —
+    # we don't care about the exact level, just that it parses to a real
+    # finite number (not None, not the v1/v2 bug's nonsense value).
+    db = peak_db_from_dat(dat)
+    assert db is not None and -60 < db < 0.5

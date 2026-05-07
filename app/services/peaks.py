@@ -31,38 +31,34 @@ PEAKS_BITS = 8
 
 
 def render_peaks(src: Path, out_dat: Path) -> None:
-    """Run `ffmpeg | audiowaveform` to produce an 8-bit mono .peaks.dat at
-    `out_dat`. Atomic via .tmp + os.replace so a crash mid-render leaves
-    either the previous file or nothing — never a half-written .dat that
-    the parser would accept and mis-render."""
+    """Run audiowaveform directly against `src` (a FLAC) and produce an
+    8-bit mono `.peaks.dat` at `out_dat`. Atomic via .tmp + os.replace so a
+    crash mid-render leaves either the previous file or nothing.
+
+    audiowaveform reads FLAC natively through libsndfile and downmixes to
+    a single mono envelope by default — we let it do that. We previously
+    tried to pre-mix via `ffmpeg | audiowaveform` over stdin, but ffmpeg
+    can't seek back to write a WAV header's real frame count over a pipe
+    so audiowaveform reads `frames=INT32_MAX` and silently produces no
+    output.
+    """
     out_dat.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_dat.with_suffix(".dat.tmp")
-    ff = subprocess.Popen(
-        ["ffmpeg", "-loglevel", "error",
+    proc = subprocess.run(
+        ["audiowaveform",
          "-i", str(src),
-         "-ac", "1",
-         "-f", "wav", "-"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    )
-    aw = subprocess.Popen(
-        ["audiowaveform", "--input-format", "wav", "-i", "-",
          "-o", str(tmp),
          "-z", str(PEAKS_SAMPLES_PER_PIXEL),
          "-b", str(PEAKS_BITS),
          "--output-format", "dat"],
-        stdin=ff.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        capture_output=True, check=False,
     )
-    if ff.stdout:
-        ff.stdout.close()  # let ffmpeg see SIGPIPE if aw exits early
-    aw_err = (aw.communicate()[1] or b"")
-    ff_err = (ff.stderr.read() if ff.stderr else b"") or b""
-    ff.wait()
-    if aw.returncode != 0 or ff.returncode != 0:
+    if proc.returncode != 0:
         try: tmp.unlink(missing_ok=True)
         except Exception: pass
-        msg = (aw_err or ff_err).decode("utf-8", errors="replace")[:500]
+        msg = (proc.stderr or proc.stdout or b"").decode("utf-8", errors="replace")[:500]
         raise RuntimeError(f"audiowaveform failed: {msg or 'unknown error'}")
-    if not tmp.exists() or tmp.stat().st_size <= 24:
+    if not tmp.exists() or tmp.stat().st_size <= 20:
         try: tmp.unlink(missing_ok=True)
         except Exception: pass
         raise RuntimeError("audiowaveform produced empty output")
@@ -80,21 +76,45 @@ def is_fresh(dat: Path, src: Path) -> bool:
 
 
 # ── Header parser ────────────────────────────────────────────────────────
+#
+# audiowaveform's binary dat has two header layouts (see WaveformBuffer.cpp:
+# `version = channels_ == 1 ? 1 : 2`):
+#
+#   v1 (mono, 20-byte header, body starts at offset 20):
+#     i32 version=1, u32 flags, i32 sample_rate, i32 samples_per_pixel,
+#     u32 length
+#
+#   v2 (multi-channel, 24-byte header, body starts at offset 24):
+#     i32 version=2, u32 flags, i32 sample_rate, i32 samples_per_pixel,
+#     u32 length, i32 channels
+#
+# audiowaveform downmixes to mono by default, so the common case is v1.
+# Misreading a v1 file as v2 gives a wildly bogus `channels` field
+# (the first 4 body bytes interpreted as int32) — that was the root cause
+# of the "Invalid typed array length" error in the wave editor.
 
 def read_header(dat: Path) -> dict:
-    """Parse the audiowaveform v2 binary header (24 bytes, little-endian).
+    """Parse the audiowaveform v1 or v2 binary header.
 
-    Layout: i32 version, u32 flags, i32 sample_rate, i32 samples_per_pixel,
-    u32 length, i32 channels. We require flags' bit 0 = 1 (8-bit data) since
-    every helper downstream assumes int8 min/max.
+    Returns a dict with `version`, `flags`, `sample_rate`,
+    `samples_per_pixel`, `length`, `channels`, `bits`, and `header_size`
+    (where the body starts).
     """
     with open(dat, "rb") as f:
         head = f.read(24)
-    if len(head) < 24:
+    if len(head) < 20:
         raise ValueError("short audiowaveform header")
-    version, flags, sample_rate, spp, length, channels = struct.unpack(
-        "<iIiIIi", head,
-    )
+    version, flags, sample_rate, spp, length = struct.unpack("<iIiII", head[:20])
+    if version == 1:
+        channels = 1
+        header_size = 20
+    elif version == 2:
+        if len(head) < 24:
+            raise ValueError("short v2 audiowaveform header")
+        channels = struct.unpack("<i", head[20:24])[0]
+        header_size = 24
+    else:
+        raise ValueError(f"unsupported audiowaveform dat version: {version}")
     return {
         "version": version,
         "flags": flags,
@@ -103,30 +123,24 @@ def read_header(dat: Path) -> dict:
         "length": length,
         "channels": channels,
         "bits": 8 if (flags & 0x1) else 16,
+        "header_size": header_size,
     }
 
 
 def read_peaks_int8(dat: Path) -> tuple[dict, bytes]:
     """Return (header, raw int8 min/max payload).
 
-    Mono => 2*length bytes. Caller iterates bytes interpreting them as
-    int8 (`v if v < 128 else v - 256`)."""
+    Mono v1 => 2*length bytes (min,max per bucket). Stereo v2 => 4*length
+    bytes (minL,maxL,minR,maxR per bucket). Caller iterates bytes
+    interpreting them as int8 (`v if v < 128 else v - 256`).
+    """
+    head = read_header(dat)
+    if not (head["flags"] & 0x1):
+        raise ValueError("expected 8-bit peak data; got 16-bit")
     with open(dat, "rb") as f:
-        head = f.read(24)
-        if len(head) < 24:
-            raise ValueError("short audiowaveform header")
-        version, flags, sample_rate, spp, length, channels = struct.unpack(
-            "<iIiIIi", head,
-        )
-        if not (flags & 0x1):
-            raise ValueError("expected 8-bit peak data; got 16-bit")
+        f.seek(head["header_size"])
         body = f.read()
-    return (
-        {"version": version, "flags": flags, "sample_rate": sample_rate,
-         "samples_per_pixel": spp, "length": length, "channels": channels,
-         "bits": 8},
-        body,
-    )
+    return head, body
 
 
 # ── Peak from .dat ───────────────────────────────────────────────────────
@@ -163,8 +177,9 @@ def silence_runs_from_dat(
     min_duration_s: float,
 ) -> list[dict]:
     """Walk the .dat and emit `[{start, end, duration}, ...]` for every run
-    of buckets whose absolute envelope `max(|min|, |max|)` stays below
-    `threshold_int8` for at least `min_duration_s` seconds.
+    of buckets whose absolute envelope `max(|min|, |max|)` (combined across
+    all channels) stays below `threshold_int8` for at least
+    `min_duration_s` seconds.
 
     Returns the same shape as `parse_silencedetect()` so the wave-editor's
     silence-band rendering doesn't need to branch on the producer.
@@ -178,18 +193,27 @@ def silence_runs_from_dat(
     sample_rate = head["sample_rate"] or 1
     spp = head["samples_per_pixel"] or 1
     length = head["length"]
+    channels = max(1, head.get("channels") or 1)
     bucket_seconds = spp / sample_rate
     if bucket_seconds <= 0:
         return []
+    bucket_bytes = 2 * channels  # min,max per channel, all int8
     out: list[dict] = []
     run_start: Optional[float] = None
-    n = min(length, len(body) // 2)
+    n = min(length, len(body) // bucket_bytes)
     for i in range(n):
-        mn = body[2 * i]
-        mx = body[2 * i + 1]
-        if mn >= 128: mn -= 256
-        if mx >= 128: mx -= 256
-        level = max(-mn, mx, 0)
+        # Combined envelope across all channels: pick the loudest extreme.
+        level = 0
+        base = i * bucket_bytes
+        for c in range(channels):
+            mn = body[base + 2 * c]
+            mx = body[base + 2 * c + 1]
+            if mn >= 128: mn -= 256
+            if mx >= 128: mx -= 256
+            a = -mn if mn < 0 else mn
+            if a > level: level = a
+            a = -mx if mx < 0 else mx
+            if a > level: level = a
         t_start = i * bucket_seconds
         if level < threshold_int8:
             if run_start is None:
