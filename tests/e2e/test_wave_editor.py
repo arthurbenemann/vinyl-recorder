@@ -89,8 +89,9 @@ def _drive(page, sides):
             for (const n of names) {
                 const cb = document.querySelector(
                     `input.row-check[data-fname="${n}"]`);
-                cb.checked = true;
-                cb.dispatchEvent(new Event('change', { bubbles: true }));
+                // Row checkboxes wire toggleRow via `onclick`, not `onchange` —
+                // `cb.click()` toggles state and fires the handler in one go.
+                if (!cb.checked) cb.click();
             }
         }
         """,
