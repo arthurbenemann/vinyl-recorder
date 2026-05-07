@@ -43,8 +43,80 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 .health-label { color: var(--muted); }
 
 /* Main grid */
-.main { display: grid; grid-template-columns: 340px 1fr; min-height: calc(100vh - 53px); }
-.sidebar { border-right: 0.5px solid var(--border2); padding: 20px; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.main { display: grid; grid-template-columns: 340px 1fr; min-height: calc(100vh - 53px); transition: grid-template-columns 0.2s ease; }
+.sidebar { border-right: 0.5px solid var(--border2); padding: 20px; display: flex; flex-direction: column; gap: 20px; min-width: 0; position: relative; transition: padding 0.2s ease; }
+
+/* Collapsible sidebar — chevron toggle that shrinks the 340px column to a
+   56px rail showing only REC button, timer, and mini VU. State is persisted
+   in localStorage; auto-expands when a recording starts. The collapsed
+   styles are scoped to ≥721px so the existing mobile stacked layout is
+   unaffected by a stored "collapsed" flag. */
+.sidebar-toggle {
+  position: absolute; top: 10px; right: 10px;
+  width: 22px; height: 22px; border-radius: 4px;
+  background: transparent; border: 0.5px solid var(--border2);
+  color: var(--muted); font-size: 14px; cursor: pointer; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: color 0.12s, background 0.12s;
+  z-index: 2;
+}
+.sidebar-toggle:hover { color: var(--text); background: var(--surface2); }
+.sidebar-toggle-icon { display: inline-block; transition: transform 0.2s ease; }
+
+@media (min-width: 721px) {
+  .main[data-collapsed] { grid-template-columns: 56px 1fr; }
+  .main[data-collapsed] .sidebar-toggle-icon { transform: rotate(180deg); }
+  .main[data-collapsed] .sidebar { padding: 38px 4px 14px; gap: 14px; align-items: center; }
+  .main[data-collapsed] .sidebar-toggle { top: 8px; right: 50%; transform: translateX(50%); }
+
+  /* Hide non-essential sections in the rail. The pause button is left alone
+     so its [hidden] attribute (set by applyRecordState when not recording)
+     still controls visibility — it appears beneath REC during capture and
+     visually flips to ▶ when paused, which is the only visible cue that the
+     session is paused while the rail is collapsed. */
+  .main[data-collapsed] .sb-section:not(.sb-section-transport):not(.sb-section-vu) { display: none; }
+  .main[data-collapsed] .sb-section-transport .transport-head,
+  .main[data-collapsed] .sb-section-transport .timer-hint,
+  .main[data-collapsed] .sb-section-transport .prog-wrap { display: none; }
+
+  /* Compact transport: REC + (pause when recording) + tiny timer, stacked */
+  .main[data-collapsed] .sb-section-transport { width: 100%; display: flex; justify-content: center; }
+  .main[data-collapsed] .transport { flex-direction: column; gap: 6px; align-items: center; }
+  .main[data-collapsed] .pause-btn { width: 28px; height: 28px; font-size: 12px; }
+  .main[data-collapsed] .timer-block { flex: 0 0 auto; width: 100%; text-align: center; }
+  .main[data-collapsed] .timer { font-size: 11px; letter-spacing: 0.02em; text-align: center; }
+
+  /* Vertical VU bars — same JS drives them via the --vu-fill / --vu-peak
+     custom properties; here we just remap which CSS property they animate. */
+  .main[data-collapsed] .sb-section-vu { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .main[data-collapsed] .sb-section-vu .label,
+  .main[data-collapsed] .sb-section-vu .vu-label,
+  .main[data-collapsed] .sb-section-vu .vu-db,
+  .main[data-collapsed] .sb-section-vu .vu-clip { display: none; }
+  .main[data-collapsed] .sb-section-vu .vu-wrap {
+    padding: 0; gap: 8px; background: transparent; border: none;
+    flex-direction: row; align-items: stretch; height: 80px;
+  }
+  .main[data-collapsed] .sb-section-vu .vu-channel { flex-direction: column; gap: 0; width: 6px; }
+  .main[data-collapsed] .sb-section-vu .vu-track {
+    width: 6px; height: 80px; flex: 0 0 auto;
+    background: linear-gradient(to top,
+      #2f8a18 0%, #2f8a18 55%,
+      #b88a18 70%, #b88a18 80%,
+      #e24b4a 92%, #e24b4a 100%);
+  }
+  .main[data-collapsed] .sb-section-vu .vu-mask {
+    top: 0; left: 0; right: 0; bottom: auto;
+    width: 100%; height: var(--vu-fill, 100%);
+    transition: height 0.04s linear; will-change: height;
+  }
+  .main[data-collapsed] .sb-section-vu .vu-peak {
+    left: 0; right: 0; top: auto;
+    width: 100%; height: 2px;
+    bottom: var(--vu-peak, 0%);
+    transition: bottom 0.08s linear;
+  }
+}
 /* min-width:0 lets the 1fr column shrink below its content's intrinsic min
    so the page actually resizes when the window narrows — without this, the
    table colgroup widths jam the grid open at ~940px. */
@@ -86,8 +158,8 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
     #b88a18 70%, #b88a18 80%,
     #e24b4a 92%, #e24b4a 100%);
 }
-.vu-mask { position: absolute; top: 0; right: 0; height: 100%; background: var(--surface2); transition: width 0.04s linear; will-change: width; }
-.vu-peak { position: absolute; top: 0; height: 100%; width: 2px; background: #fff; box-shadow: 0 0 4px rgba(255,255,255,0.6); transition: left 0.08s linear; }
+.vu-mask { position: absolute; top: 0; right: 0; height: 100%; width: var(--vu-fill, 100%); background: var(--surface2); transition: width 0.04s linear; will-change: width; }
+.vu-peak { position: absolute; top: 0; height: 100%; width: 2px; left: var(--vu-peak, 0%); background: #fff; box-shadow: 0 0 4px rgba(255,255,255,0.6); transition: left 0.08s linear; }
 .vu-db { font-family: var(--mono); font-size: 9px; color: var(--muted); width: 32px; text-align: right; font-variant-numeric: tabular-nums; }
 /* Sticky clip indicator. Latches on full-scale peaks; click to acknowledge. */
 .vu-clip {
@@ -428,4 +500,8 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
   .lib-table th, .lib-table td { padding: 8px 6px; font-size: 11px; }
   .sidebar .log { display: none; }
   .toast-container { top: 10px; right: 10px; left: 10px; max-width: none; }
+  /* Hide the chevron on mobile — the rail style only applies ≥721px so a
+     stored "collapsed" flag has no visual effect here, and the toggle would
+     be a no-op for users. */
+  .sidebar-toggle { display: none; }
 }

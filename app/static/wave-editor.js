@@ -212,10 +212,10 @@ function openWaveEditor(fname) {
   drawAll();
   document.getElementById('we-modal').hidden = false;
   document.addEventListener('keydown', weKeyDown);
-  // Recreate cuts from album.json's saved plan (a prior in-editor draft or
-  // a completed split). If nothing's there, fall back to auto-loading a
-  // tracklist from a saved Discogs / MBID. The localStorage-based draft
-  // path is gone — #71 moved drafts to server-side `album.json.plan`.
+  // Repopulate the editor from the saved plan in album.json (if any). When
+  // no plan exists yet, fall back to the album's saved Discogs / MB id so a
+  // first-time open of an MB-tagged album auto-suggests a tracklist instead
+  // of forcing the user to run the search by hand.
   weLoadExistingSplit(fname).then(() => _weAutoLoadFromIds(a));
 }
 

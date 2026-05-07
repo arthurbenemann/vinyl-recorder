@@ -36,7 +36,10 @@
 
   <!-- SIDEBAR: capture controls -->
   <div class="sidebar">
-    <div>
+    <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()" title="Collapse panel" aria-expanded="true">
+      <span class="sidebar-toggle-icon">‹</span>
+    </button>
+    <div class="sb-section">
       <div class="label">Stream source</div>
       <div class="stream-row">
         <input id="stream-url" value="https://ice1.somafm.com/groovesalad-256-mp3" placeholder="http://host:port/stream" />
@@ -50,14 +53,14 @@
       </div>
     </div>
 
-    <div>
+    <div class="sb-section sb-section-vu">
       <div class="label">Input levels</div>
       <div class="vu-wrap">
         <div class="vu-channel">
           <span class="vu-label">L</span>
           <div class="vu-track">
-            <div class="vu-mask" id="mask-L" style="width:100%"></div>
-            <div class="vu-peak" id="peak-L" style="left:0%"></div>
+            <div class="vu-mask" id="mask-L" style="--vu-fill:100%"></div>
+            <div class="vu-peak" id="peak-L" style="--vu-peak:0%"></div>
           </div>
           <span class="vu-db" id="db-L">−∞</span>
           <button class="vu-clip" id="clip-L" hidden onclick="clearClip('L')" title="Click to clear — clipping detected on L">CLIP</button>
@@ -65,8 +68,8 @@
         <div class="vu-channel">
           <span class="vu-label">R</span>
           <div class="vu-track">
-            <div class="vu-mask" id="mask-R" style="width:100%"></div>
-            <div class="vu-peak" id="peak-R" style="left:0%"></div>
+            <div class="vu-mask" id="mask-R" style="--vu-fill:100%"></div>
+            <div class="vu-peak" id="peak-R" style="--vu-peak:0%"></div>
           </div>
           <span class="vu-db" id="db-R">−∞</span>
           <button class="vu-clip" id="clip-R" hidden onclick="clearClip('R')" title="Click to clear — clipping detected on R">CLIP</button>
@@ -74,7 +77,7 @@
       </div>
     </div>
 
-    <div>
+    <div class="sb-section sb-section-transport">
       <div class="transport-head">
         <div class="label">Transport</div>
         <select class="dur" id="dur-sel" title="Max recording length">
@@ -100,7 +103,7 @@
       </div>
     </div>
 
-    <div>
+    <div class="sb-section">
       <div class="label">Log</div>
       <div class="log" id="log">Ready.</div>
     </div>

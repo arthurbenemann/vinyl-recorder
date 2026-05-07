@@ -1,3 +1,14 @@
+## v0.6.0 — 2026-05-07
+
+### ⚠ Breaking Changes
+- **library:** Album-as-folder workflow (raw → in-progress → music) with demote (#71)
+
+### Features
+- **ui:** Collapsible recording sidebar with persistent state (#78)
+
+### Bug Fixes
+- Total gaps never zero on clean connection (#73) (#74)
+
 ## v0.5.1 — 2026-05-06
 
 ### Features

@@ -39,8 +39,12 @@ function updateMeter(ch, level) {
   else if (++peakAge[ch] > PEAK_HOLD_FRAMES) { peak[ch] = Math.max(0, peak[ch] - PEAK_DECAY); }
 
   const pct = Math.min(lvl[ch] * 100, 100);
-  document.getElementById('mask-' + ch).style.width = (100 - pct) + '%';
-  document.getElementById('peak-' + ch).style.left = Math.min(peak[ch] * 100, 99.5) + '%';
+  // The mask hides the unfilled portion of the bar, peak marks the latched
+  // hold position. Both are written as CSS custom properties so the same
+  // values drive horizontal (default) and vertical (collapsed-rail) tracks
+  // without JS having to know which orientation is active.
+  document.getElementById('mask-' + ch).style.setProperty('--vu-fill', (100 - pct) + '%');
+  document.getElementById('peak-' + ch).style.setProperty('--vu-peak', Math.min(peak[ch] * 100, 99.5) + '%');
   document.getElementById('db-' + ch).textContent = dbStr(peak[ch]);
 }
 
@@ -564,6 +568,33 @@ function toggleHealthPanel() {
   if (!panel) return;
   panel.hidden = !panel.hidden;
 }
+
+// ── Collapsible sidebar ──────────────────────────────────────────────────
+// The capture panel can shrink to a 56px rail (REC button + tiny timer + mini
+// VU). State persists across reloads; auto-expands when a recording starts so
+// the user always sees the full transport view during capture.
+const SIDEBAR_KEY = 'sidebarCollapsed';
+function applySidebarState(collapsed) {
+  const main = document.querySelector('.main');
+  if (!main) return;
+  if (collapsed) main.setAttribute('data-collapsed', '');
+  else main.removeAttribute('data-collapsed');
+  const btn = document.getElementById('sidebar-toggle');
+  if (btn) {
+    btn.setAttribute('aria-expanded', String(!collapsed));
+    btn.title = collapsed ? 'Expand panel' : 'Collapse panel';
+  }
+}
+function toggleSidebar() {
+  const collapsed = !document.querySelector('.main').hasAttribute('data-collapsed');
+  applySidebarState(collapsed);
+  try { localStorage.setItem(SIDEBAR_KEY, collapsed ? '1' : '0'); } catch (_) {}
+}
+document.addEventListener('DOMContentLoaded', () => {
+  let saved = null;
+  try { saved = localStorage.getItem(SIDEBAR_KEY); } catch (_) {}
+  applySidebarState(saved === '1');  // default = expanded
+});
 
 // ── Library ───────────────────────────────────────────────────────────────
 let filesByName = {};
