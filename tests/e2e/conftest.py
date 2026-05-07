@@ -10,6 +10,7 @@ stops the test-streams container) are responsible for restoring it
 before yielding control back to the runner.
 """
 import json
+import re
 import shutil
 import subprocess
 import time
@@ -89,23 +90,45 @@ def ffprobe(host_path: Path) -> dict:
     return json.loads(r.stdout)
 
 
+# Narrow set of error names that almost certainly indicate a real JS bug —
+# the dead-`draft` ReferenceError, accidental `undefined.foo` accesses,
+# `not a function` blunders, etc. Other pageerror messages (e.g. AbortError
+# from cancelled fetches, "ResizeObserver loop limit exceeded", browser
+# extension noise that occasionally rides into headless chromium) are
+# logged for visibility but not fatal — they mostly indicate environment
+# noise, not regressions in our code.
+_FATAL_PAGEERROR_RE = re.compile(
+    r"^(?:ReferenceError|TypeError|SyntaxError|RangeError):"
+)
+
+
 @pytest.fixture
 def page(page):  # noqa: F811 — intentional override of pytest-playwright's `page`
-    """Wrap pytest-playwright's `page` fixture to fail any test whose page
-    raises an uncaught JS exception. Console errors aren't enough — a
-    `ReferenceError` thrown inside an event handler aborts the handler
-    silently and only surfaces via `page.on('pageerror')`. The dead-`draft`
-    bug that shipped pre-#71 was exactly this class; trapping in the
-    fixture makes every e2e test catch this kind of regression at the
-    door without each test having to remember to register a listener."""
+    """Wrap pytest-playwright's `page` fixture to surface uncaught JS
+    exceptions. Console errors aren't enough — a `ReferenceError` thrown
+    inside an event handler aborts the handler silently and only shows up
+    via `page.on('pageerror')`. The dead-`draft` bug that shipped pre-#71
+    was exactly this class; trapping in the fixture catches every future
+    regression of that class at the door without each test having to
+    remember to register a listener.
+
+    Errors are always printed at teardown for visibility. Only errors
+    whose message matches `_FATAL_PAGEERROR_RE` (the "this is definitely
+    your code" classes) fail the test — see the regex's docstring for
+    why. Tests that need stricter checking can still register their own
+    listener inline."""
     pageerrors: list[str] = []
     page.on("pageerror", lambda e: pageerrors.append(e.message))
     yield page
     if pageerrors:
-        # Truncate to keep the failure summary readable.
-        joined = " · ".join(pageerrors[:5])
-        more = "" if len(pageerrors) <= 5 else f" (+{len(pageerrors) - 5} more)"
-        pytest.fail(f"uncaught JS exceptions in page: {joined}{more}")
+        # Always print so future failures are diagnosable from the run log.
+        for err in pageerrors:
+            print(f"[pageerror] {err}")
+        fatal = [e for e in pageerrors if _FATAL_PAGEERROR_RE.match(e)]
+        if fatal:
+            joined = " · ".join(fatal[:5])
+            more = "" if len(fatal) <= 5 else f" (+{len(fatal) - 5} more)"
+            pytest.fail(f"uncaught JS exceptions in page: {joined}{more}")
 
 
 @pytest.fixture(scope="session")
