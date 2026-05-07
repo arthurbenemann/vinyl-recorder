@@ -1,0 +1,43 @@
+services:
+  vinyl-recorder:
+    build: .
+    container_name: vinyl-recorder
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./output:/output
+    environment:
+      - OUTPUT_DIR=/output
+      # Pre-fill the "Stream source" field. Any HTTP(S) audio stream URL works.
+      # If pointing at a pi-recorder host, the UI auto-detects the /info + /gain
+      # control endpoints and shows an analog-PGA gain slider.
+      - DEFAULT_STREAM_URL=http://192.168.100.66:8000/stream
+      # When true, the UI connects to DEFAULT_STREAM_URL automatically on page load.
+      # Browsers block autoplay without user interaction — if blocked, the log shows the error
+      # and the user can press "connect" to grant the gesture.
+      - AUTO_CONNECT=true
+      # Initial ADC gain in dB applied on connect to a pi-recorder host (range -12 to +40,
+      # 0.5 dB step). Leave blank to keep whatever the Pi was last set to.
+      - DEFAULT_GAIN_DB=-6
+      # Pre-roll buffer: prepend the last N seconds of upstream audio to a new
+      # recording so the first groove is never missed. The ring lives in
+      # UpstreamSession; capacity is sample_rate × channels × bytes_per_sample × N.
+      # 0 disables.
+      - PRE_ROLL_SECONDS=5
+      # Wave-editor split defaults — applied each time the split modal is opened.
+      # Normalize on=true: peak-normalize every track using one gain value across the
+      # whole album, so relative loudness between sides is preserved.
+      - DEFAULT_SPLIT_NORMALIZE=true
+      # Target peak in dBFS used when normalize is on. -1.0 dB matches Audacity's
+      # default; lower = more headroom for inter-sample peaks. Not exposed in the UI.
+      - DEFAULT_SPLIT_TARGET_PEAK_DB=-1.0
+      # Output bit depth for split tracks. 0 = keep source (24-bit from the Pi),
+      # 16 = downconvert to 16-bit (≈30% smaller files, plenty for vinyl), 24 = force 24-bit.
+      - DEFAULT_SPLIT_BIT_DEPTH=0
+      # Discogs collection-aware tagging. When DISCOGS_USERNAME is set, the auto-tag
+      # candidate panel surfaces matches from your owned collection above the
+      # MusicBrainz results. DISCOGS_TOKEN is optional — it raises Discogs API rate
+      # limits and is required for private collections. Leave both blank to disable.
+      - DISCOGS_USERNAME=
+      - DISCOGS_TOKEN=
+    restart: unless-stopped

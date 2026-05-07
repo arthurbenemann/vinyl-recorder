@@ -1,0 +1,15 @@
+[Unit]
+Description=Pi vinyl capture service (HiFiBerry DAC-ADC Pro → HTTP)
+After=sound.target network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/pi-recorder/server.py
+Restart=on-failure
+User=pi
+Environment=PORT=8000
+Environment=SAMPLE_RATE=96000
+Environment=BIT_DEPTH=24
+
+[Install]
+WantedBy=multi-user.target

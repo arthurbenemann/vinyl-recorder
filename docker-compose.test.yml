@@ -1,0 +1,69 @@
+# Test-stream overlay. Adds a synthetic audio source container and points
+# vinyl-recorder at it, so the UI can be exercised without a real Pi.
+#
+# Run with:
+#   make test
+# or:
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up --build -d
+#
+# Then open http://localhost:8080 in a browser. Switch streams from the UI's
+# "Stream source" field (the test-streams container serves /loop, /album,
+# and /clip), or change DEFAULT_STREAM_URL below.
+#
+# Both services run on a private bridge network — the recorder reaches
+# test-streams via its compose service name, and the recorder publishes
+# 8080 to the host so the UI is reachable from a browser. This overrides
+# the host-network default in docker-compose.yml so the same overlay works
+# on Linux, macOS, and Windows.
+services:
+  test-streams:
+    build: ./test-streams
+    container_name: vinyl-test-streams
+    # Custom bridge network — only the recorder consumes /stream, no need to
+    # publish 8090 to the host.
+    networks: [vinyl-test]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/', timeout=2)"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
+
+  vinyl-recorder:
+    # Override the main file's host networking so the same overlay works on
+    # macOS / Windows where host networking doesn't expose ports to the
+    # browser. Pair with an explicit publish so localhost:8080 reaches the UI.
+    network_mode: !reset null
+    networks: [vinyl-test]
+    ports:
+      - "8080:8080"
+    depends_on:
+      test-streams:
+        condition: service_healthy
+    environment:
+      # Container DNS — `test-streams` resolves to the bridge-net IP. This
+      # is what the recorder uses to pull the upstream stream; the user
+      # never sees this URL.
+      DEFAULT_STREAM_URL: http://test-streams:8090/loop
+      AUTO_CONNECT: "true"
+      # The synthetic source has no PGA — clear any default so the UI doesn't
+      # try to push a gain to a non-existent /gain endpoint.
+      DEFAULT_GAIN_DB: ""
+      # Disable pre-roll for e2e tests. The base compose has PRE_ROLL_SECONDS=5,
+      # which would prepend ~5 s of buffered upstream audio onto every recording
+      # (since AUTO_CONNECT means the ring is full by the time tests start).
+      # That breaks the wall-clock duration assertions in test_record_loop and
+      # test_auto_stop. Pre-roll has its own unit-test coverage; this overlay's
+      # job is to make timing assertions reproducible.
+      PRE_ROLL_SECONDS: "0"
+    # No healthcheck override — inherits the Dockerfile's HEALTHCHECK (probes
+    # /health). `compose up --wait` blocks until that flips to healthy, so
+    # e2e tests can't race the FastAPI lifespan. The fixture still polls
+    # /api/status separately for upstream.connected — a stricter readiness
+    # signal that AUTO_CONNECT has actually completed.
+
+networks:
+  vinyl-test:
+    driver: bridge

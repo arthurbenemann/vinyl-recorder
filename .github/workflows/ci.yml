@@ -1,0 +1,154 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Ruff check
+        run: ruff check app pi tests
+
+      - name: Syntax check
+        run: python -m compileall -q app pi tests
+
+  tests:
+    name: Unit + API tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test deps
+        # Pinned to the same shape the runtime image installs (FastAPI +
+        # uvicorn) plus pytest tooling. httpx is what TestClient uses
+        # internally; pytest-cov publishes a coverage report at the end.
+        run: pip install pytest pytest-cov fastapi "uvicorn[standard]" httpx
+
+      - name: Run unit + API tests with coverage
+        run: pytest --cov=app --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  docker:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: vinyl-recorder:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image size
+        # Surfaces the final image size in the build log so PRs that change
+        # the Dockerfile (e.g. base swap) can be evaluated against `main`
+        # without pulling locally.
+        run: |
+          docker images vinyl-recorder:ci --format 'IMAGE SIZE: {{.Size}}'
+          docker history vinyl-recorder:ci --no-trunc --format 'table {{.Size}}\t{{.CreatedBy}}'
+
+      - name: Validate docker-compose
+        run: docker compose -f docker-compose.yml config --quiet
+
+  e2e:
+    name: E2E (compose + record from /loop)
+    runs-on: ubuntu-latest
+    # The e2e job exercises the full ffmpeg pipeline through real containers,
+    # so it needs the docker socket and ffprobe. Builds both images, brings
+    # the stack up via the test-streams overlay, records a 5 s clip, and
+    # asserts the resulting FLAC. ~2 min wall time.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test deps
+        # ffmpeg is pre-installed on ubuntu-latest runners; no apt needed.
+        # pytest-playwright drives the headless-chromium frontend smoke tests.
+        run: pip install pytest pytest-playwright
+
+      - name: Cache Playwright browsers
+        # Chromium + Linux deps are ~150 MB; cache survives across runs so
+        # `playwright install` is a near-no-op after the first hit. Key on
+        # this workflow file's hash so a deliberate version bump invalidates.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install playwright browsers
+        # No-op on cache hit (chromium binary already in ~/.cache/ms-playwright);
+        # --with-deps still runs apt for the system libs but those are tiny.
+        run: playwright install --with-deps chromium
+
+      - name: Build stack with layer cache
+        # docker/bake-action runs `buildx bake` against the compose files and
+        # pulls/pushes layer cache to the GitHub Actions Cache (scope=e2e to
+        # keep separate from the standalone `docker` job's cache). Replaces
+        # the prior raw `docker compose build` (no caching, ~2 min cold) and
+        # the manual `docker pull` of the base image (which baked in the old
+        # ubuntu:24.04 base and got stale when the runtime base changed).
+        # The fixture's `compose up` picks up the loaded images by name.
+        uses: docker/bake-action@v6
+        with:
+          files: |
+            docker-compose.yml
+            docker-compose.test.yml
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=e2e
+            *.cache-to=type=gha,scope=e2e,mode=max
+
+      - name: Run e2e tests
+        # Scope to tests/e2e/ only — the unit + api modules import fastapi /
+        # pydantic which aren't installed in this job, and pytest's `-m e2e`
+        # filter deselects them but still imports them at collection time.
+        run: pytest tests/e2e -m e2e -v -s
+
+      - name: Dump container state on failure
+        if: failure()
+        run: |
+          echo "=== docker compose ps ==="
+          docker compose -f docker-compose.yml -f docker-compose.test.yml ps -a || true
+          echo "=== docker compose logs ==="
+          docker compose -f docker-compose.yml -f docker-compose.test.yml logs --no-color || true
+          echo "=== docker ps -a ==="
+          docker ps -a || true

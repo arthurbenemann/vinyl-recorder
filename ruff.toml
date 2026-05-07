@@ -1,0 +1,4 @@
+# Catch real bugs (pyflakes) without enforcing style on the existing
+# compact one-liner code. Add more rules over time as appropriate.
+[lint]
+select = ["F"]

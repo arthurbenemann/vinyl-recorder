@@ -1,0 +1,121 @@
+"""Unit tests for albums_fs.ensure_peaks_cache.
+
+Stubs out `services.peaks.render_peaks` (the audiowaveform invocation)
+and asserts the cache-freshness behaviour: if `.peaks.dat` is newer than
+the concat cache, return immediately; otherwise call render_peaks once
+and cache the result.
+"""
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+
+def _seed_album(tmp_path: Path, monkeypatch, sides: list[str]) -> str:
+    """Build a minimal in-progress/<id>/ tree with empty side FLACs and a
+    pre-built concat.flac so ensure_peaks_cache doesn't try to run ffmpeg."""
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+    # state.py mkdirs at import time and caches the path constants — reload
+    # so RAW_DIR / IN_PROGRESS_DIR pick up the new env.
+    import importlib
+    import state
+    importlib.reload(state)
+    import services.albums_fs as albums_fs
+    importlib.reload(albums_fs)
+
+    ip = tmp_path / "in-progress"
+    album_id = "ab12cd34"
+    d = ip / album_id
+    d.mkdir(parents=True)
+    for s in sides:
+        (d / s).write_bytes(b"FLAC\x00\x00\x00")  # placeholder bytes
+    cache = d / ".cache"
+    cache.mkdir()
+    (cache / "concat.flac").write_bytes(b"placeholder concat")
+    manifest = {
+        "schema_version": 2,
+        "tags": {},
+        "sides": list(sides),
+        "cover": None,
+        "plan": None,
+        "music_relpath": None,
+    }
+    (d / "album.json").write_text(json.dumps(manifest))
+    return album_id
+
+
+def test_ensure_peaks_cache_renders_when_missing(tmp_path, monkeypatch):
+    album_id = _seed_album(tmp_path, monkeypatch, ["a.flac"])
+    import services.albums_fs as albums_fs
+
+    calls = []
+
+    def fake_render(src, out_dat):
+        calls.append((src, out_dat))
+        out_dat.write_bytes(b"\x00" * 32)
+
+    # ensure_concat_cache also normally invokes ffmpeg — short-circuit it
+    # to return the placeholder we already wrote in _seed_album.
+    def fake_concat(album_id, job_id=None):
+        return albums_fs.concat_cache_path(album_id)
+
+    with patch("services.peaks.render_peaks", side_effect=fake_render), \
+         patch.object(albums_fs, "ensure_concat_cache", side_effect=fake_concat):
+        out = albums_fs.ensure_peaks_cache(album_id)
+
+    assert out == albums_fs.peaks_cache_path(album_id)
+    assert out.exists()
+    assert len(calls) == 1
+
+
+def test_ensure_peaks_cache_skips_when_fresh(tmp_path, monkeypatch):
+    album_id = _seed_album(tmp_path, monkeypatch, ["a.flac"])
+    import services.albums_fs as albums_fs
+
+    # Pre-populate the dat with an mtime newer than concat.flac.
+    dat = albums_fs.peaks_cache_path(album_id)
+    dat.parent.mkdir(parents=True, exist_ok=True)
+    dat.write_bytes(b"\x00" * 32)
+    import os
+    cat = albums_fs.concat_cache_path(album_id)
+    os.utime(dat, (cat.stat().st_atime, cat.stat().st_mtime + 5))
+
+    def boom(src, out_dat):
+        raise AssertionError("render_peaks must not be called when cache is fresh")
+
+    def fake_concat(album_id, job_id=None):
+        return cat
+
+    with patch("services.peaks.render_peaks", side_effect=boom), \
+         patch.object(albums_fs, "ensure_concat_cache", side_effect=fake_concat):
+        out = albums_fs.ensure_peaks_cache(album_id)
+
+    assert out == dat
+
+
+def test_ensure_peaks_cache_re_renders_after_concat_invalidated(tmp_path, monkeypatch):
+    album_id = _seed_album(tmp_path, monkeypatch, ["a.flac"])
+    import services.albums_fs as albums_fs
+
+    # Populate dat with mtime EARLIER than concat (simulating a side
+    # reorder that bumped concat's mtime).
+    dat = albums_fs.peaks_cache_path(album_id)
+    dat.parent.mkdir(parents=True, exist_ok=True)
+    dat.write_bytes(b"\x00" * 32)
+    import os
+    cat = albums_fs.concat_cache_path(album_id)
+    os.utime(dat, (cat.stat().st_atime, cat.stat().st_mtime - 5))
+
+    calls = []
+
+    def fake_render(src, out_dat):
+        calls.append((src, out_dat))
+        out_dat.write_bytes(b"\x00" * 32)
+
+    def fake_concat(album_id, job_id=None):
+        return cat
+
+    with patch("services.peaks.render_peaks", side_effect=fake_render), \
+         patch.object(albums_fs, "ensure_concat_cache", side_effect=fake_concat):
+        albums_fs.ensure_peaks_cache(album_id)
+
+    assert len(calls) == 1, "stale dat must trigger a re-render"
