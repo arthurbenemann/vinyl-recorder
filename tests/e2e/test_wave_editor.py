@@ -247,8 +247,9 @@ def _combine_then_open_editor(page, sides, *, artist, album, year="2026"):
             for (const n of names) {
                 const cb = document.querySelector(
                     `input.row-check[data-fname="${n}"]`);
-                cb.checked = true;
-                cb.dispatchEvent(new Event('change', { bubbles: true }));
+                // Row checkboxes wire toggleRow via `onclick`, not `onchange` —
+                // `cb.click()` toggles state and fires the handler in one go.
+                if (!cb.checked) cb.click();
             }
         }
         """,
