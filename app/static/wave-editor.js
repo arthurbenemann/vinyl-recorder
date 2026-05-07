@@ -198,15 +198,11 @@ function openWaveEditor(fname) {
   drawAll();
   document.getElementById('we-modal').hidden = false;
   document.addEventListener('keydown', weKeyDown);
-  if (draft && (draft.cuts?.length || (draft.titles?.length || 0) > 1)) {
-    toast('↻ draft restored — clear cuts to start fresh', 'info');
-  } else {
-    // No draft — fall back to recreating cuts from the on-disk track list, so
-    // a previously-split album can be re-edited rather than redone from scratch.
-    // If neither source produced cuts, try the saved Discogs / MB id as a
-    // last resort so the user doesn't have to run the search manually.
-    weLoadExistingSplit(fname).then(() => _weAutoLoadFromIds(a));
-  }
+  // Repopulate the editor from the saved plan in album.json (if any). When
+  // no plan exists yet, fall back to the album's saved Discogs / MB id so a
+  // first-time open of an MB-tagged album auto-suggests a tracklist instead
+  // of forcing the user to run the search by hand.
+  weLoadExistingSplit(fname).then(() => _weAutoLoadFromIds(a));
 }
 
 // Repopulate cuts, titles, and skip flags from album.json.plan. Covers
