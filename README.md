@@ -44,13 +44,6 @@ Then open <http://localhost:8080>. Recordings persist in
 To override settings without editing the tracked compose file, drop a
 `docker-compose.override.yml` next to it — `docker compose` auto-merges it.
 
-### Build from source (contributors)
-
-```bash
-# layers docker-compose.dev.yml on top so the image is rebuilt from this checkout
-make            # alias for: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
-```
-
 ## Configuration
 
 All runtime options are environment variables in
@@ -104,34 +97,9 @@ in `docker-compose.yml` (already the default) and the gain slider auto-appears
 in the sidebar after `connect`. Non-Pi streams (e.g. SomaFM) work the same
 way — the slider stays hidden when `/info` isn't reachable.
 
-## Test streams ([test-streams/](test-streams/))
-
-For exercising the recorder UI without a real Pi, an opt-in compose overlay
-spins up a synthetic audio source alongside the recorder:
-
-```bash
-make test            # docker compose -f docker-compose.yml -f docker-compose.test.yml up --build -d
-```
-
-(Or run the underlying `docker compose` command directly.) Then open
-<http://localhost:8080>. The overlay also overrides the default host
-networking with a private bridge network, so the same command works on
-Linux, macOS, and Windows.
-
-Stop the stack with `make test-down`; tail logs with `make test-logs`.
-
-The `test-streams` container serves three pre-rendered 96 kHz / 24-bit stereo
-WAVs on its `:8090`, looped forever, and `DEFAULT_STREAM_URL` is wired to
-`/loop`. Switch streams from the UI's "Stream source" field to hit the others:
-
-| Path     | What it is                                        | What it tests                                                    |
-| -------- | ------------------------------------------------- | ---------------------------------------------------------------- |
-| `/loop`  | 60 s of 440 Hz on L + 660 Hz on R at ~−8 dBFS     | VU meter, basic recording, multi-tab connect/disconnect sync     |
-| `/album` | 4 tones (30/25/30/25 s) with 2 s gaps + 20 s side break | Wave-editor split, silence detection, auto-skip ≥15 s rule |
-| `/clip`  | 50 s sine that intentionally clips for 5 s after a 20 s lead-in | CLIP latch, badge, log line, clip-during-record path |
-
 ## Contributing
 
-PR title conventions and the release flow live in
+Local-dev setup (build from source, the synthetic test-streams stack), PR
+title conventions, and the release flow all live in
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
