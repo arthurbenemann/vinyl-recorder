@@ -478,7 +478,11 @@ function weAddCutAtClick(e) {
 }
 
 function weAddCutAtTime(t) {
-  if (we.cuts.some(c => Math.abs(c - t) < 0.5)) return;
+  // Reject only literal duplicates. Tracks shorter than 0.5s are flagged as
+  // "doesn't fit" by renderTracks(); the drag handler has no minimum-gap
+  // check at all. A 0.5s deadband here silently blocked every insert in the
+  // deepest-zoom window (which floors at 0.5s) — see plan for full context.
+  if (we.cuts.some(c => Math.abs(c - t) < 0.001)) return;
   we.cuts.push(t);
   we.cuts.sort((a, b) => a - b);
   // Keep titles + skipped aligned: insert at the right slot. New regions
