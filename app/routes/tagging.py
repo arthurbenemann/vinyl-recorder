@@ -314,19 +314,22 @@ async def _fetch_cover_bytes(
 
 @router.post("/api/apply")
 async def apply_tags(req: ApplyRequest):
-    """Apply a chosen tag set. Two modes:
+    """Apply a chosen tag set. Three modes:
 
     - `album_id` set: patch the in-progress album's `album.json` tags.
       Optionally fetch cover art via CAA/Discogs and save to cover.jpg.
     - `filename` set: promote a raw side into a new in-progress album with
       these tags (calls `albums_fs.create_album`). Same cover handling.
+    - `filenames` set: combine N raw sides into a new in-progress album
+      with these tags. Same cover handling.
 
     Tags never touch FLAC bitstreams here — that only happens at the
     split-emit step."""
-    if not (req.album_id or req.filename):
-        raise HTTPException(400, "supply either album_id or filename")
-    if req.album_id and req.filename:
-        raise HTTPException(400, "supply album_id OR filename, not both")
+    targets = [bool(req.album_id), bool(req.filename), bool(req.filenames)]
+    if sum(targets) != 1:
+        raise HTTPException(
+            400, "supply exactly one of album_id / filename / filenames",
+        )
 
     fields = {k: v for k, v in req.fields.dict().items() if v is not None}
     if req.mbid:
@@ -363,9 +366,11 @@ async def apply_tags(req: ApplyRequest):
         albums_fs.write_manifest(req.album_id, manifest)
         album_id = req.album_id
     else:
-        # Promote a raw side into a new album with these tags.
+        # Promote raw side(s) into a new album with these tags. Single-side
+        # (filename) and N-side (filenames) flows differ only in the list.
+        sides = req.filenames if req.filenames else [req.filename]
         try:
-            album_id, _ = albums_fs.create_album([req.filename], fields)
+            album_id, _ = albums_fs.create_album(sides, fields)
         except FileNotFoundError as e:
             raise HTTPException(404, str(e))
         except ValueError as e:

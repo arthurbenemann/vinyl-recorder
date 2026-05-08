@@ -91,9 +91,12 @@ class SearchRequest(BaseModel):
 
 
 class ApplyRequest(BaseModel):
-    # Either `filename` (raw side, will be promoted) or `album_id` (existing
-    # album, manifest patched in place). Exactly one must be set.
+    # Exactly one of these targets must be set:
+    # - `filename`:  promote a single raw side into a new in-progress album
+    # - `filenames`: combine N raw sides into a new in-progress album
+    # - `album_id`:  patch an existing album's manifest in place
     filename: Optional[str] = None
+    filenames: Optional[list[str]] = None
     album_id: Optional[str] = None
     fields: TagEdit
     mbid: Optional[str] = None  # if set, fetch + embed cover art via CAA / Discogs

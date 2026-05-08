@@ -1252,7 +1252,12 @@ function stopPreview(silent) {
   if (!silent) _refreshPreviewButtons();
 }
 
-// ── Combine modal ─────────────────────────────────────────────────────────
+// ── Combine into album ────────────────────────────────────────────────────
+// Combine reuses the tag-panel modal: openCombine sets tagPanelTarget to
+// `{ filenames }`, then openTag flips the modal into combine mode (sides
+// reorder visible, title/button copy switched). applyTagPanel handles the
+// `filenames` target by POSTing to /api/apply, which calls create_album
+// under the hood.
 let combineOrder = [];
 
 function openCombine() {
@@ -1261,27 +1266,16 @@ function openCombine() {
   combineOrder = [...selected].sort((a, b) =>
     (filesByName[a]?.mtime || 0) - (filesByName[b]?.mtime || 0)
   );
-  // Pre-fill metadata from the most-tagged side (artist+album wins, then artist).
+  // Seed the tag panel from the most-tagged side (artist+album wins, then
+  // artist alone), so left fields + the search query pre-fill usefully.
   const score = f => (f.artist ? 2 : 0) + (f.album ? 1 : 0);
   const seed = combineOrder
     .map(fn => filesByName[fn])
     .filter(Boolean)
-    .sort((a, b) => score(b) - score(a))[0] || {};
-  document.getElementById('c-album').value  = seed.album  || '';
-  document.getElementById('c-artist').value = seed.artist || '';
-  document.getElementById('c-year').value   = seed.year   || '';
-  document.getElementById('c-genre').value  = seed.genre  || '';
-  document.getElementById('c-label').value  = seed.label  || '';
-  renderCombineSides();
-  document.getElementById('combine-modal').hidden = false;
-  document.addEventListener('keydown', combineEscHandler);
+    .sort((a, b) => score(b) - score(a))[0];
+  tagPanelTarget = { filenames: combineOrder.slice() };
+  openTag(seed?.filename || combineOrder[0]);
 }
-
-function closeCombine() {
-  document.getElementById('combine-modal').hidden = true;
-  document.removeEventListener('keydown', combineEscHandler);
-}
-const combineEscHandler = makeModalEscHandler(closeCombine);
 
 function renderCombineSides() {
   const host = document.getElementById('combine-sides');
@@ -1348,44 +1342,6 @@ function combineDragEnd(e) {
   document.querySelectorAll('.side-row.drag-over').forEach(r => r.classList.remove('drag-over'));
 }
 
-async function runCombine() {
-  const album = {
-    artist: document.getElementById('c-artist').value.trim(),
-    album:  document.getElementById('c-album').value.trim(),
-    year:   document.getElementById('c-year').value.trim(),
-    genre:  document.getElementById('c-genre').value.trim(),
-    label:  document.getElementById('c-label').value.trim(),
-  };
-  if (!album.artist || !album.album) {
-    toast('✗ Combine needs at least artist + album', 'err');
-    return;
-  }
-  const btn = document.getElementById('combine-go');
-  const bar = document.getElementById('combine-bar');
-  btn.disabled = true; btn.textContent = 'combining…';
-  showBar(bar, 'encoding');
-  try {
-    const d = await withJobProgress(bar, async (jobId) => {
-      const r = await fetch('/api/combine', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ filenames: combineOrder, album, job_id: jobId }),
-      });
-      if (!r.ok) throw new Error(await parseError(r));
-      return r.json();
-    });
-    toast(`✓ Combined ${combineOrder.length} sides · ${fmtDuration(d.duration_seconds)}`, 'ok');
-    closeCombine();
-    selected.clear();
-    refreshLib();
-    refreshAlbums();
-  } catch (e) {
-    toast('✗ combine failed: ' + e.message, 'err');
-  } finally {
-    btn.disabled = false; btn.textContent = 'combine';
-    hideBar(bar);
-  }
-}
-
 // ── Tag panel ─────────────────────────────────────────────────────────────
 let tagPanelMbid = null;        // mbid of currently-picked candidate (drives cover embed on apply)
 let tagPanelDiscogsId = null;   // Discogs release id — persisted so the wave editor can auto-load tracks later
@@ -1419,16 +1375,31 @@ function setCover(url) {
 function openTag(fname) {
   const f = filesByName[fname];
   if (!f) return;
-  // openTagAlbum already set this; openTag is also called directly for raw
-  // sides (e.g. from the recording-finished WS event), in which case we
-  // need to clear any stale album_id target left from a previous panel.
+  // openTagAlbum / openCombine pre-set tagPanelTarget for non-default modes.
+  // For a direct openTag call (raw row's ✎, recording-finished WS event),
+  // fall through to single-side promote and clear any stale album_id /
+  // filenames target left from a previous panel.
   if (!tagPanelTarget || tagPanelTarget.filename !== undefined) {
     tagPanelTarget = { filename: fname };
   }
+  const isCombine = tagPanelTarget.filenames !== undefined;
   tagPanelMbid = null;
   tagPanelDiscogsId = null;
   tagPanelCandidates = [];
-  document.getElementById('tag-filename').textContent = fname;
+  // Title + apply-button copy + sides reorder visibility track the mode.
+  document.getElementById('tag-modal-title').textContent =
+    isCombine ? 'Combine into album' : 'Tag album';
+  document.getElementById('tag-apply-btn').textContent =
+    isCombine ? 'combine into album' : 'apply tags';
+  document.getElementById('combine-sides-section').hidden = !isCombine;
+  if (isCombine) {
+    const n = tagPanelTarget.filenames.length;
+    document.getElementById('tag-filename').textContent =
+      `${n} side${n === 1 ? '' : 's'} → new album`;
+    renderCombineSides();
+  } else {
+    document.getElementById('tag-filename').textContent = fname;
+  }
   setLeft({
     album: f.album, artist: f.artist, year: f.year, genre: f.genre,
     label: f.label, catalog_number: f.catalog_number, country: f.country,
@@ -1449,7 +1420,9 @@ function openTag(fname) {
 function closeTag() {
   document.getElementById('tag-modal').hidden = true;
   document.removeEventListener('keydown', tagEscHandler);
+  document.getElementById('combine-sides-section').hidden = true;
   tagPanelTarget = null;
+  combineOrder = [];
 }
 const tagEscHandler = makeModalEscHandler(closeTag);
 
@@ -1661,9 +1634,12 @@ async function applyTagPanel() {
     toast('✗ Need at least artist + album', 'err');
     return;
   }
-  // tagPanelTarget tells the server whether we're patching an existing
-  // album (album_id) or promoting a raw side (filename).
+  // tagPanelTarget tells the server which mode we're in:
+  //   { album_id }  → patch existing
+  //   { filenames } → combine N raw sides into a new album
+  //   { filename }  → promote a single raw side (fallback)
   const target = tagPanelTarget || { filename: fname };
+  const isCombine = target.filenames !== undefined;
   try {
     const r = await fetch('/api/apply', {
       method: 'POST', headers: {'Content-Type':'application/json'},
@@ -1675,7 +1651,13 @@ async function applyTagPanel() {
     });
     if (!r.ok) throw new Error(await parseError(r));
     await r.json();
-    toast(`✓ Tagged ${fields.artist} — ${fields.album}`, 'ok');
+    if (isCombine) {
+      const n = target.filenames.length;
+      toast(`✓ Combined ${n} side${n === 1 ? '' : 's'} · ${fields.artist} — ${fields.album}`, 'ok');
+      selected.clear();
+    } else {
+      toast(`✓ Tagged ${fields.artist} — ${fields.album}`, 'ok');
+    }
     closeTag();
     refreshLib();
     refreshAlbums();

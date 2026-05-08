@@ -99,16 +99,19 @@ def _drive(page, sides):
     )
     page.wait_for_selector('#combine-btn:not([disabled])', timeout=5_000)
     page.click('#combine-btn')
-    page.wait_for_selector('#combine-modal:not([hidden])')
-    page.fill('#c-artist', 'WaveEditorSmokeArtist')
-    page.fill('#c-album',  'WaveEditorSmokeAlbum')
-    page.fill('#c-year',   '2026')
-    page.click('#combine-go')
+    # Combine reuses the tag-modal: openCombine reveals #combine-sides-section
+    # inside it and switches the apply button copy.
+    page.wait_for_selector('#tag-modal:not([hidden])')
+    page.wait_for_selector('#combine-sides-section:not([hidden])')
+    page.fill('#t-artist', 'WaveEditorSmokeArtist')
+    page.fill('#t-album',  'WaveEditorSmokeAlbum')
+    page.fill('#t-year',   '2026')
+    page.click('#tag-apply-btn')
     # The modal flips its [hidden] attribute on close — `wait_for_selector`
     # default state is "visible" and never matches a hidden element, so
     # poll the attribute directly.
     page.wait_for_function(
-        "() => document.getElementById('combine-modal').hasAttribute('hidden')",
+        "() => document.getElementById('tag-modal').hasAttribute('hidden')",
         timeout=20_000,
     )
     page.wait_for_function(
@@ -257,13 +260,14 @@ def _combine_then_open_editor(page, sides, *, artist, album, year="2026"):
     )
     page.wait_for_selector('#combine-btn:not([disabled])', timeout=5_000)
     page.click('#combine-btn')
-    page.wait_for_selector('#combine-modal:not([hidden])')
-    page.fill('#c-artist', artist)
-    page.fill('#c-album',  album)
-    page.fill('#c-year',   year)
-    page.click('#combine-go')
+    page.wait_for_selector('#tag-modal:not([hidden])')
+    page.wait_for_selector('#combine-sides-section:not([hidden])')
+    page.fill('#t-artist', artist)
+    page.fill('#t-album',  album)
+    page.fill('#t-year',   year)
+    page.click('#tag-apply-btn')
     page.wait_for_function(
-        "() => document.getElementById('combine-modal').hasAttribute('hidden')",
+        "() => document.getElementById('tag-modal').hasAttribute('hidden')",
         timeout=20_000,
     )
     # Find the row by album text (not just first match — earlier tests

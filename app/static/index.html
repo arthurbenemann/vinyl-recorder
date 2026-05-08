@@ -230,40 +230,6 @@
   </div>
 </div>
 
-<!-- Combine into album modal -->
-<div class="modal-backdrop" id="combine-modal" hidden onclick="if(event.target===this)closeCombine()">
-  <div class="modal" style="width:560px">
-    <div class="modal-header">
-      <div>
-        <div class="modal-title">Combine into album</div>
-        <div class="modal-sub">Concatenates the selected sides losslessly into a single FLAC in <code>albums/</code>.</div>
-      </div>
-      <button class="btn-small" onclick="closeCombine()">close</button>
-    </div>
-
-    <div class="col-label" style="margin-top:6px">Sides (in playback order)</div>
-    <div id="combine-sides" class="candidates" style="max-height:none"></div>
-
-    <div class="col-label" style="margin-top:14px">Album metadata</div>
-    <div class="meta-grid">
-      <div class="field span2"><label>Album</label><input id="c-album"/></div>
-      <div class="field"><label>Artist</label><input id="c-artist"/></div>
-      <div class="field"><label>Year</label><input id="c-year"/></div>
-      <div class="field"><label>Genre</label><input id="c-genre"/></div>
-      <div class="field"><label>Label</label><input id="c-label"/></div>
-    </div>
-
-    <div class="action-row" style="margin-top:14px">
-      <button class="btn primary" id="combine-go" onclick="runCombine()">combine</button>
-      <button class="btn" onclick="closeCombine()">cancel</button>
-    </div>
-    <div class="job-bar" id="combine-bar" hidden style="margin-top:10px">
-      <div class="job-bar-text"><span class="job-bar-phase">working…</span><span class="job-bar-pct">0%</span></div>
-      <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
-    </div>
-  </div>
-</div>
-
 <!-- Wave-editor split modal -->
 <div class="modal-backdrop" id="we-modal" hidden onclick="if(event.target===this)closeWaveEditor()">
   <div class="modal" style="width:1100px">
@@ -405,15 +371,22 @@
   </div>
 </div>
 
-<!-- Tag panel modal -->
+<!-- Tag panel modal — also handles "combine into album" when the sides
+     section is unhidden (set by openCombine via tagPanelTarget.filenames). -->
 <div class="modal-backdrop" id="tag-modal" hidden onclick="if(event.target===this)closeTag()">
   <div class="modal">
     <div class="modal-header">
       <div>
-        <div class="modal-title">Tag album</div>
+        <div class="modal-title" id="tag-modal-title">Tag album</div>
         <div class="modal-sub" id="tag-filename">—</div>
       </div>
       <button class="btn-small" onclick="closeTag()">close</button>
+    </div>
+
+    <!-- Sides reorder — visible only in combine mode. -->
+    <div id="combine-sides-section" hidden>
+      <div class="col-label" style="margin-top:6px">Sides (in playback order)</div>
+      <div id="combine-sides" class="candidates" style="max-height:none;margin-bottom:14px"></div>
     </div>
 
     <div class="tag-grid">
@@ -436,7 +409,7 @@
         </div>
         <div class="field"><label>Tracks (one per line)</label><textarea id="t-tracks" rows="6"></textarea></div>
         <div class="action-row">
-          <button class="btn primary" onclick="applyTagPanel()">apply tags</button>
+          <button class="btn primary" id="tag-apply-btn" onclick="applyTagPanel()">apply tags</button>
           <button class="btn" onclick="closeTag()">cancel</button>
         </div>
       </div>
