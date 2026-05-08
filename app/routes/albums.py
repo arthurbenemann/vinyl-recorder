@@ -25,6 +25,7 @@ from services.jobs import finish_job, start_job
 from state import (
     CombineRequest, MUSIC_DIR, MeasureRequest, PlanUpdateRequest,
     PromoteRequest, ReorderSidesRequest, SilenceDetectRequest, SplitRequest,
+    active,
 )
 
 router = APIRouter()
@@ -73,6 +74,10 @@ async def combine_album(req: CombineRequest):
     a duration sum so the UI can show "✓ Combined N sides · MMm SSs"."""
     if not req.filenames:
         raise HTTPException(400, "need at least one side to combine")
+    recording_filenames = {s["filename"] for s in active.values() if s.get("filename")}
+    in_progress = [fn for fn in req.filenames if fn in recording_filenames]
+    if in_progress:
+        raise HTTPException(409, f"recording in progress: {in_progress[0]}")
     tags = {k: v for k, v in (req.album.dict() if req.album else {}).items()
             if v not in ("", None)}
     try:
