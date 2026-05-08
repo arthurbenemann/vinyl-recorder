@@ -7,12 +7,19 @@
 
 .PHONY: up test test-down test-logs test-rebuild release major minor patch
 
+# Dev flow — base + dev overlay (build from source instead of pulling the
+# published image). `COMPOSE_ARGS` is an optional escape hatch so contributors
+# can layer their own files without editing the Makefile, e.g.:
+#   make up COMPOSE_ARGS="-f docker-compose.mine.yml"
+COMPOSE_DEV := docker compose -f docker-compose.yml -f docker-compose.dev.yml $(COMPOSE_ARGS)
+
 up:
-	docker compose up --build -d
+	$(COMPOSE_DEV) up --build -d
 
 # Test-stream overlay — synthetic audio source so the UI can be exercised
-# without a Pi. See test-streams/ + docker-compose.test.yml.
-COMPOSE_TEST := docker compose -f docker-compose.yml -f docker-compose.test.yml
+# without a Pi. Stacks on top of the dev overlay so the recorder still builds
+# from source. See test-streams/ + docker-compose.test.yml.
+COMPOSE_TEST := $(COMPOSE_DEV) -f docker-compose.test.yml
 
 test:
 	$(COMPOSE_TEST) up --build -d

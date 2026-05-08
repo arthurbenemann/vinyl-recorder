@@ -1,0 +1,12 @@
+# Dev overlay — builds the recorder image from this checkout instead of
+# pulling the published one. Layered on top of docker-compose.yml by `make`
+# (and `make test`), so contributors get from-source rebuilds without needing
+# to remember the flag. Users running plain `docker compose up -d` skip this
+# file and pull ghcr.io/arthurbenemann/vinyl-recorder:latest.
+services:
+  vinyl-recorder:
+    # `build:` alongside the inherited `image:` from docker-compose.yml means
+    # compose builds locally and tags the result with that same name — so a
+    # `--build` rebuild cleanly replaces what a plain `docker compose up`
+    # would have pulled.
+    build: .

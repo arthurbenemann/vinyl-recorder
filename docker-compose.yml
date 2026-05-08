@@ -1,6 +1,9 @@
 services:
   vinyl-recorder:
-    build: .
+    # Pulls the pre-built image published on every tag by .github/workflows/publish.yml.
+    # For local development (build from source) layer docker-compose.dev.yml on top —
+    # `make` already does this.
+    image: ghcr.io/arthurbenemann/vinyl-recorder:latest
     container_name: vinyl-recorder
     ports:
       - "8080:8080"
