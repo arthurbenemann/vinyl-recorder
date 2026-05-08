@@ -68,7 +68,6 @@ class RecordRequest(BaseModel):
     year: str = ""
     genre: str = ""
     label: str = ""
-    tracks: list[str] = []
     duration: int = 0      # 0 = unlimited
     sample_rate: int = 0   # 0 = auto-detect from stream
     bit_depth: int = 0     # 0 = auto-detect

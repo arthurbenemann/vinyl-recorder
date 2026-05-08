@@ -222,8 +222,6 @@ async def start_recording(req: RecordRequest):
         "-metadata", f"genre={req.genre}",
         "-metadata", f"label={req.label}",
     ]
-    if req.tracks:
-        cmd += ["-metadata", "tracklist=" + " / ".join(t.strip() for t in req.tracks if t.strip())]
     cmd += [outfile]
 
     log_path = LOG_DIR / f"{sid}.log"
