@@ -1,47 +1,20 @@
-"""Unit tests for albums_fs.ensure_peaks_cache.
+"""Unit tests for albums_fs.ensure_side_peaks_cache.
 
 Stubs out `services.peaks.render_peaks` (the audiowaveform invocation)
-and asserts the cache-freshness behaviour: if `.peaks.dat` is newer than
-the concat cache, return immediately; otherwise call render_peaks once
-and cache the result.
+and asserts the per-side cache-freshness behaviour: if the side's
+`.peaks.dat` is newer than the source FLAC, return immediately;
+otherwise call render_peaks once and cache the result.
 """
-import importlib
 import json
 import os
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
-
-@pytest.fixture(autouse=True)
-def _restore_state_modules():
-    # state.py and albums_fs.py cache OUTPUT_DIR-derived paths at import
-    # time. Each test in this file reloads them against a per-test tmp dir
-    # (see _seed_album); restore the conftest-set OUTPUT_DIR afterwards so
-    # unrelated tests keep seeing the shared throwaway dir.
-    saved = os.environ.get("OUTPUT_DIR")
-    yield
-    if saved is not None:
-        os.environ["OUTPUT_DIR"] = saved
-    else:
-        os.environ.pop("OUTPUT_DIR", None)
-    import state
-    import services.albums_fs as albums_fs
-    importlib.reload(state)
-    importlib.reload(albums_fs)
-
 
 def _seed_album(tmp_path: Path, monkeypatch, sides: list[str]) -> str:
-    """Build a minimal in-progress/<id>/ tree with empty side FLACs and a
-    pre-built concat.flac so ensure_peaks_cache doesn't try to run ffmpeg.
-
-    Path constants are patched per-attribute via `monkeypatch.setattr` so
-    the cleanup is automatic. An earlier version reloaded the `state`
-    module after `monkeypatch.setenv`, which left a stale RAW_DIR pointing
-    at the now-deleted tmp_path even after monkeypatch reverted the env
-    var, breaking unrelated API tests (`test_recordings_lists_files_in_raw`)
-    that ran later in the suite."""
+    """Build a minimal in-progress/<id>/ tree with placeholder side FLACs.
+    The state-module path constants are patched per-attribute via
+    `monkeypatch.setattr` so the cleanup is automatic."""
     ip = tmp_path / "in-progress"
     raw = tmp_path / "raw"
     music = tmp_path / "music"
@@ -62,9 +35,6 @@ def _seed_album(tmp_path: Path, monkeypatch, sides: list[str]) -> str:
     d.mkdir(parents=True)
     for s in sides:
         (d / s).write_bytes(b"FLAC\x00\x00\x00")  # placeholder bytes
-    cache = d / ".cache"
-    cache.mkdir()
-    (cache / "concat.flac").write_bytes(b"placeholder concat")
     manifest = {
         "schema_version": 2,
         "tags": {},
@@ -77,79 +47,125 @@ def _seed_album(tmp_path: Path, monkeypatch, sides: list[str]) -> str:
     return album_id
 
 
-def test_ensure_peaks_cache_renders_when_missing(tmp_path, monkeypatch):
-    album_id = _seed_album(tmp_path, monkeypatch, ["a.flac"])
+def test_ensure_side_peaks_cache_renders_when_missing(tmp_path, monkeypatch):
+    album_id = _seed_album(tmp_path, monkeypatch, ["a.flac", "b.flac"])
     import services.albums_fs as albums_fs
 
     calls = []
 
     def fake_render(src, out_dat):
-        calls.append((src, out_dat))
+        calls.append((Path(src).name, Path(out_dat).name))
         out_dat.write_bytes(b"\x00" * 32)
 
-    # ensure_concat_cache also normally invokes ffmpeg — short-circuit it
-    # to return the placeholder we already wrote in _seed_album.
-    def fake_concat(album_id, job_id=None):
-        return albums_fs.concat_cache_path(album_id)
+    with patch("services.peaks.render_peaks", side_effect=fake_render):
+        out_a = albums_fs.ensure_side_peaks_cache(album_id, "a.flac")
+        out_b = albums_fs.ensure_side_peaks_cache(album_id, "b.flac")
 
-    with patch("services.peaks.render_peaks", side_effect=fake_render), \
-         patch.object(albums_fs, "ensure_concat_cache", side_effect=fake_concat):
-        out = albums_fs.ensure_peaks_cache(album_id)
+    assert out_a == albums_fs.peaks_cache_path_for_side(album_id, "a.flac")
+    assert out_b == albums_fs.peaks_cache_path_for_side(album_id, "b.flac")
+    assert out_a.exists() and out_b.exists()
+    assert len(calls) == 2
+    # Each side gets its own dat; no cross-contamination.
+    assert {c[0] for c in calls} == {"a.flac", "b.flac"}
+    assert {c[1] for c in calls} == {"a.dat", "b.dat"}
 
-    assert out == albums_fs.peaks_cache_path(album_id)
-    assert out.exists()
-    assert len(calls) == 1
 
-
-def test_ensure_peaks_cache_skips_when_fresh(tmp_path, monkeypatch):
+def test_ensure_side_peaks_cache_skips_when_fresh(tmp_path, monkeypatch):
     album_id = _seed_album(tmp_path, monkeypatch, ["a.flac"])
     import services.albums_fs as albums_fs
 
-    # Pre-populate the dat with an mtime newer than concat.flac.
-    dat = albums_fs.peaks_cache_path(album_id)
+    # Pre-populate the dat with an mtime newer than the source side.
+    dat = albums_fs.peaks_cache_path_for_side(album_id, "a.flac")
     dat.parent.mkdir(parents=True, exist_ok=True)
     dat.write_bytes(b"\x00" * 32)
-    import os
-    cat = albums_fs.concat_cache_path(album_id)
-    os.utime(dat, (cat.stat().st_atime, cat.stat().st_mtime + 5))
+    src = albums_fs.album_dir(album_id) / "a.flac"
+    os.utime(dat, (src.stat().st_atime, src.stat().st_mtime + 5))
 
     def boom(src, out_dat):
         raise AssertionError("render_peaks must not be called when cache is fresh")
 
-    def fake_concat(album_id, job_id=None):
-        return cat
-
-    with patch("services.peaks.render_peaks", side_effect=boom), \
-         patch.object(albums_fs, "ensure_concat_cache", side_effect=fake_concat):
-        out = albums_fs.ensure_peaks_cache(album_id)
+    with patch("services.peaks.render_peaks", side_effect=boom):
+        out = albums_fs.ensure_side_peaks_cache(album_id, "a.flac")
 
     assert out == dat
 
 
-def test_ensure_peaks_cache_re_renders_after_concat_invalidated(tmp_path, monkeypatch):
-    album_id = _seed_album(tmp_path, monkeypatch, ["a.flac"])
+def test_ensure_side_peaks_cache_re_renders_when_side_advances(tmp_path, monkeypatch):
+    """A re-recorded side bumps its mtime; only that side's dat rebuilds —
+    other sides keep their existing dats."""
+    album_id = _seed_album(tmp_path, monkeypatch, ["a.flac", "b.flac"])
     import services.albums_fs as albums_fs
 
-    # Populate dat with mtime EARLIER than concat (simulating a side
-    # reorder that bumped concat's mtime).
-    dat = albums_fs.peaks_cache_path(album_id)
-    dat.parent.mkdir(parents=True, exist_ok=True)
-    dat.write_bytes(b"\x00" * 32)
-    import os
-    cat = albums_fs.concat_cache_path(album_id)
-    os.utime(dat, (cat.stat().st_atime, cat.stat().st_mtime - 5))
+    # Both dats currently fresh.
+    for s in ("a.flac", "b.flac"):
+        dat = albums_fs.peaks_cache_path_for_side(album_id, s)
+        dat.parent.mkdir(parents=True, exist_ok=True)
+        dat.write_bytes(b"\x00" * 32)
+        src = albums_fs.album_dir(album_id) / s
+        os.utime(dat, (src.stat().st_atime, src.stat().st_mtime + 5))
+
+    # Now bump only side a's source mtime — its dat is now stale.
+    src_a = albums_fs.album_dir(album_id) / "a.flac"
+    dat_a = albums_fs.peaks_cache_path_for_side(album_id, "a.flac")
+    os.utime(src_a, (src_a.stat().st_atime, dat_a.stat().st_mtime + 10))
 
     calls = []
 
     def fake_render(src, out_dat):
-        calls.append((src, out_dat))
+        calls.append(Path(src).name)
         out_dat.write_bytes(b"\x00" * 32)
 
-    def fake_concat(album_id, job_id=None):
-        return cat
+    with patch("services.peaks.render_peaks", side_effect=fake_render):
+        albums_fs.ensure_side_peaks_cache(album_id, "a.flac")
+        albums_fs.ensure_side_peaks_cache(album_id, "b.flac")
 
-    with patch("services.peaks.render_peaks", side_effect=fake_render), \
-         patch.object(albums_fs, "ensure_concat_cache", side_effect=fake_concat):
-        albums_fs.ensure_peaks_cache(album_id)
+    assert calls == ["a.flac"], "only the stale side should re-render"
 
-    assert len(calls) == 1, "stale dat must trigger a re-render"
+
+def test_ensure_side_peaks_cache_raises_on_missing_side(tmp_path, monkeypatch):
+    album_id = _seed_album(tmp_path, monkeypatch, ["a.flac"])
+    import services.albums_fs as albums_fs
+
+    try:
+        albums_fs.ensure_side_peaks_cache(album_id, "nonexistent.flac")
+    except FileNotFoundError as e:
+        assert "nonexistent.flac" in str(e)
+    else:
+        raise AssertionError("expected FileNotFoundError for missing side")
+
+
+def test_album_concat_playlist_writes_each_side_in_order(tmp_path, monkeypatch):
+    """The /measure and /split routes feed ffmpeg via this transient
+    playlist. Sides must appear in manifest order so album-time -ss/-to
+    addressing produces the correct slice."""
+    album_id = _seed_album(tmp_path, monkeypatch, ["a.flac", "b.flac", "c.flac"])
+    import services.albums_fs as albums_fs
+
+    playlist, side_paths = albums_fs.album_concat_playlist(album_id)
+    try:
+        body = playlist.read_text()
+        lines = [ln for ln in body.splitlines() if ln.strip()]
+        assert len(lines) == 3
+        assert lines[0].endswith("a.flac'")
+        assert lines[1].endswith("b.flac'")
+        assert lines[2].endswith("c.flac'")
+        assert [p.name for p in side_paths] == ["a.flac", "b.flac", "c.flac"]
+    finally:
+        playlist.unlink(missing_ok=True)
+
+
+def test_album_concat_playlist_escapes_single_quotes(tmp_path, monkeypatch):
+    """ffmpeg's concat demuxer wraps each path in single quotes; an
+    embedded apostrophe in a side filename has to escape as `'\\''`. The
+    real-world failure mode is the apostrophe in album titles like
+    "It's Only Rock 'n Roll" leaking into a re-recorded side filename."""
+    album_id = _seed_album(tmp_path, monkeypatch, ["it's a side.flac"])
+    import services.albums_fs as albums_fs
+
+    playlist, _ = albums_fs.album_concat_playlist(album_id)
+    try:
+        body = playlist.read_text()
+        # The path appears as `file '...'` with internal `'` becoming `'\''`.
+        assert "it'\\''s a side.flac" in body
+    finally:
+        playlist.unlink(missing_ok=True)

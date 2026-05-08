@@ -24,7 +24,7 @@ try:
 except ImportError:  # pragma: no cover
     pytest.skip("playwright not installed", allow_module_level=True)
 
-from .conftest import RECORDER_URL
+from .conftest import RECORDER_URL, ffprobe
 
 pytestmark = pytest.mark.e2e
 
@@ -61,7 +61,7 @@ def test_wave_editor_full_flow(stack, page):
     raw = stack["raw"]
     sides = _generate_side_flacs(raw, count=3)
     try:
-        _drive(page, sides)
+        _drive(page, sides, stack)
     finally:
         for p in sides:
             try:
@@ -70,7 +70,7 @@ def test_wave_editor_full_flow(stack, page):
                 pass
 
 
-def _drive(page, sides):
+def _drive(page, sides, stack):
     page.goto(RECORDER_URL)
     page.wait_for_load_state("networkidle")
 
@@ -148,6 +148,23 @@ def _drive(page, sides):
     )
     assert canvas['nz'] > 100, f"canvas blank: {canvas}"
 
+    # ── Cold-build wrote per-side dats, no concat.flac ────────────────
+    # The PR's whole point: the editor's first open should materialise
+    # one .peaks.dat per side under .cache/peaks/, and never write a
+    # `.cache/concat.flac`. The canvas-non-blank check above proves
+    # render_peaks ran successfully; this pins the on-disk layout.
+    in_progress = stack["output_dir"] / "in-progress"
+    album_dir = in_progress / album_id
+    cache_dir = album_dir / ".cache"
+    peaks_dir = cache_dir / "peaks"
+    assert peaks_dir.is_dir(), f"missing per-side peaks dir: {peaks_dir}"
+    side_stems = {p.stem for p in sides}
+    dat_stems = {p.stem for p in peaks_dir.glob("*.dat")}
+    assert side_stems == dat_stems, \
+        f"per-side dats don't match sides: {dat_stems} vs {side_stems}"
+    assert not (cache_dir / "concat.flac").exists(), \
+        "concat.flac should not be written under the per-side pipeline"
+
     # ── ~peak readout shows up immediately on open ────────────────────
     stats = page.text_content('#we-stats-text') or ""
     assert '~' in stats and 'dB' in stats, f"stats missing ~peak: {stats!r}"
@@ -215,17 +232,46 @@ def _drive(page, sides):
     assert 'noise floor' in measured.lower(), measured
     assert '~' not in measured, f"measure result still shows ~ prefix: {measured!r}"
 
-    # ── Audio element loaded a seekable file from /audio ──────────────
+    # ── Audio element initialised on side 0 from per-side endpoint ────
     audio = page.evaluate(
         """
         () => {
             const a = document.getElementById('we-audio');
-            return { src: a.src, duration: a.duration, readyState: a.readyState };
+            return { src: a.src, duration: a.duration, readyState: a.readyState,
+                     sideCount: weAudio.sides.length,
+                     totalDur: weAudio.totalDuration() };
         }
         """
     )
-    assert audio['src'].endswith(f'/api/album/{album_id}/audio'), audio
+    assert audio['src'].endswith(f'/api/album/{album_id}/sides/0/audio'), audio
     assert audio['readyState'] >= 1 and audio['duration'] > 0, audio
+    assert audio['sideCount'] == len(sides), audio
+    assert audio['totalDur'] > 0, audio
+
+    # ── Side-swap on cross-boundary seek ─────────────────────────────
+    # weAudio.seek(albumTime) past the first side's duration must swap
+    # the <audio> element's src to /sides/1/audio and resolve currentTime
+    # to a position within that side, not into negative or past-end land.
+    swap = page.evaluate(
+        """
+        async () => {
+            const beyondFirst = weAudio.sides[0].duration_seconds + 0.5;
+            weAudio.seek(beyondFirst);
+            // Wait briefly for the loadedmetadata handler to apply
+            // currentTime — synthetic 4 s sides settle quickly under
+            // headless chromium.
+            for (let i = 0; i < 30; i++) {
+                if (weAudio.currentSideIdx === 1) break;
+                await new Promise(r => setTimeout(r, 50));
+            }
+            const a = document.getElementById('we-audio');
+            return { src: a.src, sideIdx: weAudio.currentSideIdx,
+                     albumTime: weAudio.currentTime };
+        }
+        """
+    )
+    assert swap['sideIdx'] == 1, swap
+    assert swap['src'].endswith(f'/api/album/{album_id}/sides/1/audio'), swap
 
     # ── No JS pageerrors fired across the whole flow ──────────────────
     # Belt-and-braces — the conftest `page` fixture also asserts no
@@ -396,6 +442,90 @@ def test_wave_editor_reopen_restores_cut_skip_title(stack, page):
         assert state['skipped'][0] is True, f"first region should still be skipped: {state['skipped']!r}"
         assert state['titles'][1] == 'Track Beta', \
             f"second region title not preserved: {state['titles']!r}"
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
+# ── PR: split with cuts that straddle side boundaries ────────────────────
+def test_split_with_cuts_across_side_boundaries(stack, page):
+    """The per-side concat-demuxer playlist has to handle the case where
+    `-ss/-to` straddles a side boundary. Combine 3 sides (4 s each → 12 s
+    album), place cuts at 3 s and 6 s so:
+
+      track 1: 0 → 3 s        within side 1
+      track 2: 3 → 6 s        spans side 1/2 boundary at 4 s
+      track 3: 6 → 12 s       spans side 2/3 boundary at 8 s
+
+    Run split, then ffprobe each output and assert the durations match
+    (±0.05 s for FLAC frame quantisation). A regression in the playlist-
+    based -ss/-to math would produce off-by-side-length tracks here."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=3)
+    output_dir = stack["output_dir"]
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        album_id = _combine_then_open_editor(
+            page, sides, artist="CrossBoundaryArtist", album="CrossBoundaryAlbum"
+        )
+        # Place two cuts and rename the tracks so the music/ output is
+        # predictable. weAddCutAtTime + weSetTitle are the same call sites
+        # the user-edit UI hits, so they flip the dirty flag and trigger
+        # the debounced /plan save.
+        page.evaluate(
+            """
+            () => {
+                weAddCutAtTime(3.0);
+                weAddCutAtTime(6.0);
+                weSetTitle(0, 'A');
+                weSetTitle(1, 'B');
+                weSetTitle(2, 'C');
+            }
+            """
+        )
+        # Wait for the debounce to settle so the plan landed before split.
+        page.wait_for_timeout(700)
+
+        # Run split via the API directly — the UI button is present but
+        # this path keeps the test focused on the server-side -ss/-to
+        # behaviour rather than the modal-confirmation flow.
+        split_result = page.evaluate(
+            f"""
+            async () => {{
+                const r = await fetch('/api/album/split', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{
+                        album_id: '{album_id}',
+                        tracks: [
+                            {{title: 'A', duration_seconds: 3.0,  skip: false}},
+                            {{title: 'B', duration_seconds: 3.0,  skip: false}},
+                            {{title: 'C', duration_seconds: 6.0,  skip: false}},
+                        ],
+                        normalize: false,
+                        target_peak_db: -1.0,
+                        bit_depth: 0,
+                    }}),
+                }});
+                if (!r.ok) throw new Error('split failed: ' + r.status + ' ' + (await r.text()));
+                return r.json();
+            }}
+            """
+        )
+        assert split_result.get('ok'), split_result
+        relpath = split_result['music_relpath']
+        music = output_dir / "music" / relpath
+        out_flacs = sorted(music.glob("*.flac"))
+        assert len(out_flacs) == 3, f"expected 3 output tracks: {out_flacs}"
+
+        expected = [3.0, 3.0, 6.0]
+        for f, want in zip(out_flacs, expected):
+            probe = ffprobe(f)
+            got = float(probe['format']['duration'])
+            assert abs(got - want) <= 0.05, \
+                f"{f.name}: duration {got:.3f} s, expected ~{want} s"
     finally:
         for p in sides:
             try: p.unlink(missing_ok=True)

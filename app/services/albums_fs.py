@@ -1,8 +1,9 @@
 """Album-folder layer: every album in `in-progress/` is a directory holding
 N side FLACs (untagged, original filenames) plus an `album.json` manifest.
 This module owns manifest read/write, side-list reconciliation (drop-in
-files auto-append, removed files get pruned), and the wave-editor's concat
-cache. Routes call into it instead of touching the filesystem directly.
+files auto-append, removed files get pruned), and the wave-editor's
+per-side peaks cache. Routes call into it instead of touching the
+filesystem directly.
 
 The manifest schema (v2):
 
@@ -30,9 +31,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from services.ffmpeg import (
-    flac_duration_seconds, flac_format, run_ffmpeg_with_progress,
-)
+from services.ffmpeg import flac_duration_seconds, flac_format
 from state import IN_PROGRESS_DIR, MUSIC_DIR, RAW_DIR
 
 # Album dir basenames are restricted to lowercase hex / dashes / underscores
@@ -142,8 +141,8 @@ def reconcile_sides(album_id: str) -> dict:
 def reorder_sides(album_id: str, new_order: list[str]) -> dict:
     """Persist a user-driven permutation of sides[]. The new list must be a
     permutation of the existing on-disk set (same elements, different
-    order); otherwise we raise. Concat cache is invalidated by callers via
-    `concat_cache_path(...).unlink(missing_ok=True)`."""
+    order); otherwise we raise. Per-side peaks dats are mtime-validated, so
+    no explicit cache invalidation is needed."""
     manifest = reconcile_sides(album_id)
     current = set(manifest["sides"])
     proposed = list(new_order)
@@ -154,56 +153,54 @@ def reorder_sides(album_id: str, new_order: list[str]) -> dict:
     return manifest
 
 
-def concat_cache_path(album_id: str) -> Path:
-    return album_dir(album_id) / ".cache" / "concat.flac"
+def peaks_cache_dir(album_id: str) -> Path:
+    """Per-side peaks dats live under `.cache/peaks/`. Sibling of any other
+    cache files so it's swept by `delete_album` / `demote_album` for free."""
+    return album_dir(album_id) / ".cache" / "peaks"
 
 
-def peaks_cache_path(album_id: str) -> Path:
-    """Where the album's `.peaks.dat` lives. Same `.cache/` dir as the
-    concat FLAC, so it's swept by `delete_album` / `demote_album` for free."""
-    return album_dir(album_id) / ".cache" / "peaks.dat"
+def peaks_cache_path_for_side(album_id: str, side_filename: str) -> Path:
+    """Per-side `.peaks.dat` path. We key on the side's stem so a re-record
+    that produces the same filename naturally invalidates via mtime, and a
+    drop-in side with a fresh name gets a fresh dat without collision."""
+    stem = Path(side_filename).stem
+    return peaks_cache_dir(album_id) / f"{stem}.dat"
 
 
-def ensure_peaks_cache(album_id: str, job_id: Optional[str] = None) -> Path:
-    """Build or refresh `.cache/peaks.dat` from `concat.flac`. Builds the
-    concat cache first when stale, then hands off to audiowaveform. The
-    concat cache's own freshness logic (mtime ≥ each side) handles the
-    upstream case where a side gets reordered or a tag edit triggers a
-    rebuild."""
-    # Imported here, not at module top, because services/peaks imports
-    # nothing back from albums_fs and a top-level import would still work —
-    # but localising it keeps the module dependency arrow strictly
-    # one-directional, easier to reason about.
+def ensure_side_peaks_cache(
+    album_id: str,
+    side_filename: str,
+    job_id: Optional[str] = None,  # accepted for symmetry; render_peaks is sub-second
+) -> Path:
+    """Build or refresh the `.peaks.dat` for a single side. audiowaveform
+    runs directly against the side FLAC — no album-level concat. Mtime-
+    validated against the source FLAC so a re-recorded side rebuilds its
+    dat on next request and nothing else."""
     from services.peaks import is_fresh, render_peaks
-    src = ensure_concat_cache(album_id, job_id)
-    out = peaks_cache_path(album_id)
+    d = album_dir(album_id)
+    src = d / side_filename
+    if not src.exists():
+        raise FileNotFoundError(
+            f"album {album_id}: side {side_filename!r} missing on disk"
+        )
+    out = peaks_cache_path_for_side(album_id, side_filename)
     if is_fresh(out, src):
         return out
+    out.parent.mkdir(parents=True, exist_ok=True)
     render_peaks(src, out)
     return out
 
 
-def _cache_is_fresh(cache: Path, side_paths: list[Path]) -> bool:
-    """Returns True iff the cache exists, is newer than every side, and
-    every side actually exists on disk."""
-    if not cache.exists():
-        return False
-    cache_mtime = cache.stat().st_mtime
-    for s in side_paths:
-        if not s.exists():
-            return False
-        if s.stat().st_mtime > cache_mtime:
-            return False
-    return True
+def album_concat_playlist(album_id: str) -> tuple[Path, list[Path]]:
+    """Write a transient ffmpeg concat-demuxer playlist for this album's
+    sides and return `(playlist_path, side_paths)`. Caller is responsible
+    for unlinking the playlist after the ffmpeg invocation finishes (use
+    `try/finally`).
 
-
-def ensure_concat_cache(album_id: str, job_id: Optional[str] = None) -> Path:
-    """Build or refresh `.cache/concat.flac`. Reuses the existing cache when
-    every side mtime is older than the cache. Raises FileNotFoundError if a
-    side referenced by `sides[]` is missing. Returns the cache path.
-
-    All editor-facing endpoints (waveform, measure, silence-detect, split)
-    funnel through this so the source-of-truth audio file is single."""
+    Used by `/measure` and `/split` to feed every side through ffmpeg in
+    album order without precomputing a concat.flac on disk. Quoting follows
+    ffmpeg's concat demuxer rules: single quotes around each path, internal
+    single quotes escaped as `'\\''`."""
     manifest = reconcile_sides(album_id)
     sides = manifest.get("sides") or []
     if not sides:
@@ -215,54 +212,39 @@ def ensure_concat_cache(album_id: str, job_id: Optional[str] = None) -> Path:
         raise FileNotFoundError(
             f"album {album_id}: sides referenced in album.json missing on disk: {missing}"
         )
-    cache = concat_cache_path(album_id)
-    if _cache_is_fresh(cache, side_paths):
-        return cache
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    # ffmpeg concat demuxer: tiny playlist, lossless re-encode (concat with
-    # `-c copy` would inherit only the first input's STREAMINFO total_samples
-    # and mislead `metaflac --show-total-samples` for everyone downstream).
-    playlist = cache.parent / f".concat_{secrets.token_hex(4)}.txt"
-    try:
-        playlist.write_text("".join(
-            f"file '{str(p).replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}'\n"
-            for p in side_paths
-        ))
-        total_dur = sum((flac_duration_seconds(p) or 0.0) for p in side_paths)
-        cmd = [
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-f", "concat", "-safe", "0",
-            "-i", str(playlist),
-            "-c:a", "flac", "-compression_level", "5",
-            "-map_metadata", "-1",
-            str(cache),
-        ]
-        rc, stderr = run_ffmpeg_with_progress(
-            cmd, total_dur, job_id, (0.0, 1.0), "concatenating",
-        )
-        if rc != 0:
-            err = (stderr or b"").decode(errors="replace")[:300]
-            # Tear down a partial file so the next call doesn't think it's good.
-            cache.unlink(missing_ok=True)
-            raise RuntimeError(f"concat ffmpeg failed: {err}")
-    finally:
-        playlist.unlink(missing_ok=True)
-    return cache
-
-
-def invalidate_concat_cache(album_id: str) -> None:
-    """Drop the concat cache for an album. Call after sides/reorder, after
-    moving sides in/out, or when the editor wants a forced rebuild."""
-    concat_cache_path(album_id).unlink(missing_ok=True)
+    cache_dir = album_dir(album_id) / ".cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    playlist = cache_dir / f".concat_{secrets.token_hex(4)}.txt"
+    quote = chr(39)
+    escaped_quote = quote + chr(92) + quote + quote
+    playlist.write_text("".join(
+        f"file {quote}{str(p).replace(quote, escaped_quote)}{quote}\n"
+        for p in side_paths
+    ))
+    return playlist, side_paths
 
 
 def _summarize_album(album_id: str, manifest: dict) -> dict:
     """Build the UI-shaped row for `/api/albums`. Stats come from the first
-    side (cheap) — total duration is summed across sides without re-encoding."""
+    side (cheap) — total duration is summed across sides without re-encoding.
+
+    `sides` is exposed as `[{filename, duration_seconds}, ...]` so the
+    wave editor can build the album timeline locally and address per-side
+    peaks/audio endpoints by index without a second round-trip."""
     d = album_dir(album_id)
     sides = manifest.get("sides") or []
-    side_paths = [d / s for s in sides if (d / s).exists()]
-    total_dur = sum((flac_duration_seconds(p) or 0.0) for p in side_paths) or None
+    side_entries: list[dict] = []
+    side_paths: list[Path] = []
+    for s in sides:
+        p = d / s
+        if not p.exists():
+            continue
+        side_paths.append(p)
+        side_entries.append({
+            "filename":         s,
+            "duration_seconds": flac_duration_seconds(p),
+        })
+    total_dur = sum((e["duration_seconds"] or 0.0) for e in side_entries) or None
     fmt: dict = {}
     size_bytes = 0
     for p in side_paths:
@@ -295,6 +277,7 @@ def _summarize_album(album_id: str, manifest: dict) -> dict:
         "musicbrainz_albumid": tags.get("musicbrainz_albumid", ""),
         "discogs_release_id":  tags.get("discogs_release_id"),
         "side_count":       len(sides),
+        "sides":            side_entries,
         "split":            bool(music_relpath),
         "has_draft":        plan is not None and not music_relpath,
         "music_relpath":    music_relpath,

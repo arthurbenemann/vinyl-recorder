@@ -11,7 +11,6 @@ These tests do NOT shell out to ffmpeg/metaflac. They exercise:
 A real-ffmpeg "concat the cache" check lives in the e2e harness.
 """
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -159,53 +158,15 @@ def test_reorder_sides_rejects_non_permutation(tmp_path, monkeypatch):
         albums_fs.reorder_sides(album_id, ["a.flac"])  # missing b.flac
 
 
-# ── concat cache freshness ───────────────────────────────────────────────
-def test_cache_is_fresh_helper(tmp_path):
-    cache = tmp_path / "cache.flac"
-    side_a = tmp_path / "a.flac"
-    side_a.write_bytes(b"a")
-    cache.write_bytes(b"c")
-    # cache is older than side → not fresh
-    import os, time
-    older = time.time() - 100
-    os.utime(cache, (older, older))
-    assert albums_fs._cache_is_fresh(cache, [side_a]) is False
-    # touch cache to a newer mtime
-    newer = time.time() + 100
-    os.utime(cache, (newer, newer))
-    assert albums_fs._cache_is_fresh(cache, [side_a]) is True
-    # missing side → not fresh
-    side_a.unlink()
-    assert albums_fs._cache_is_fresh(cache, [side_a]) is False
-
-
-def test_ensure_concat_cache_raises_on_missing_side(tmp_path, monkeypatch):
+# ── concat-demuxer playlist (used by /measure and /split) ───────────────
+def test_album_concat_playlist_raises_on_missing_side(tmp_path, monkeypatch):
     monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
     album_id = "abcd0123"
     _seed_album(tmp_path, album_id,
                 sides_in_manifest=["nope.flac"],
                 sides_on_disk=[])
     with pytest.raises(FileNotFoundError):
-        albums_fs.ensure_concat_cache(album_id)
-
-
-def test_ensure_concat_cache_skips_ffmpeg_when_fresh(tmp_path, monkeypatch):
-    """If the cache file already exists and is newer than every side, the
-    builder must skip the ffmpeg subprocess entirely."""
-    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
-    album_id = "abcd0123"
-    d = _seed_album(tmp_path, album_id,
-                    sides_in_manifest=["a.flac"],
-                    sides_on_disk=["a.flac"])
-    cache = d / ".cache" / "concat.flac"
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_bytes(b"already-fresh")
-    import os, time
-    newer = time.time() + 100
-    os.utime(cache, (newer, newer))
-    with patch.object(albums_fs, "run_ffmpeg_with_progress") as m:
-        albums_fs.ensure_concat_cache(album_id)
-        m.assert_not_called()
+        albums_fs.album_concat_playlist(album_id)
 
 
 # ── delete / demote ──────────────────────────────────────────────────────
@@ -315,58 +276,6 @@ def test_create_album_retries_on_slug_collision(tmp_path, monkeypatch):
     monkeypatch.setattr(albums_fs, "new_album_id", lambda: next(slugs))
     album_id, _ = albums_fs.create_album(["side1.flac"], {})
     assert album_id == "bbbbbbbb"
-
-
-# ── concat-cache invalidation ────────────────────────────────────────────
-def test_ensure_concat_cache_rebuilds_when_side_mtime_advances(tmp_path, monkeypatch):
-    """If a side's mtime is newer than the cache (file edited, dropped in,
-    or `reorder_sides` left the cache stale), the next `ensure_concat_cache`
-    must call back into ffmpeg. This is the contract the editor relies on
-    when peeking at the waveform after a side change."""
-    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
-    album_id = "abcd0123"
-    d = _seed_album(tmp_path, album_id,
-                    sides_in_manifest=["a.flac"],
-                    sides_on_disk=["a.flac"])
-    cache = d / ".cache" / "concat.flac"
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_bytes(b"stale")
-    import os, time
-    # Cache predates the side: stale.
-    older = time.time() - 100
-    os.utime(cache, (older, older))
-    side_newer = time.time() + 50
-    os.utime(d / "a.flac", (side_newer, side_newer))
-    # Mock the ffmpeg run so the test stays hermetic. The body must:
-    # 1. be invoked (cache stale)
-    # 2. cause the cache file to exist after, so subsequent calls don't
-    #    rebuild — emulate by writing a fresh file from the side.
-    def fake_run(cmd, total_dur, job_id, phase_range, label):
-        out_path = Path(cmd[-1])
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_bytes(b"rebuilt")
-        return (0, b"")
-    with patch.object(albums_fs, "run_ffmpeg_with_progress", side_effect=fake_run) as m:
-        albums_fs.ensure_concat_cache(album_id)
-        assert m.call_count == 1
-
-
-def test_invalidate_concat_cache_drops_the_file(tmp_path, monkeypatch):
-    """`invalidate_concat_cache` is what the sides-reorder endpoint calls
-    after persisting a permutation, so the next editor render rebuilds
-    against the new side order."""
-    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
-    album_id = "abcd0123"
-    d = _seed_album(tmp_path, album_id,
-                    sides_in_manifest=["a.flac"],
-                    sides_on_disk=["a.flac"])
-    cache = d / ".cache" / "concat.flac"
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_bytes(b"about to be killed")
-    albums_fs.invalidate_concat_cache(album_id)
-    assert not cache.exists()
-    # Idempotent: calling again on an absent cache is a no-op, not a raise.
-    albums_fs.invalidate_concat_cache(album_id)
 
 
 # ── demote-of-split preserves the music subtree ──────────────────────────
