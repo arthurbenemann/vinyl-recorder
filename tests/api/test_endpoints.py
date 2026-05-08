@@ -202,3 +202,79 @@ def test_record_start_without_upstream_is_409():
     # 409 (not connected) — could also be 507 if disk is genuinely low,
     # which would be a real signal worth surfacing. Accept either.
     assert r.status_code in (409, 507)
+
+
+# ── /api/connect ─────────────────────────────────────────────────────────
+def test_connect_failure_is_502(monkeypatch):
+    """If the upstream library raises (DNS error, 404, etc.), the route
+    must surface a 502 with the underlying message — not a generic 500."""
+    from state import upstream
+
+    def boom(url):
+        raise RuntimeError("connect refused")
+
+    monkeypatch.setattr(upstream, "connect", boom)
+    # Make sure we're not "already connected" (that path would short-circuit).
+    monkeypatch.setattr(type(upstream), "connected", property(lambda self: False))
+    r = _client().post("/api/connect", json={"stream_url": "http://nope"})
+    assert r.status_code == 502
+    assert "connect refused" in r.json()["detail"]
+
+
+# ── /api/status with an active session ──────────────────────────────────
+def test_status_reflects_active_session():
+    """When a session is in `state.active`, /api/status surfaces it under
+    `sessions` with elapsed seconds and the outfile basename."""
+    import time
+    from state import active
+
+    sid = "status-sentinel"
+    active[sid] = {
+        "proc":       None,
+        "paused":     False,
+        "start_time": time.time() - 5,
+        "outfile":    "/tmp/active.flac",
+        "meta":       {"artist": "X", "album": "Y"},
+        "duration":   0,
+    }
+    try:
+        body = _client().get("/api/status").json()
+        assert body["recording"] is True
+        s = next(s for s in body["sessions"] if s["id"] == sid)
+        assert s["outfile"] == "active.flac"
+        assert s["paused"] is False
+        assert s["elapsed"] >= 0
+    finally:
+        active.pop(sid, None)
+
+
+def test_status_freezes_elapsed_while_paused():
+    import time
+    from state import active
+
+    sid = "status-paused"
+    now = time.time()
+    active[sid] = {
+        "proc":          None,
+        "paused":        True,
+        "start_time":    now - 10,
+        "pause_started": now - 7,
+        "outfile":       "/tmp/p.flac",
+        "meta":          {},
+        "duration":      0,
+    }
+    try:
+        body = _client().get("/api/status").json()
+        s = next(s for s in body["sessions"] if s["id"] == sid)
+        assert s["paused"] is True
+        assert s["elapsed"] == 3
+    finally:
+        active.pop(sid, None)
+
+
+# ── / (index) ────────────────────────────────────────────────────────────
+def test_index_serves_html():
+    """`/` returns the static SPA shell; the frontend bootstraps from there."""
+    r = _client().get("/")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
