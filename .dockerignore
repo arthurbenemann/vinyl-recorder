@@ -2,7 +2,6 @@ output/
 __pycache__/
 *.pyc
 .claude/
-.github/screenshots/
 node_modules/
 .venv/
 .idea/
