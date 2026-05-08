@@ -81,9 +81,10 @@ Avoid:
 
 ### Skipping the changelog
 
-Add `[skip-changelog]` anywhere in the PR title if a PR genuinely
-doesn't belong in the release notes (rare — most things belong
-somewhere, even if just under Changes). Direct (non-PR) commits to
+Append `[skip-changelog]` to the PR title (after the conventional prefix
++ subject) if a PR genuinely doesn't belong in the release notes (rare —
+most things belong somewhere, even if just under Changes). Example:
+`docs: bump screenshot [skip-changelog]`. Direct (non-PR) commits to
 `main` are skipped automatically — open a docs PR if you need one in
 the changelog.
 

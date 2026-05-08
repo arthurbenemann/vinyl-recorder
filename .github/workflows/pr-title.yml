@@ -1,0 +1,34 @@
+name: Lint PR title
+
+# Validates the PR title against the conventional-commit prefix list in
+# CONTRIBUTING.md. PR titles drive the changelog (rendered by git-cliff
+# from merge commits on main), so a wrong prefix sends the entry into the
+# generic "Changes" bucket — or out of the changelog entirely.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Keep this list in sync with the table in CONTRIBUTING.md.
+          types: |
+            feat
+            fix
+            perf
+            refactor
+            test
+            docs
+            chore
+            ci
+          # Scope is optional but useful (e.g. feat(tagging):) per CONTRIBUTING.
+          requireScope: false
