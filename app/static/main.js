@@ -782,54 +782,6 @@ async function bulkDelete() {
   }
 }
 
-async function bulkPromote() {
-  if (!selected.size) return;
-  const names = [...selected];
-  if (!confirm(`Promote ${names.length} recording${names.length===1?'':'s'} to albums/ using existing tags?`)) return;
-
-  const bar  = document.getElementById('bulk-action-bar');
-  const fill = document.getElementById('bulk-action-fill');
-  const pct  = document.getElementById('bulk-action-pct');
-  document.getElementById('bulk-action-phase').textContent = 'promoting…';
-  bar.hidden = false;
-
-  let done = 0, failed = 0;
-  const total = names.length;
-  for (const fname of names) {
-    const f = filesByName[fname] || {};
-    const album = {
-      artist: f.artist || '',
-      album:  f.album  || '',
-      year:   f.year   || '',
-      genre:  f.genre  || '',
-      label:  f.label  || '',
-    };
-    try {
-      const r = await fetch('/api/promote', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ filename: fname, album }),
-      });
-      if (!r.ok) throw new Error(await parseError(r));
-      done++;
-    } catch { failed++; }
-    const progress = ((done + failed) / total) * 100;
-    fill.style.width = progress + '%';
-    pct.textContent  = `${done + failed} / ${total}`;
-  }
-
-  bar.hidden = true;
-  fill.style.width = '0%';
-
-  if (failed === 0) {
-    toast(`✓ Promoted ${done} recording${done===1?'':'s'} to albums`, 'ok');
-  } else {
-    toast(`Promoted ${done}, failed ${failed}`, 'err');
-  }
-  selected.clear();
-  refreshLib();
-  refreshAlbums();
-}
-
 async function refreshLib() {
   try {
     const r = await fetch('/api/recordings');
@@ -905,7 +857,6 @@ function refreshLibRender() {
         <td style="white-space:nowrap;text-align:right">
           <button class="icon-btn preview-btn ${playing}" data-fname="${fn}" data-kind="lib" title="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>
           <button class="icon-btn" title="Tag album" onclick="openTag('${fn}')">✎</button>
-          <button class="icon-btn" title="Promote to album" onclick="openPromote('${fn}')">▲</button>
           <a class="icon-btn" href="/api/download/${encodeURIComponent(f.filename)}" download title="Download">↓</a>
           <button class="icon-btn danger" title="Delete" onclick="deleteFile('${fn}')">✕</button>
         </td>
@@ -1432,74 +1383,6 @@ async function runCombine() {
   } finally {
     btn.disabled = false; btn.textContent = 'combine';
     hideBar(bar);
-  }
-}
-
-// ── Promote modal ─────────────────────────────────────────────────────────
-let promoteFilename = null;
-
-function openPromote(fname) {
-  const f = filesByName[fname];
-  if (!f) return;
-  promoteFilename = fname;
-  document.getElementById('p-album').value  = f.album  || '';
-  document.getElementById('p-artist').value = f.artist || '';
-  document.getElementById('p-year').value   = f.year   || '';
-  document.getElementById('p-genre').value  = f.genre  || '';
-  document.getElementById('p-label').value  = f.label  || '';
-  const label = f.album ? `${f.album}${f.artist ? ' · ' + f.artist : ''}` : fname;
-  const recorded = f.mtime ? fmtDate(f.mtime) : '—';
-  document.getElementById('promote-source').innerHTML = `
-    <div class="side-row">
-      <div class="num">·</div>
-      <div class="name" title="${htmlEscape(fname)}">${htmlEscape(label)}</div>
-      <div class="meta">${htmlEscape(recorded)} · ${f.size_mb || '—'} MB</div>
-    </div>`;
-  document.getElementById('promote-modal').hidden = false;
-  document.addEventListener('keydown', promoteEscHandler);
-}
-
-function closePromote() {
-  document.getElementById('promote-modal').hidden = true;
-  document.removeEventListener('keydown', promoteEscHandler);
-  promoteFilename = null;
-}
-const promoteEscHandler = makeModalEscHandler(closePromote);
-
-async function runPromote() {
-  if (!promoteFilename) return;
-  const album = {
-    artist: document.getElementById('p-artist').value.trim(),
-    album:  document.getElementById('p-album').value.trim(),
-    year:   document.getElementById('p-year').value.trim(),
-    genre:  document.getElementById('p-genre').value.trim(),
-    label:  document.getElementById('p-label').value.trim(),
-  };
-  if (!album.artist || !album.album) {
-    toast('✗ Promote needs at least artist + album', 'err');
-    return;
-  }
-  const btn = document.getElementById('promote-go');
-  const bar = document.getElementById('promote-bar');
-  btn.disabled = true; btn.textContent = 'promoting…';
-  bar.hidden = false;
-  try {
-    const r = await fetch('/api/promote', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ filename: promoteFilename, album }),
-    });
-    if (!r.ok) throw new Error(await parseError(r));
-    const d = await r.json();
-    toast(`✓ Promoted · ${fmtDuration(d.duration_seconds)}`, 'ok');
-    selected.delete(promoteFilename);
-    closePromote();
-    refreshLib();
-    refreshAlbums();
-  } catch (e) {
-    toast('✗ promote failed: ' + e.message, 'err');
-  } finally {
-    btn.disabled = false; btn.textContent = 'promote';
-    bar.hidden = true;
   }
 }
 
