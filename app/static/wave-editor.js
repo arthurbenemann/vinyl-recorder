@@ -7,7 +7,7 @@
 'use strict';
 
 const we = {
-  filename:    null,
+  filename:    null,         // historic name — actually holds the album_id
   total:       0,            // album duration in seconds
   viewStart:   0,            // visible window in seconds
   viewEnd:     0,
@@ -22,8 +22,20 @@ const we = {
   playingTrack: null,        // index of the track currently being played, or null for free play
   playingEnd:  null,         // time at which playback should auto-pause
   measured:    null,         // last /api/album/measure result, or null while stale
+  approxPeakDb: null,        // peak read from .peaks.dat (instant, ±0.05 dB at vinyl peaks). Replaced by exact value on measure.
+  peaks:       null,         // parsed .peaks.dat, fed to drawPeaks() on every redraw
   targetPeakDb: -1.0,        // overwritten from /api/config (default_split_target_peak_db)
 };
+
+// Slider-readout helper: convert 1..127 to dB. Mid-bin reconstruction:
+// amp = (v*256 + 127.5) / 32768; dB = 20*log10(amp). Slider notches match
+// the 8-bit quantisation in .peaks.dat so each step is one detectable
+// amplitude level.
+function weNoiseSliderDb(v) {
+  const n = Math.max(1, Math.min(127, parseInt(v, 10) || 1));
+  const amp = (n * 256 + 127.5) / 32768;
+  return (20 * Math.log10(Math.min(1, amp))).toFixed(1);
+}
 
 function fmtMMSS(sec) {
   if (sec == null || isNaN(sec)) return '';
@@ -148,12 +160,18 @@ function openWaveEditor(fname) {
     playingTrack: null,
     playingEnd:  null,
     measured:    null,
+    approxPeakDb: null,
+    peaks:       null,
     // Flips true once weLoadExistingSplit resolves. _savePlanNow gates on
     // this so the empty default state never races ahead of the load.
     loaded:      false,
   });
   resetMeasureUI();
-  weMeasure();  // kick off in the background; UI doesn't block on it
+  // Kick off peaks fetch in parallel with audio loading. When peaks land
+  // we redraw the canvas + minimap and surface the approximate peak as
+  // the album-stats readout — instant feedback while astats stays
+  // expensive and on-demand.
+  _loadAndDrawPeaks(fname);
   // The "filename" field on the editor used to literally be a FLAC name; in
   // the album-folder model `fname` is the opaque album_id. Show the album's
   // human label in the title bar instead.
@@ -173,9 +191,11 @@ function openWaveEditor(fname) {
   document.getElementById('we-search-status').textContent = '';
   document.getElementById('we-silence-status').textContent = '';
 
-  // Audio source. Reuse /api/download which the browser caches.
+  // Audio source: the album's combined FLAC, materialised on first
+  // request from `.cache/concat.flac` so the `<audio>` element gets a
+  // real, seekable file (not the manifest JSON or a streamed concat).
   const audio = document.getElementById('we-audio');
-  audio.src = `/api/download/${encodeURIComponent(fname)}`;
+  audio.src = `/api/album/${encodeURIComponent(fname)}/audio`;
   audio.load();
   audio.onloadedmetadata = () => {
     if (!we.total) {
@@ -188,12 +208,6 @@ function openWaveEditor(fname) {
   };
   audio.ontimeupdate = onAudioTimeUpdate;
   audio.onended = () => stopPlayback();
-
-  // Minimap = the cached full-album waveform. The main waveform fetch will
-  // hit the same cached PNG (different size), so the minimap rarely triggers
-  // a render of its own — no progress UI needed here.
-  document.getElementById('we-minimap-img').src =
-    `/api/album/${encodeURIComponent(fname)}/waveform?w=1200&h=40&t=${Date.now()}`;
 
   drawAll();
   document.getElementById('we-modal').hidden = false;
@@ -245,7 +259,7 @@ function closeWaveEditor() {
   try { audio.pause(); audio.src = ''; } catch (e) {}
   document.getElementById('we-modal').hidden = true;
   document.removeEventListener('keydown', weKeyDown);
-  _stopWfPoll();   // tear down any in-flight waveform progress overlay
+  _hidePeaksOverlay();
   // Flush any debounced plan-save in flight so a fast-close doesn't lose
   // the user's last edit. Runs in the background; the modal is already
   // hidden so the user isn't waiting on the network.
@@ -254,7 +268,7 @@ function closeWaveEditor() {
 
 // Re-render everything that depends on viewStart/viewEnd or cuts.
 function drawAll() {
-  setWaveformImage();
+  redrawWaveform();
   renderWaveformOverlay();
   renderMinimapOverlay();
   renderTracks();
@@ -262,67 +276,69 @@ function drawAll() {
   document.getElementById('we-t1').textContent = fmtMMSS(we.viewEnd);
 }
 
-// ── Waveform image ────────────────────────────────────────────────────────
-// Renders track the in-flight waveform fetch via /api/jobs/<id> so a long
-// full-album render shows a progress bar over the wave area. Cached PNGs
-// (the common case after first open) finish in milliseconds and the bar
-// flashes briefly or not at all.
-let _wfPollStop = null;
-function _stopWfPoll() {
-  if (_wfPollStop) { _wfPollStop(); _wfPollStop = null; }
+// ── Waveform canvas ───────────────────────────────────────────────────────
+// Both the main waveform and the minimap render from the parsed .peaks.dat
+// (loaded once per album open). Zoom/pan is local — sub-millisecond canvas
+// redraw, no network round-trip.
+function redrawWaveform() {
+  const canvas = document.getElementById('we-canvas');
+  const mini   = document.getElementById('we-minimap-canvas');
+  if (canvas) drawPeaks(canvas, we.peaks, we.viewStart, we.viewEnd, '#6db3ff');
+  if (mini)   drawPeaks(mini,   we.peaks, 0,             we.total,   '#6db3ff');
+}
+
+// Show the loading overlay during the (occasional) cold-fetch of /peaks
+// when the album's concat cache + dat aren't yet built. Cached fetches
+// return in milliseconds and the overlay never appears.
+let _peaksOverlayTimer = null;
+function _showPeaksOverlay() {
+  const ov = document.getElementById('we-wf-overlay');
+  if (!ov) return;
+  if (_peaksOverlayTimer) clearTimeout(_peaksOverlayTimer);
+  _peaksOverlayTimer = setTimeout(() => { ov.hidden = false; }, 200);
+}
+function _hidePeaksOverlay() {
+  if (_peaksOverlayTimer) { clearTimeout(_peaksOverlayTimer); _peaksOverlayTimer = null; }
   const ov = document.getElementById('we-wf-overlay');
   if (ov) ov.hidden = true;
 }
 
-function _startWfPoll(jobId) {
-  _stopWfPoll();
-  const ov   = document.getElementById('we-wf-overlay');
-  const fill = document.getElementById('we-wf-overlay-fill');
-  const text = document.getElementById('we-wf-overlay-text');
-  if (!ov) return;
-  // Delay showing the overlay slightly — most fetches return from cache
-  // within a frame or two and we don't want a flicker.
-  let stopped = false;
-  let shown = false;
-  const showTimer = setTimeout(() => {
-    if (!stopped) { ov.hidden = false; shown = true; }
-  }, 200);
-  (async () => {
-    while (!stopped) {
-      try {
-        const r = await fetch('/api/jobs/' + encodeURIComponent(jobId));
-        if (r.ok) {
-          const d = await r.json();
-          if (shown && fill) fill.style.width = ((d.progress || 0) * 100).toFixed(1) + '%';
-          if (shown && text && d.phase) text.textContent = d.phase + '… ' + Math.round((d.progress || 0) * 100) + '%';
-          if (d.done) break;
-        }
-      } catch (e) {}
-      await new Promise(res => setTimeout(res, 250));
+async function _loadAndDrawPeaks(albumId) {
+  _showPeaksOverlay();
+  try {
+    const peaks = await loadAlbumPeaks(albumId);
+    if (we.filename !== albumId) return;  // editor moved on while we were waiting
+    we.peaks = peaks;
+    if (!we.total && peaks.duration > 0) {
+      we.total   = peaks.duration;
+      we.viewEnd = peaks.duration;
+      document.getElementById('we-duration').textContent = fmtMMSS(we.total);
+      document.getElementById('we-mini-end').textContent = fmtMMSS(we.total);
     }
-  })();
-  _wfPollStop = () => { stopped = true; clearTimeout(showTimer); };
+    we.approxPeakDb = approxPeakDbFromPeaks(peaks);
+    _renderApproxStats();
+    drawAll();
+  } catch (e) {
+    const text = document.getElementById('we-stats-text');
+    if (text) text.textContent = 'waveform unavailable: ' + e.message;
+  } finally {
+    _hidePeaksOverlay();
+  }
 }
 
-function setWaveformImage() {
-  const img = document.getElementById('we-img');
-  if (!we.filename || !we.total) { img.removeAttribute('src'); _stopWfPoll(); return; }
-  const isFull = we.viewStart <= 0.01 && we.viewEnd >= we.total - 0.5;
-  // Only the full-album render goes through the heavy code path on the
-  // server; zoomed views are fast enough that we skip the progress bar.
-  const jobId = isFull ? newJobId() : '';
-  const baseQs = `w=2400&h=140${jobId ? '&job_id=' + encodeURIComponent(jobId) : ''}`;
-  const url = isFull
-    ? `/api/album/${encodeURIComponent(we.filename)}/waveform?${baseQs}`
-    : `/api/album/${encodeURIComponent(we.filename)}/waveform?${baseQs}`
-        + `&start=${we.viewStart.toFixed(3)}&end=${we.viewEnd.toFixed(3)}`;
-  if (img.dataset.lastUrl !== url) {
-    img.dataset.lastUrl = url;
-    img.onload  = _stopWfPoll;
-    img.onerror = _stopWfPoll;
-    if (jobId) _startWfPoll(jobId);
-    img.src = url;
+// Stats readout: fall back to the .dat-derived peak (with `~` prefix to
+// flag it as approximate) until astats has run. After /measure returns
+// the exact number, formatMeasured replaces the ~-prefixed line.
+function _renderApproxStats() {
+  if (we.measured && we.measured.peak_db != null) return;  // measured wins
+  const text = document.getElementById('we-stats-text');
+  if (!text) return;
+  if (we.approxPeakDb == null) {
+    text.textContent = 'click measure to compute peak + noise floor';
+    return;
   }
+  text.textContent =
+    `peak ~${we.approxPeakDb.toFixed(1)} dB · click measure for noise floor`;
 }
 
 // ── Minimap viewport rect + cut markers ───────────────────────────────────
@@ -390,7 +406,10 @@ function weWheel(e) {
   const tCenter = _xToTime(x);
   const factor = e.deltaY > 0 ? 1.25 : 0.8;        // wheel down = zoom out
   const len    = _viewLen() * factor;
-  const minLen = 0.1;                              // 100 ms — backend cut precision is ~1 ms
+  // Each .peaks.dat bucket is 256 samples ≈ 2.7 ms at 96 kHz. A 0.5 s
+  // window across 2400 px gives ~13 px/bucket — visible stair-stepping
+  // but cut placement (millisecond precision) is unaffected.
+  const minLen = 0.5;
   const newLen = Math.max(minLen, Math.min(we.total, len));
   // Keep the time under the cursor pinned to the same x as we zoom.
   const frac = x / r.width;
@@ -459,7 +478,11 @@ function weAddCutAtClick(e) {
 }
 
 function weAddCutAtTime(t) {
-  if (we.cuts.some(c => Math.abs(c - t) < 0.5)) return;
+  // Reject only literal duplicates. Tracks shorter than 0.5s are flagged as
+  // "doesn't fit" by renderTracks(); the drag handler has no minimum-gap
+  // check at all. A 0.5s deadband here silently blocked every insert in the
+  // deepest-zoom window (which floors at 0.5s) — see plan for full context.
+  if (we.cuts.some(c => Math.abs(c - t) < 0.001)) return;
   we.cuts.push(t);
   we.cuts.sort((a, b) => a - b);
   // Keep titles + skipped aligned: insert at the right slot. New regions
@@ -1034,7 +1057,9 @@ async function weDetectShowOnly() {
 }
 
 async function weDetectInternal({ replace }) {
-  const noise   = parseFloat(document.getElementById('we-noise').value)    || -40;
+  // The slider holds an int8 threshold (1..127) matching .peaks.dat
+  // resolution; the dB equivalent is computed for display only.
+  const thresholdInt8 = parseInt(document.getElementById('we-noise').value, 10) || 8;
   const mindur  = parseFloat(document.getElementById('we-mindur').value)   || 1.5;
   const skipMin = parseFloat(document.getElementById('we-skiplong').value) || 15;
   const status  = document.getElementById('we-silence-status');
@@ -1046,7 +1071,8 @@ async function weDetectInternal({ replace }) {
       const r = await fetch('/api/album/detect-silences', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
-          album_id: we.filename, noise_db: noise, min_silence: mindur, job_id: jobId,
+          album_id: we.filename, threshold_int8: thresholdInt8,
+          min_silence: mindur, job_id: jobId,
         }),
       });
       if (!r.ok) throw new Error(await parseError(r));
@@ -1167,18 +1193,24 @@ async function weApplySplit() {
 function resetMeasureUI() {
   we.measured = null;
   const el = document.getElementById('we-stats-text');
-  if (el) el.textContent = 'measuring…';
+  if (el) el.textContent = 'loading waveform…';
   const btn = document.getElementById('we-measure-btn');
-  if (btn) btn.disabled = true;
+  if (btn) btn.disabled = false;  // measure is on-demand now (no auto-run on open)
 }
 
-// Mark cached measurement stale. The button label flips to "re-measure" so
-// the user knows the readout no longer matches what will be exported.
+// Mark cached measurement stale. We keep the approximate (.dat-derived)
+// peak visible — accurate to ±0.05 dB at vinyl peaks — and the leading
+// `~` flags it as a guess so the readout never lies to the user.
 function invalidateMeasure() {
   if (we.measured == null) return;
   we.measured = null;
   const text = document.getElementById('we-stats-text');
-  if (text) text.textContent = 'cuts changed — re-measure';
+  if (text && we.approxPeakDb != null) {
+    text.textContent =
+      `peak ~${we.approxPeakDb.toFixed(1)} dB · cuts changed — re-measure`;
+  } else if (text) {
+    text.textContent = 'cuts changed — re-measure';
+  }
 }
 
 async function weMeasure() {

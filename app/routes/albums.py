@@ -9,18 +9,18 @@ list, so the underlying audio is never duplicated."""
 import asyncio
 import re
 import subprocess
-import uuid
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 
 from services import albums_fs
 from services.ffmpeg import (
     LOW_SPACE_GB, disk_space_error, flac_duration_seconds, parse_astats,
-    parse_silencedetect, run_ffmpeg_with_progress, safe_path_component,
+    run_ffmpeg_with_progress, safe_path_component,
 )
+from services.peaks import silence_runs_from_dat
 from services.jobs import finish_job, start_job
 from state import (
     CombineRequest, MUSIC_DIR, MeasureRequest, PlanUpdateRequest,
@@ -179,87 +179,94 @@ async def _ensure_cache(album_id: str, job_id: Optional[str] = None) -> Path:
         raise HTTPException(500, str(e))
 
 
-@router.get("/api/album/{album_id}/waveform")
-async def album_waveform(album_id: str, w: int = 2400, h: int = 120,
-                         start: float = 0.0, end: float = 0.0,
-                         job_id: str = ""):
-    """Render a PNG waveform of the album's concat cache. The full-album
-    view is cached on disk (PNG keyed by cache mtime); zoomed views
-    render to a temp file and stream back."""
+async def _ensure_peaks(album_id: str, job_id: Optional[str] = None) -> Path:
+    """Build/refresh both the concat cache and `.peaks.dat`. Returns the dat
+    path. The concat cache is a side-effect — it's reused by audio playback
+    and by measure/split, so the user doesn't pay for it twice."""
+    try:
+        return await asyncio.to_thread(
+            albums_fs.ensure_peaks_cache, album_id, job_id,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+
+
+@router.get("/api/album/{album_id}/peaks")
+async def album_peaks(album_id: str, job_id: str = ""):
+    """Serve the album's `.peaks.dat` (binary).
+
+    The wave editor fetches this once per album open and renders zoom/pan
+    locally on a `<canvas>`, replacing the per-zoom server-side PNG render.
+    """
     _require_album(album_id)
-    src = await _ensure_cache(album_id, job_id or None)
-    w = max(400, min(8000, int(w)))
-    h = max(40,  min(400,  int(h)))
-    total = flac_duration_seconds(src) or 0.0
-
-    full_view = (end <= 0.0) or (start <= 0.0 and end >= total - 0.5)
-    if full_view:
-        cache_dir = albums_fs.album_dir(album_id) / ".cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        png = cache_dir / f"waveform.{w}x{h}.png"
-        if not png.exists() or png.stat().st_mtime < src.stat().st_mtime:
-            cmd = ["ffmpeg", "-y", "-loglevel", "error",
-                   "-i", str(src),
-                   "-filter_complex",
-                   f"showwavespic=s={w}x{h}:colors=0x6db3ff:scale=lin:split_channels=0",
-                   "-frames:v", "1",
-                   str(png)]
-            start_job(job_id, "waveform")
-            rc, stderr = await asyncio.to_thread(
-                run_ffmpeg_with_progress, cmd, total, job_id, (0.0, 1.0), "rendering",
-            )
-            if rc != 0:
-                err = (stderr or b"").decode(errors="replace")[:300]
-                finish_job(job_id, error=err)
-                raise HTTPException(500, f"waveform render failed: {err}")
+    if job_id:
+        start_job(job_id, "peaks")
+    try:
+        dat = await _ensure_peaks(album_id, job_id or None)
+    finally:
+        if job_id:
             finish_job(job_id)
-        else:
-            start_job(job_id, "waveform")
-            finish_job(job_id)
-        return FileResponse(str(png), media_type="image/png")
+    return FileResponse(
+        str(dat),
+        media_type="application/octet-stream",
+        headers={"Cache-Control": "no-cache"},
+    )
 
-    # Zoomed view — render to a temp file, no cache.
-    s = max(0.0, float(start))
-    e = min(total, float(end)) if total else float(end)
-    if e <= s + 0.05:
-        raise HTTPException(400, "zoom range too small")
-    tmp = Path(f"/tmp/wf_{uuid.uuid4().hex[:8]}.png")
-    cmd = ["ffmpeg", "-y", "-loglevel", "error",
-           "-ss", f"{s:.3f}", "-to", f"{e:.3f}",
-           "-i", str(src),
-           "-filter_complex",
-           f"showwavespic=s={w}x{h}:colors=0x6db3ff:scale=lin:split_channels=0",
-           "-frames:v", "1",
-           str(tmp)]
-    r = await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
-    if r.returncode != 0:
-        err = (r.stderr or b"").decode(errors="replace")[:300]
-        raise HTTPException(500, f"waveform render failed: {err}")
-    data = tmp.read_bytes()
-    try: tmp.unlink()
-    except Exception: pass
-    return StreamingResponse(iter([data]), media_type="image/png")
+
+@router.get("/api/album/{album_id}/audio")
+async def album_audio(album_id: str):
+    """Serve the album's combined FLAC for `<audio>` playback in the wave
+    editor. Builds the concat cache on first request (subsequent calls
+    return the cached file directly)."""
+    _require_album(album_id)
+    src = await _ensure_cache(album_id)
+    return FileResponse(str(src), media_type="audio/flac",
+                        filename=f"{album_id}.flac")
 
 
 @router.post("/api/album/detect-silences")
 async def detect_silences(req: SilenceDetectRequest):
+    """Scan the album's `.peaks.dat` for silent runs.
+
+    The threshold is in audiowaveform's 8-bit quantised amplitude (1..127);
+    each step is one of the 127 distinguishable levels in the .dat. The
+    legacy `noise_db` field is mapped to int8 via mid-bin reconstruction
+    when `threshold_int8` isn't supplied, so older clients keep working.
+    Returns `[{start, end, duration}, ...]` — same shape the editor's
+    silence-band rendering already consumes.
+    """
     _require_album(req.album_id)
-    src = await _ensure_cache(req.album_id, req.job_id)
-    total_dur = flac_duration_seconds(src) or 0.0
-    cmd = ["ffmpeg", "-hide_banner", "-i", str(src),
-           "-af", f"silencedetect=noise={req.noise_db}dB:d={req.min_silence}",
-           "-f", "null", "-"]
-    start_job(req.job_id, "detect silences")
-    rc, stderr = await asyncio.to_thread(
-        run_ffmpeg_with_progress, cmd, total_dur, req.job_id, (0.0, 1.0), "scanning",
+    threshold_int8 = _resolve_threshold_int8(req)
+    if req.job_id:
+        start_job(req.job_id, "detect silences")
+    try:
+        dat = await _ensure_peaks(req.album_id, req.job_id or None)
+    finally:
+        # The dat-build phase finishes before the scan; reset the bar to
+        # 100 % so the UI tears down cleanly even though the scan itself
+        # runs synchronously in <50 ms.
+        if req.job_id:
+            finish_job(req.job_id)
+    silences = await asyncio.to_thread(
+        silence_runs_from_dat, dat, threshold_int8, req.min_silence,
     )
-    if rc != 0:
-        err = (stderr or b"").decode(errors="replace")[:300]
-        finish_job(req.job_id, error=err)
-        raise HTTPException(500, f"ffmpeg failed: {err}")
-    finish_job(req.job_id)
-    silences = parse_silencedetect((stderr or b"").decode(errors="replace"))
-    return {"silences": silences}
+    return {"silences": silences,
+            "threshold_int8": threshold_int8,
+            "min_silence": req.min_silence}
+
+
+def _resolve_threshold_int8(req: SilenceDetectRequest) -> int:
+    """Either an explicit `threshold_int8` from the slider, or a legacy
+    `noise_db` (e.g. -40 dB) mapped onto the 1..127 grid via mid-bin
+    reconstruction. Clamps to 1..127 so a threshold of 0 doesn't silently
+    match the entire album."""
+    if req.threshold_int8 is not None:
+        return max(1, min(127, int(req.threshold_int8)))
+    db = float(req.noise_db)
+    amp = 10.0 ** (db / 20.0)
+    return max(1, min(127, round(amp * 127)))
 
 
 def _astats_filter_for_ranges(ranges: Optional[list[list[float]]]) -> str:

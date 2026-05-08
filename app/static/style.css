@@ -389,8 +389,27 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .we-suggest-pop input[type="number"] {
   background: var(--surface); border: 0.5px solid var(--border2); border-radius: 4px;
   color: var(--text); font-family: var(--mono); font-size: 11px; padding: 3px 6px;
-  outline: none; width: 60px;
+  outline: none; width: 56px; font-variant-numeric: tabular-nums;
 }
+.we-suggest-pop input[type="number"]:focus { border-color: rgba(55,138,221,0.5); }
+
+/* Silence-detection control grid: slider on its own row, two number inputs
+   below. Keeping each labeled control on a single row prevents inline labels
+   like "Min silence" from breaking mid-text when the popover wraps. */
+.silence-controls { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+.silence-row { display: flex; align-items: center; gap: 10px; }
+.silence-slider input[type="range"] {
+  flex: 1; min-width: 100px; accent-color: var(--blue); height: 4px; margin: 0;
+}
+.silence-readout {
+  font-variant-numeric: tabular-nums; font-size: 11px; color: var(--text);
+  min-width: 56px; text-align: right; white-space: nowrap;
+}
+.silence-label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.silence-numbers { gap: 18px; flex-wrap: wrap; }
+.silence-num { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.silence-unit { font-size: 11px; color: var(--muted); }
+.silence-actions .btn { flex: 1; text-align: center; }
 
 /* Wave editor — auto-suggest popovers */
 .we-suggest { position: relative; }

@@ -158,6 +158,31 @@ def concat_cache_path(album_id: str) -> Path:
     return album_dir(album_id) / ".cache" / "concat.flac"
 
 
+def peaks_cache_path(album_id: str) -> Path:
+    """Where the album's `.peaks.dat` lives. Same `.cache/` dir as the
+    concat FLAC, so it's swept by `delete_album` / `demote_album` for free."""
+    return album_dir(album_id) / ".cache" / "peaks.dat"
+
+
+def ensure_peaks_cache(album_id: str, job_id: Optional[str] = None) -> Path:
+    """Build or refresh `.cache/peaks.dat` from `concat.flac`. Builds the
+    concat cache first when stale, then hands off to audiowaveform. The
+    concat cache's own freshness logic (mtime ≥ each side) handles the
+    upstream case where a side gets reordered or a tag edit triggers a
+    rebuild."""
+    # Imported here, not at module top, because services/peaks imports
+    # nothing back from albums_fs and a top-level import would still work —
+    # but localising it keeps the module dependency arrow strictly
+    # one-directional, easier to reason about.
+    from services.peaks import is_fresh, render_peaks
+    src = ensure_concat_cache(album_id, job_id)
+    out = peaks_cache_path(album_id)
+    if is_fresh(out, src):
+        return out
+    render_peaks(src, out)
+    return out
+
+
 def _cache_is_fresh(cache: Path, side_paths: list[Path]) -> bool:
     """Returns True iff the cache exists, is newer than every side, and
     every side actually exists on disk."""
