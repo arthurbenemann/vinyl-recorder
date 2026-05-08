@@ -108,10 +108,13 @@ def test_raw_row_title_inline_rename(stack, page):
         )
         page.wait_for_selector(cell_sel, timeout=10_000)
         page.dblclick(cell_sel)
-        # Inline rename inserts an `input.inline-rename` next to the title.
-        page.wait_for_selector(f"{cell_sel} + input.inline-rename", timeout=4_000)
-        page.fill(f"{cell_sel} + input.inline-rename", new_stem)
-        page.press(f"{cell_sel} + input.inline-rename", "Enter")
+        # `startInlineRename` hides the title span and inserts an
+        # `input.inline-rename` next to it (inside `.row-title`, *inside*
+        # the td — not an adjacent sibling of the td).
+        input_sel = f"{cell_sel} input.inline-rename"
+        page.wait_for_selector(input_sel, timeout=4_000)
+        page.fill(input_sel, new_stem)
+        page.press(input_sel, "Enter")
 
         # The input vanishes once the POST resolves and the row re-renders
         # under the new filename.
