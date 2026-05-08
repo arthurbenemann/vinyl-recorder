@@ -85,6 +85,25 @@ def test_disconnect_while_recording_returns_409():
         active.pop("sentinel-sid", None)
 
 
+# ── /api/combine ─────────────────────────────────────────────────────────
+def test_combine_while_recording_returns_409():
+    # Combining a file that is currently being recorded must be rejected so the
+    # in-progress FLAC is never moved out from under the active ffmpeg process.
+    from state import active
+
+    recording_file = "Artist - Album (2024).flac"
+    active["sentinel-sid"] = {"proc": None, "filename": recording_file}
+    try:
+        r = _client().post("/api/combine", json={
+            "filenames": [recording_file],
+            "album": {},
+        })
+        assert r.status_code == 409
+        assert "recording in progress" in r.json()["detail"].lower()
+    finally:
+        active.pop("sentinel-sid", None)
+
+
 # ── /api/clip/clear ──────────────────────────────────────────────────────
 def test_clip_clear_validates_channel():
     c = _client()
