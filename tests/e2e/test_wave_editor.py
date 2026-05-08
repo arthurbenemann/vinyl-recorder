@@ -490,7 +490,7 @@ def test_split_with_cuts_across_side_boundaries(stack, page):
         split_result = page.evaluate(
             f"""
             async () => {{
-                const r = await fetch('/api/album/{album_id}/split', {{
+                const r = await fetch('/api/album/split', {{
                     method: 'POST',
                     headers: {{'Content-Type': 'application/json'}},
                     body: JSON.stringify({{
@@ -505,7 +505,7 @@ def test_split_with_cuts_across_side_boundaries(stack, page):
                         bit_depth: 0,
                     }}),
                 }});
-                if (!r.ok) throw new Error('split failed: ' + r.status);
+                if (!r.ok) throw new Error('split failed: ' + r.status + ' ' + (await r.text()));
                 return r.json();
             }}
             """
