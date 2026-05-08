@@ -315,3 +315,124 @@ def test_create_album_retries_on_slug_collision(tmp_path, monkeypatch):
     monkeypatch.setattr(albums_fs, "new_album_id", lambda: next(slugs))
     album_id, _ = albums_fs.create_album(["side1.flac"], {})
     assert album_id == "bbbbbbbb"
+
+
+# ── concat-cache invalidation ────────────────────────────────────────────
+def test_ensure_concat_cache_rebuilds_when_side_mtime_advances(tmp_path, monkeypatch):
+    """If a side's mtime is newer than the cache (file edited, dropped in,
+    or `reorder_sides` left the cache stale), the next `ensure_concat_cache`
+    must call back into ffmpeg. This is the contract the editor relies on
+    when peeking at the waveform after a side change."""
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
+    album_id = "abcd0123"
+    d = _seed_album(tmp_path, album_id,
+                    sides_in_manifest=["a.flac"],
+                    sides_on_disk=["a.flac"])
+    cache = d / ".cache" / "concat.flac"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_bytes(b"stale")
+    import os, time
+    # Cache predates the side: stale.
+    older = time.time() - 100
+    os.utime(cache, (older, older))
+    side_newer = time.time() + 50
+    os.utime(d / "a.flac", (side_newer, side_newer))
+    # Mock the ffmpeg run so the test stays hermetic. The body must:
+    # 1. be invoked (cache stale)
+    # 2. cause the cache file to exist after, so subsequent calls don't
+    #    rebuild — emulate by writing a fresh file from the side.
+    def fake_run(cmd, total_dur, job_id, phase_range, label):
+        out_path = Path(cmd[-1])
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(b"rebuilt")
+        return (0, b"")
+    with patch.object(albums_fs, "run_ffmpeg_with_progress", side_effect=fake_run) as m:
+        albums_fs.ensure_concat_cache(album_id)
+        assert m.call_count == 1
+
+
+def test_invalidate_concat_cache_drops_the_file(tmp_path, monkeypatch):
+    """`invalidate_concat_cache` is what the sides-reorder endpoint calls
+    after persisting a permutation, so the next editor render rebuilds
+    against the new side order."""
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
+    album_id = "abcd0123"
+    d = _seed_album(tmp_path, album_id,
+                    sides_in_manifest=["a.flac"],
+                    sides_on_disk=["a.flac"])
+    cache = d / ".cache" / "concat.flac"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_bytes(b"about to be killed")
+    albums_fs.invalidate_concat_cache(album_id)
+    assert not cache.exists()
+    # Idempotent: calling again on an absent cache is a no-op, not a raise.
+    albums_fs.invalidate_concat_cache(album_id)
+
+
+# ── demote-of-split preserves the music subtree ──────────────────────────
+def test_demote_album_preserves_emitted_music_subtree(tmp_path, monkeypatch):
+    """When the user demotes an album that's already been split, the per-
+    track FLACs in `music/{music_relpath}/` are a finished export and stay
+    on disk. The album dir + sides go back to raw/. (UX promise the merged
+    PR explicitly committed to in the demote dialog text.)"""
+    raw = tmp_path / "raw"
+    inp = tmp_path / "in-progress"
+    music = tmp_path / "music"
+    raw.mkdir(); inp.mkdir(); music.mkdir()
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", inp)
+    monkeypatch.setattr(albums_fs, "RAW_DIR", raw)
+    monkeypatch.setattr(albums_fs, "MUSIC_DIR", music)
+    album_id = "abcd0123"
+    # Seed a "split" album: manifest has music_relpath, music subtree exists.
+    d = inp / album_id
+    d.mkdir()
+    (d / "side1.flac").write_bytes(b"")
+    (d / "album.json").write_text(
+        '{"schema_version":2,"tags":{"artist":"X","album":"Y","year":"1999"},'
+        '"sides":["side1.flac"],"cover":null,'
+        '"plan":{"tracks":[],"normalize":false,"target_peak_db":-1.0,'
+        '"measured_peak_db":null,"bit_depth":0},'
+        '"music_relpath":"X/Y (1999)"}'
+    )
+    music_album = music / "X" / "Y (1999)"
+    music_album.mkdir(parents=True)
+    (music_album / "01 - track.flac").write_bytes(b"keep me")
+
+    res = albums_fs.demote_album(album_id)
+    assert res["music_preserved"] is True
+    assert res["moved"] == ["side1.flac"]
+    assert (raw / "side1.flac").exists()
+    assert not d.exists()
+    # The music subtree stays put — including parent artist dir.
+    assert music_album.is_dir()
+    assert (music_album / "01 - track.flac").read_bytes() == b"keep me"
+    assert (music / "X").is_dir()
+
+
+# ── has_draft flag in /api/albums summary ────────────────────────────────
+@pytest.mark.parametrize("plan, music_relpath, expected_split, expected_has_draft", [
+    (None, None, False, False),                        # never opened
+    ({"tracks": []}, None, False, True),               # editor saved a draft
+    ({"tracks": []}, "X/Y", True, False),              # split has run
+    (None, "X/Y", True, False),                        # exotic: relpath but
+                                                       # plan cleared (still
+                                                       # treated as "split")
+])
+def test_has_draft_flag_matrix(tmp_path, monkeypatch,
+                                plan, music_relpath, expected_split, expected_has_draft):
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
+    monkeypatch.setattr(albums_fs, "MUSIC_DIR", tmp_path / "music")
+    album_id = "abcd0123"
+    d = tmp_path / album_id
+    d.mkdir()
+    (d / "a.flac").write_bytes(b"")
+    import json as _json
+    (d / "album.json").write_text(_json.dumps({
+        "schema_version": 2, "tags": {}, "sides": ["a.flac"],
+        "cover": None, "plan": plan, "music_relpath": music_relpath,
+    }))
+    rows = albums_fs.list_albums()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["split"] is expected_split
+    assert row["has_draft"] is expected_has_draft
