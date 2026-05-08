@@ -4,7 +4,10 @@
 # Run with:
 #   make test
 # or:
-#   docker compose -f docker-compose.yml -f docker-compose.test.yml up --build -d
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.test.yml up --build -d
+#
+# Stacks on top of docker-compose.dev.yml so the recorder builds from this
+# checkout — the published image at ghcr.io won't have your local changes.
 #
 # Then open http://localhost:8080 in a browser. Switch streams from the UI's
 # "Stream source" field (the test-streams container serves /loop, /album,

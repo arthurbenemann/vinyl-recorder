@@ -34,19 +34,30 @@ auto-fill metadata + embed cover art from the Cover Art Archive.
 Requires Docker or Podman with `compose` support.
 
 ```bash
-# build and start in the background
-make            # alias for: docker compose up --build -d
+# pulls ghcr.io/arthurbenemann/vinyl-recorder:latest and starts in the background
+docker compose up -d
 ```
 
 Then open <http://localhost:8080>. Recordings persist in
 `./output/` on the host.
 
+To override settings without editing the tracked compose file, drop a
+`docker-compose.override.yml` next to it — `docker compose` auto-merges it.
+
+### Build from source (contributors)
+
+```bash
+# layers docker-compose.dev.yml on top so the image is rebuilt from this checkout
+make            # alias for: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
+```
+
 ## Configuration
 
 All runtime options are environment variables in
 [docker-compose.yml](docker-compose.yml) — each one is commented in place
-explaining what it does and the accepted values. Edit that file, then recreate
-the container.
+explaining what it does and the accepted values. Override them via your own
+`docker-compose.override.yml` (or edit the file directly), then recreate the
+container.
 
 ## Pi capture service ([pi/](pi/))
 
