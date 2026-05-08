@@ -355,6 +355,19 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .tracks-sub .tsize { font-variant-numeric: tabular-nums; min-width: 60px; text-align: right; }
 
 /* Wave editor — toolbar */
+/* Editor header right cluster: the auto-saved indicator + close button.
+   `we-saved` flashes for ~1 s every time the debounced plan-save lands;
+   without it auto-save is invisible and returning users can't tell the
+   editor persisted their last drag. The opacity transition fades it out
+   while it stays visible, then JS hides the element so layout doesn't
+   shift between flashes. */
+.we-header-right { display: flex; align-items: center; gap: 10px; }
+.we-saved {
+  font-size: 10px; letter-spacing: 0.08em; color: var(--green);
+  padding: 2px 6px; border: 0.5px solid rgba(99,153,34,0.35); border-radius: 4px;
+  opacity: 0; transition: opacity 0.9s ease-out;
+}
+.we-saved.flash { opacity: 1; }
 .we-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .we-toolbar .grow { flex: 1; }
 .we-toolbar .play-btn { width: 36px; height: 28px; border-radius: 4px; background: var(--surface); border: 0.5px solid var(--border2); color: var(--text); font-family: var(--mono); font-size: 14px; cursor: pointer; line-height: 1; }

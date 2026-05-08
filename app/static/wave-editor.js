@@ -7,7 +7,7 @@
 'use strict';
 
 const we = {
-  filename:    null,         // historic name — actually holds the album_id
+  albumId:     null,         // album_id slug from `albumsByName`
   total:       0,            // album duration in seconds
   viewStart:   0,            // visible window in seconds
   viewEnd:     0,
@@ -25,6 +25,13 @@ const we = {
   approxPeakDb: null,        // peak read from .peaks.dat (instant, ±0.05 dB at vinyl peaks). Replaced by exact value on measure.
   peaks:       null,         // parsed .peaks.dat, fed to drawPeaks() on every redraw
   targetPeakDb: -1.0,        // overwritten from /api/config (default_split_target_peak_db)
+  // True iff the user has actually edited cuts/titles/skip/etc since the
+  // last save or open. _savePlanNow gates on this so a no-edit open-and-
+  // close sequence doesn't write a default-state plan to album.json. The
+  // user-edit call sites (weAddCutAtTime, weDeleteCut, weToggleSkip,
+  // weSetTitle, weSetCutAt, weClearCuts) flip it to true; _savePlanNow
+  // resets it after a successful POST.
+  dirty:       false,
 };
 
 // Slider-readout helper: convert 1..127 to dB. Mid-bin reconstruction:
@@ -84,14 +91,14 @@ let _planSaveInFlight = null;
 function _persistDraft() {
   // Called from every interaction (cut drag, title input, skip toggle).
   // Debounce ~500 ms so a flurry of micro-edits collapses into one POST.
-  if (!we.filename) return;
+  if (!we.albumId) return;
   if (_planSaveTimer) clearTimeout(_planSaveTimer);
   _planSaveTimer = setTimeout(_savePlanNow, 500);
 }
 
 async function _savePlanNow() {
   _planSaveTimer = null;
-  if (!we.filename) return;
+  if (!we.albumId) return;
   // Open-time race guard. openWaveEditor seeds the editor with empty
   // defaults and then kicks off weLoadExistingSplit() to fill them in
   // from album.json. drawAll() runs in between, which calls _persistDraft()
@@ -103,6 +110,12 @@ async function _savePlanNow() {
     _planSaveTimer = setTimeout(_savePlanNow, 200);
     return;
   }
+  // Ghost-plan guard. renderTracks() also fires _persistDraft (so newly-
+  // loaded plan rows trigger a fresh re-save), and drawAll() runs once at
+  // open time. Without this gate, every editor open writes a default
+  // single-track plan even if the user never touched anything — pollutes
+  // album.json.has_draft for every album the user merely peeked at.
+  if (!we.dirty) return;
   // Snapshot the current editor state into the plan shape the server
   // already understands (see SplitRequest / PlanUpdateRequest).
   const tracks = _regions().map(r => ({
@@ -110,19 +123,46 @@ async function _savePlanNow() {
     duration_seconds: Math.max(0, r.end - r.start),
     skip: !!r.skip,
   }));
-  const albumId = we.filename;
+  const albumId = we.albumId;
   try {
     _planSaveInFlight = fetch(`/api/album/${albumId}/plan`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ tracks }),
     });
-    await _planSaveInFlight;
+    const r = await _planSaveInFlight;
+    if (r && r.ok && we.albumId === albumId) {
+      // Clear dirty BEFORE flashing — if the user edits again during the
+      // flash, the next debounce cycle finds dirty=true and saves again.
+      we.dirty = false;
+      _flashSavedIndicator();
+    }
   } catch (e) {
     // Network blip — the next change will retry. Silent on purpose; a
-    // toast for every transient save failure would spam the user.
+    // toast for every transient save failure would spam the user. Leave
+    // dirty=true so the next interaction re-attempts.
   } finally {
     _planSaveInFlight = null;
   }
+}
+
+// Tiny visual confirmation that the debounced auto-save landed. The
+// indicator is hidden by default; we add `.flash` for ~1 s and let CSS
+// run the fade. Multiple rapid saves just re-trigger the same animation.
+let _savedFlashTimer = null;
+function _flashSavedIndicator() {
+  const el = document.getElementById('we-saved');
+  if (!el) return;
+  el.hidden = false;
+  // Force a reflow so re-adding the class restarts the CSS transition.
+  el.classList.remove('flash');
+  void el.offsetWidth;
+  el.classList.add('flash');
+  if (_savedFlashTimer) clearTimeout(_savedFlashTimer);
+  _savedFlashTimer = setTimeout(() => {
+    el.classList.remove('flash');
+    el.hidden = true;
+    _savedFlashTimer = null;
+  }, 1100);  // CSS transition is 1 s; add a small buffer.
 }
 
 // Public hook: called on modal close so the final state is flushed even
@@ -146,7 +186,7 @@ function openWaveEditor(fname) {
   // draft / completed split is fetched server-side via weLoadExistingSplit
   // (kicked off below) and patched in once the response arrives.
   Object.assign(we, {
-    filename:    fname,
+    albumId:     fname,
     total:       total,
     viewStart:   0,
     viewEnd:     total,
@@ -165,6 +205,10 @@ function openWaveEditor(fname) {
     // Flips true once weLoadExistingSplit resolves. _savePlanNow gates on
     // this so the empty default state never races ahead of the load.
     loaded:      false,
+    // Reset on every open. weLoadExistingSplit re-populates cuts/titles/
+    // etc. from the manifest without going through the user-edit call
+    // sites, so it must NOT flip dirty. Only actual user input does.
+    dirty:       false,
   });
   resetMeasureUI();
   // Kick off peaks fetch in parallel with audio loading. When peaks land
@@ -228,7 +272,7 @@ async function weLoadExistingSplit(fname) {
     const r = await fetch(`/api/album/${encodeURIComponent(fname)}/tracks`);
     if (!r.ok) return;
     const d = await r.json();
-    if (we.filename !== fname) return;  // editor moved on while we were waiting
+    if (we.albumId !== fname) return;  // editor moved on while we were waiting
     const plan = d.plan;
     const ptracks = (plan && Array.isArray(plan.tracks)) ? plan.tracks : null;
     if (!ptracks || !ptracks.length) return;
@@ -249,7 +293,7 @@ async function weLoadExistingSplit(fname) {
   } catch (e) { /* nothing existing — leave the empty state */ }
   finally {
     // Always flip loaded — _savePlanNow's race guard releases either way.
-    if (we.filename === fname) we.loaded = true;
+    if (we.albumId === fname) we.loaded = true;
   }
 }
 
@@ -307,7 +351,7 @@ async function _loadAndDrawPeaks(albumId) {
   _showPeaksOverlay();
   try {
     const peaks = await loadAlbumPeaks(albumId);
-    if (we.filename !== albumId) return;  // editor moved on while we were waiting
+    if (we.albumId !== albumId) return;  // editor moved on while we were waiting
     we.peaks = peaks;
     if (!we.total && peaks.duration > 0) {
       we.total   = peaks.duration;
@@ -492,6 +536,7 @@ function weAddCutAtTime(t) {
   const inheritSkip = !!we.skipped[idx - 1];
   we.titles.splice(idx, 0, `Track ${we.titles.length + 1}`);
   we.skipped.splice(idx, 0, inheritSkip);
+  we.dirty = true;
   invalidateMeasure();
   renderWaveformOverlay();
   renderMinimapOverlay();
@@ -510,6 +555,7 @@ function weClearCuts() {
   we.cuts = [];
   we.titles = ['Track 1'];
   we.skipped = [false];
+  we.dirty = true;
   invalidateMeasure();
   renderWaveformOverlay();
   renderMinimapOverlay();
@@ -623,6 +669,7 @@ function weDeleteCut(i, e) {
   // Drop the title + skip flag for the boundary that just disappeared.
   we.titles.splice(i + 1, 1);
   we.skipped.splice(i + 1, 1);
+  we.dirty = true;
   invalidateMeasure();
   renderWaveformOverlay();
   renderMinimapOverlay();
@@ -745,12 +792,14 @@ function renderTracks() {
 
 function weSetTitle(i, v) {
   we.titles[i] = v;
+  we.dirty = true;
   _persistDraft();
 }
 
 function weToggleSkip(i) {
   if (i < 0 || i >= we.skipped.length) return;
   we.skipped[i] = !we.skipped[i];
+  we.dirty = true;
   invalidateMeasure();
   renderWaveformOverlay();
   renderMinimapOverlay();
@@ -763,6 +812,7 @@ function weSetCutAt(i, seconds) {
   if (cutIdx < 0 || cutIdx >= we.cuts.length) return;
   we.cuts[cutIdx] = Math.max(0, Math.min(we.total, seconds));
   we.cuts.sort((a, b) => a - b);
+  we.dirty = true;
   invalidateMeasure();
   renderWaveformOverlay();
   renderMinimapOverlay();
@@ -1024,14 +1074,14 @@ async function wePickCollectionCandidate(releaseId) {
 // file. Only called when the editor has no existing cuts (no draft, no
 // previous split). The user can still run a manual search to override.
 async function _weAutoLoadFromIds(a) {
-  if (we.filename !== a.album_id) return;     // editor moved on
+  if (we.albumId !== a.album_id) return;     // editor moved on
   if (we.cuts.length) return;                  // draft / existing split won
   if (a.discogs_release_id) {
     try {
       const r = await fetch(`/api/release/discogs/${a.discogs_release_id}`);
       if (!r.ok) throw new Error(await parseError(r));
       const d = await r.json();
-      if (we.filename === a.album_id && !we.cuts.length) {
+      if (we.albumId === a.album_id && !we.cuts.length) {
         _weApplyTracklist(d.track_details, 'auto-loaded from saved Discogs id');
       }
       return;
@@ -1042,7 +1092,7 @@ async function _weAutoLoadFromIds(a) {
       const r = await fetch(`/api/release/${a.musicbrainz_albumid}`);
       if (!r.ok) return;
       const d = await r.json();
-      if (we.filename === a.album_id && !we.cuts.length) {
+      if (we.albumId === a.album_id && !we.cuts.length) {
         _weApplyTracklist(d.track_details, 'auto-loaded from saved MBID');
       }
     } catch (e) { /* nothing more to try */ }
@@ -1071,7 +1121,7 @@ async function weDetectInternal({ replace }) {
       const r = await fetch('/api/album/detect-silences', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
-          album_id: we.filename, threshold_int8: thresholdInt8,
+          album_id: we.albumId, threshold_int8: thresholdInt8,
           min_silence: mindur, job_id: jobId,
         }),
       });
@@ -1134,7 +1184,7 @@ function _regions() {
 
 // ── Apply ─────────────────────────────────────────────────────────────────
 async function weApplySplit() {
-  if (!we.filename) return;
+  if (!we.albumId) return;
   // Drop zero-length regions — those are Discogs tracks that didn't fit the
   // recording, surfaced in the list as informational only. Sending them would
   // create empty FLACs and inflate the track count.
@@ -1162,7 +1212,7 @@ async function weApplySplit() {
   showBar(bar, 'encoding tracks');
   try {
     const d = await withJobProgress(bar, async (jobId) => {
-      const body = { album_id: we.filename, tracks, bit_depth: bitDepth, job_id: jobId };
+      const body = { album_id: we.albumId, tracks, bit_depth: bitDepth, job_id: jobId };
       if (normalize) {
         body.normalize         = true;
         body.target_peak_db    = we.targetPeakDb;
@@ -1214,7 +1264,7 @@ function invalidateMeasure() {
 }
 
 async function weMeasure() {
-  if (!we.filename) return;
+  if (!we.albumId) return;
   const text = document.getElementById('we-stats-text');
   const btn  = document.getElementById('we-measure-btn');
   const bar  = document.getElementById('we-measure-bar');
@@ -1231,7 +1281,7 @@ async function weMeasure() {
     const allIncluded = included.length === 1
       && included[0][0] <= 0.01 && included[0][1] >= we.total - 0.5;
     const d = await withJobProgress(bar, async (jobId) => {
-      const body = { album_id: we.filename, job_id: jobId };
+      const body = { album_id: we.albumId, job_id: jobId };
       if (!allIncluded && included.length) body.included_ranges = included;
       const r = await fetch('/api/album/measure', {
         method: 'POST', headers: {'Content-Type':'application/json'},
