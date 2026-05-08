@@ -729,7 +729,7 @@ function updateBulkBar() {
   const checkAll = document.getElementById('check-all');
   if (checkAll) checkAll.checked = visible > 0 && visSelected === visible;
   const combineBtn = document.getElementById('combine-btn');
-  if (combineBtn) combineBtn.disabled = selected.size < 2;
+  if (combineBtn) combineBtn.disabled = selected.size < 1;
 }
 
 function toggleRow(fname, checked) {
@@ -1305,7 +1305,7 @@ function stopPreview(silent) {
 let combineOrder = [];
 
 function openCombine() {
-  if (selected.size < 2) return;
+  if (selected.size < 1) return;
   // Default order: oldest recorded first (typical A→B→C→D).
   combineOrder = [...selected].sort((a, b) =>
     (filesByName[a]?.mtime || 0) - (filesByName[b]?.mtime || 0)
