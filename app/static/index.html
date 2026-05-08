@@ -332,18 +332,29 @@
         <button class="btn-small" onclick="weToggleSuggest('silence')">suggest from silence ▾</button>
         <div class="we-suggest-pop" id="we-pop-silence" hidden>
           <div class="col-label">Silence detection</div>
-          <div class="threshold-row" style="margin-bottom:6px">
-            <label title="Slider notches match the 8-bit quantisation in the album's .peaks.dat — that's the resolution at which silence is actually detectable. Useful range is roughly -42 dB (1) to -6 dB (64).">
-              Noise floor
-              <input type="range" id="we-noise" min="1" max="127" value="8"
-                     step="1" style="vertical-align:middle;width:140px"
+          <div class="silence-controls">
+            <div class="silence-row silence-slider"
+                 title="Slider notches match the 8-bit quantisation in the album's .peaks.dat — that's the resolution at which silence is actually detectable. Useful range is roughly -42 dB (1) to -6 dB (64).">
+              <label class="silence-label" for="we-noise">Noise floor</label>
+              <input type="range" id="we-noise" min="1" max="127" value="8" step="1"
                      oninput="document.getElementById('we-noise-readout').textContent = weNoiseSliderDb(this.value) + ' dB'">
-              <span id="we-noise-readout" style="display:inline-block;width:54px;text-align:right">-24.0 dB</span>
-            </label>
-            <label style="margin-left:8px">Min silence <input type="number" id="we-mindur" value="1.5" step="0.1" min="0.2" style="width:54px"> s</label>
-            <label style="margin-left:8px" title="Silences this long get a pair of cuts and the in-between region is auto-marked skip — typical for side flips and lead-in/out.">Auto-skip ≥ <input type="number" id="we-skiplong" value="15" step="1" min="2" style="width:54px"> s</label>
+              <span id="we-noise-readout" class="silence-readout">-24.0 dB</span>
+            </div>
+            <div class="silence-row silence-numbers">
+              <label class="silence-num" for="we-mindur">
+                <span class="silence-label">Min silence</span>
+                <input type="number" id="we-mindur" value="1.5" step="0.1" min="0.2">
+                <span class="silence-unit">s</span>
+              </label>
+              <label class="silence-num" for="we-skiplong"
+                     title="Silences this long get a pair of cuts and the in-between region is auto-marked skip — typical for side flips and lead-in/out.">
+                <span class="silence-label">Auto-skip ≥</span>
+                <input type="number" id="we-skiplong" value="15" step="1" min="2">
+                <span class="silence-unit">s</span>
+              </label>
+            </div>
           </div>
-          <div class="action-row">
+          <div class="action-row silence-actions">
             <button class="btn primary" onclick="weDetectAndApply()">detect &amp; replace cuts</button>
             <button class="btn" onclick="weDetectShowOnly()">just highlight</button>
           </div>
