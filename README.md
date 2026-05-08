@@ -46,11 +46,19 @@ To override settings without editing the tracked compose file, drop a
 
 ## Configuration
 
-All runtime options are environment variables in
-[docker-compose.yml](docker-compose.yml) — each one is commented in place
-explaining what it does and the accepted values. Override them via your own
-`docker-compose.override.yml` (or edit the file directly), then recreate the
-container.
+Every runtime option has a sensible default; the most common one to change
+is `DEFAULT_STREAM_URL` (your Pi or other audio source). To override, copy
+[.env.example](.env.example) to `.env` next to `docker-compose.yml`,
+uncomment the lines you want, and recreate the container:
+
+```bash
+cp .env.example .env
+$EDITOR .env
+docker compose up -d
+```
+
+The example file is the full menu — every var with inline docs explaining
+what it does and the accepted values.
 
 ## Pi capture service ([pi/](pi/))
 
