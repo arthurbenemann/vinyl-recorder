@@ -212,17 +212,46 @@ def _drive(page, sides):
     assert 'noise floor' in measured.lower(), measured
     assert '~' not in measured, f"measure result still shows ~ prefix: {measured!r}"
 
-    # ── Audio element loaded a seekable file from /audio ──────────────
+    # ── Audio element initialised on side 0 from per-side endpoint ────
     audio = page.evaluate(
         """
         () => {
             const a = document.getElementById('we-audio');
-            return { src: a.src, duration: a.duration, readyState: a.readyState };
+            return { src: a.src, duration: a.duration, readyState: a.readyState,
+                     sideCount: weAudio.sides.length,
+                     totalDur: weAudio.totalDuration() };
         }
         """
     )
-    assert audio['src'].endswith(f'/api/album/{album_id}/audio'), audio
+    assert audio['src'].endswith(f'/api/album/{album_id}/sides/0/audio'), audio
     assert audio['readyState'] >= 1 and audio['duration'] > 0, audio
+    assert audio['sideCount'] == len(sides), audio
+    assert audio['totalDur'] > 0, audio
+
+    # ── Side-swap on cross-boundary seek ─────────────────────────────
+    # weAudio.seek(albumTime) past the first side's duration must swap
+    # the <audio> element's src to /sides/1/audio and resolve currentTime
+    # to a position within that side, not into negative or past-end land.
+    swap = page.evaluate(
+        """
+        async () => {
+            const beyondFirst = weAudio.sides[0].duration_seconds + 0.5;
+            weAudio.seek(beyondFirst);
+            // Wait briefly for the loadedmetadata handler to apply
+            // currentTime — synthetic 4 s sides settle quickly under
+            // headless chromium.
+            for (let i = 0; i < 30; i++) {
+                if (weAudio.currentSideIdx === 1) break;
+                await new Promise(r => setTimeout(r, 50));
+            }
+            const a = document.getElementById('we-audio');
+            return { src: a.src, sideIdx: weAudio.currentSideIdx,
+                     albumTime: weAudio.currentTime };
+        }
+        """
+    )
+    assert swap['sideIdx'] == 1, swap
+    assert swap['src'].endswith(f'/api/album/{album_id}/sides/1/audio'), swap
 
     # ── No JS pageerrors fired across the whole flow ──────────────────
     # Belt-and-braces — the conftest `page` fixture also asserts no

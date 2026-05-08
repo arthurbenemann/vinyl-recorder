@@ -177,6 +177,139 @@ async function _flushPlanSave() {
   }
 }
 
+// ── Per-side audio playback ───────────────────────────────────────────────
+// The editor presents the album as a single continuous timeline, but
+// physically each side is its own FLAC. weAudio wraps the `<audio>` element
+// so the rest of the editor can keep using album-time without caring about
+// boundaries: seek() resolves album-time to the right side and swaps src
+// when needed, currentTime returns album-time, and end-of-side advances
+// to the next side automatically. The brief click at src swap lands inside
+// the auto-detected silence bands at side flips, so it's invisible.
+const weAudio = {
+  albumId:        null,
+  sides:          [],     // [{filename, duration_seconds, offset}, ...]
+  currentSideIdx: 0,
+  // Optional callback the editor wires up so onended can drive its
+  // playingTrack / playingEnd state machine.
+  onEnded:        null,
+  onTimeUpdate:   null,
+
+  _el() { return document.getElementById('we-audio'); },
+
+  init(albumId, manifestSides) {
+    // Manifest sides arrive without an `offset`; build the cumulative
+    // album-time lookup once so seek() is O(log n) per call.
+    let off = 0;
+    this.albumId = albumId;
+    this.sides = manifestSides.map(s => {
+      const entry = {
+        filename:         s.filename,
+        duration_seconds: Number(s.duration_seconds) || 0,
+        offset:           off,
+      };
+      off += entry.duration_seconds;
+      return entry;
+    });
+    this.currentSideIdx = 0;
+    const audio = this._el();
+    if (!audio) return;
+    audio.ontimeupdate = () => { if (this.onTimeUpdate) this.onTimeUpdate(); };
+    audio.onended = () => this._onSideEnded();
+    if (this.sides.length) {
+      audio.src = this._sideUrl(0);
+      audio.load();
+    }
+  },
+
+  _sideUrl(idx) {
+    return `/api/album/${encodeURIComponent(this.albumId)}/sides/${idx}/audio`;
+  },
+
+  _findSide(albumTime) {
+    // Linear scan; albums have ≤ ~6 sides in practice and seek isn't hot.
+    for (let i = 0; i < this.sides.length; i++) {
+      const s = this.sides[i];
+      if (albumTime < s.offset + s.duration_seconds) return i;
+    }
+    return Math.max(0, this.sides.length - 1);
+  },
+
+  _onSideEnded() {
+    const audio = this._el();
+    if (!audio) return;
+    if (this.currentSideIdx < this.sides.length - 1) {
+      // Advance to next side and continue playing without surfacing the
+      // boundary to the editor's end-of-playback handler.
+      this.currentSideIdx += 1;
+      audio.src = this._sideUrl(this.currentSideIdx);
+      audio.load();
+      audio.play().catch(() => {});
+    } else if (this.onEnded) {
+      this.onEnded();
+    }
+  },
+
+  // Album-time seek. Swaps `src` if the target falls outside the current
+  // side; sets currentTime to the local position within that side.
+  seek(albumTime) {
+    const audio = this._el();
+    if (!audio || !this.sides.length) return;
+    const t = Math.max(0, Math.min(this.totalDuration(), albumTime));
+    const idx = this._findSide(t);
+    const local = Math.max(0, t - this.sides[idx].offset);
+    if (idx !== this.currentSideIdx) {
+      const wasPlaying = !audio.paused;
+      this.currentSideIdx = idx;
+      audio.src = this._sideUrl(idx);
+      audio.load();
+      // Apply currentTime once the new side reports a duration; until then
+      // setting currentTime is a no-op or throws InvalidStateError.
+      const apply = () => {
+        try { audio.currentTime = local; } catch (e) {}
+        if (wasPlaying) audio.play().catch(() => {});
+        audio.removeEventListener('loadedmetadata', apply);
+      };
+      audio.addEventListener('loadedmetadata', apply);
+    } else {
+      try { audio.currentTime = local; } catch (e) {}
+    }
+  },
+
+  get currentTime() {
+    const audio = this._el();
+    if (!audio || !this.sides.length) return 0;
+    const side = this.sides[this.currentSideIdx];
+    return (side ? side.offset : 0) + (audio.currentTime || 0);
+  },
+
+  get paused() {
+    const audio = this._el();
+    return !audio || audio.paused;
+  },
+
+  get hasSrc() { return this.sides.length > 0; },
+
+  totalDuration() {
+    if (!this.sides.length) return 0;
+    const last = this.sides[this.sides.length - 1];
+    return last.offset + last.duration_seconds;
+  },
+
+  play()   { const a = this._el(); if (a && a.src) a.play().catch(() => {}); },
+  pause()  { const a = this._el(); if (a) { try { a.pause(); } catch (e) {} } },
+
+  release() {
+    const audio = this._el();
+    if (audio) {
+      try { audio.pause(); audio.src = ''; } catch (e) {}
+    }
+    this.albumId        = null;
+    this.sides          = [];
+    this.currentSideIdx = 0;
+  },
+};
+window.weAudio = weAudio;
+
 // ── Open / close ──────────────────────────────────────────────────────────
 function openWaveEditor(fname) {
   const a = albumsByName[fname];
@@ -235,23 +368,23 @@ function openWaveEditor(fname) {
   document.getElementById('we-search-status').textContent = '';
   document.getElementById('we-silence-status').textContent = '';
 
-  // Audio source: the album's combined FLAC, materialised on first
-  // request from `.cache/concat.flac` so the `<audio>` element gets a
-  // real, seekable file (not the manifest JSON or a streamed concat).
-  const audio = document.getElementById('we-audio');
-  audio.src = `/api/album/${encodeURIComponent(fname)}/audio`;
-  audio.load();
-  audio.onloadedmetadata = () => {
-    if (!we.total) {
-      we.total   = audio.duration || 0;
-      we.viewEnd = we.total;
-      document.getElementById('we-duration').textContent = fmtMMSS(we.total);
-      document.getElementById('we-mini-end').textContent = fmtMMSS(we.total);
-      drawAll();
-    }
-  };
-  audio.ontimeupdate = onAudioTimeUpdate;
-  audio.onended = () => stopPlayback();
+  // Per-side audio source: weAudio wraps `<audio>` and swaps `src` at side
+  // boundaries while exposing album-time to the rest of the editor. Side
+  // durations come from the album row's `sides[]` (populated server-side
+  // in _summarize_album); fall back to a single-side stub if a stale
+  // /api/albums response is missing it, so the editor still loads.
+  const manifestSides = Array.isArray(a.sides) && a.sides.length
+    ? a.sides
+    : [{ filename: '', duration_seconds: total }];
+  weAudio.onTimeUpdate = onAudioTimeUpdate;
+  weAudio.onEnded      = () => stopPlayback();
+  weAudio.init(fname, manifestSides);
+  if (!we.total && weAudio.totalDuration() > 0) {
+    we.total   = weAudio.totalDuration();
+    we.viewEnd = we.total;
+    document.getElementById('we-duration').textContent = fmtMMSS(we.total);
+    document.getElementById('we-mini-end').textContent = fmtMMSS(we.total);
+  }
 
   drawAll();
   document.getElementById('we-modal').hidden = false;
@@ -299,8 +432,7 @@ async function weLoadExistingSplit(fname) {
 
 function closeWaveEditor() {
   stopPlayback();
-  const audio = document.getElementById('we-audio');
-  try { audio.pause(); audio.src = ''; } catch (e) {}
+  weAudio.release();
   document.getElementById('we-modal').hidden = true;
   document.removeEventListener('keydown', weKeyDown);
   _hidePeaksOverlay();
@@ -349,13 +481,23 @@ function _hidePeaksOverlay() {
 
 async function _loadAndDrawPeaks(albumId) {
   _showPeaksOverlay();
+  const a = albumsByName[albumId];
+  const manifestSides = a && Array.isArray(a.sides) && a.sides.length
+    ? a.sides
+    : null;
+  if (!manifestSides) {
+    _hidePeaksOverlay();
+    const text = document.getElementById('we-stats-text');
+    if (text) text.textContent = 'waveform unavailable: album manifest missing sides';
+    return;
+  }
   try {
-    const peaks = await loadAlbumPeaks(albumId);
+    const peaks = await loadAlbumPeaks(albumId, manifestSides);
     if (we.albumId !== albumId) return;  // editor moved on while we were waiting
     we.peaks = peaks;
-    if (!we.total && peaks.duration > 0) {
-      we.total   = peaks.duration;
-      we.viewEnd = peaks.duration;
+    if (!we.total && peaks.total > 0) {
+      we.total   = peaks.total;
+      we.viewEnd = peaks.total;
       document.getElementById('we-duration').textContent = fmtMMSS(we.total);
       document.getElementById('we-mini-end').textContent = fmtMMSS(we.total);
     }
@@ -516,8 +658,7 @@ function weAddCutAtClick(e) {
     return;
   }
   // Plain click = seek the audio.
-  const audio = document.getElementById('we-audio');
-  if (audio) audio.currentTime = t;
+  weAudio.seek(t);
   renderWaveformOverlay();
 }
 
@@ -544,8 +685,7 @@ function weAddCutAtTime(t) {
 }
 
 function weAddCutAtPlayhead() {
-  const audio = document.getElementById('we-audio');
-  const t = audio?.currentTime || _xToTime(we.hoverX ?? _wrapW() / 2);
+  const t = weAudio.currentTime || _xToTime(we.hoverX ?? _wrapW() / 2);
   weAddCutAtTime(t);
 }
 
@@ -581,8 +721,7 @@ function weKeyDown(e) {
     if (e.key === 'Escape') { e.target.blur(); }
     return;
   }
-  const audio = document.getElementById('we-audio');
-  const t = audio?.currentTime || 0;
+  const t = weAudio.currentTime || 0;
   switch (e.key) {
     case ' ':
       e.preventDefault();
@@ -604,23 +743,23 @@ function weKeyDown(e) {
     }
     case 'ArrowLeft':
     case 'ArrowRight': {
-      if (!audio) return;
+      if (!weAudio.hasSrc) return;
       e.preventDefault();
       const step = (e.shiftKey ? 1.0 : 0.1) * (e.key === 'ArrowLeft' ? -1 : 1);
-      audio.currentTime = Math.max(0, Math.min(we.total, t + step));
+      weAudio.seek(Math.max(0, Math.min(we.total, t + step)));
       renderWaveformOverlay();
       return;
     }
     case 'j':
     case 'k': {
-      if (!we.cuts.length || !audio) return;
+      if (!we.cuts.length || !weAudio.hasSrc) return;
       e.preventDefault();
       const sorted = we.cuts.slice().sort((a, b) => a - b);
       const target = e.key === 'j'
         ? [...sorted].reverse().find(c => c < t - 0.05)
         : sorted.find(c => c > t + 0.05);
       if (target != null) {
-        audio.currentTime = target;
+        weAudio.seek(target);
         renderWaveformOverlay();
       }
       return;
@@ -725,14 +864,16 @@ function renderWaveformOverlay() {
   });
 
   // Playhead.
-  const audio = document.getElementById('we-audio');
-  if (audio && !isNaN(audio.currentTime)) {
-    const pct = _timeToPctView(audio.currentTime);
-    if (pct != null) {
-      const ph = document.createElement('div');
-      ph.className = 'wave-playhead';
-      ph.style.left = pct + '%';
-      overlay.appendChild(ph);
+  if (weAudio.hasSrc) {
+    const t = weAudio.currentTime;
+    if (!isNaN(t)) {
+      const pct = _timeToPctView(t);
+      if (pct != null) {
+        const ph = document.createElement('div');
+        ph.className = 'wave-playhead';
+        ph.style.left = pct + '%';
+        overlay.appendChild(ph);
+      }
     }
   }
 }
@@ -821,17 +962,16 @@ function weSetCutAt(i, seconds) {
 
 // ── Audio playback ────────────────────────────────────────────────────────
 function weTogglePlay() {
-  const audio = document.getElementById('we-audio');
-  if (!audio.src) return;
-  if (audio.paused) {
+  if (!weAudio.hasSrc) return;
+  if (weAudio.paused) {
     we.playingTrack = null;
     we.playingEnd   = null;
     if (!_jumpOverSkippedFromHere()) return;
-    audio.play().catch(() => {});
+    weAudio.play();
     document.getElementById('we-play').textContent = '⏸';
     we.isPlaying = true;
   } else {
-    audio.pause();
+    weAudio.pause();
     document.getElementById('we-play').textContent = '▶';
     we.isPlaying = false;
   }
@@ -841,10 +981,9 @@ function weTogglePlay() {
 // start of the next non-skipped region. Returns false (and stops playback)
 // when no non-skipped region remains; true otherwise.
 function _jumpOverSkippedFromHere() {
-  const audio = document.getElementById('we-audio');
-  if (!audio || we.playingEnd != null) return true;
+  if (!weAudio.hasSrc || we.playingEnd != null) return true;
   const boundaries = [0, ...we.cuts, we.total];
-  const t = audio.currentTime;
+  const t = weAudio.currentTime;
   let idx = -1;
   for (let i = 0; i < boundaries.length - 1; i++) {
     if (t >= boundaries[i] && t < boundaries[i + 1]) { idx = i; break; }
@@ -853,7 +992,7 @@ function _jumpOverSkippedFromHere() {
   let next = idx + 1;
   while (next < we.skipped.length && we.skipped[next]) next++;
   if (next < we.skipped.length) {
-    audio.currentTime = boundaries[next];
+    weAudio.seek(boundaries[next]);
     return true;
   }
   stopPlayback();
@@ -861,24 +1000,22 @@ function _jumpOverSkippedFromHere() {
 }
 
 function wePlayTrack(i) {
-  const audio = document.getElementById('we-audio');
-  if (!audio.src) return;
+  if (!weAudio.hasSrc) return;
   const boundaries = [0, ...we.cuts, we.total];
   const start = boundaries[i];
   const end   = boundaries[i + 1];
   if (end == null || end <= start) return;
-  audio.currentTime = start;
+  weAudio.seek(start);
   we.playingTrack = i;
   we.playingEnd   = end;
-  audio.play().catch(() => {});
+  weAudio.play();
   document.getElementById('we-play').textContent = '⏸';
   we.isPlaying = true;
   renderTracks();
 }
 
 function stopPlayback() {
-  const audio = document.getElementById('we-audio');
-  try { audio.pause(); } catch (e) {}
+  weAudio.pause();
   we.isPlaying    = false;
   we.playingTrack = null;
   we.playingEnd   = null;
@@ -888,18 +1025,18 @@ function stopPlayback() {
 }
 
 function onAudioTimeUpdate() {
-  const audio = document.getElementById('we-audio');
-  if (we.playingEnd != null && audio.currentTime >= we.playingEnd) {
+  const t = weAudio.currentTime;
+  if (we.playingEnd != null && t >= we.playingEnd) {
     stopPlayback();
     return;
   }
   _jumpOverSkippedFromHere();
   if (we.isPlaying === false) return;
-  document.getElementById('we-time').textContent = fmtMMSS(audio.currentTime);
+  document.getElementById('we-time').textContent = fmtMMSS(t);
   // Ensure the playhead stays inside the current view; auto-scroll if it leaves.
-  if (audio.currentTime < we.viewStart || audio.currentTime > we.viewEnd) {
+  if (t < we.viewStart || t > we.viewEnd) {
     const len = _viewLen();
-    we.viewStart = Math.max(0, audio.currentTime - len * 0.1);
+    we.viewStart = Math.max(0, t - len * 0.1);
     we.viewEnd   = Math.min(we.total, we.viewStart + len);
     drawAll();
   } else {

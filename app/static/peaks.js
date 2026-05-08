@@ -3,8 +3,10 @@
 // after the initial fetch all zoom and pan is local, sub-millisecond
 // canvas redraw with no network round-trip.
 //
-// One .dat per album (mono, `-b 8`, `-z 256`) keeps the payload small
-// (~45 KB per minute of audio at 96 kHz).
+// One .dat per side (mono, `-b 8`, `-z 256`) — the editor fetches them
+// in parallel and `drawPeaks` stitches them at draw time. Per-side keeps
+// the payload small (~45 KB per minute of audio at 96 kHz) and avoids a
+// multi-second concat-then-render round trip on first open.
 
 'use strict';
 
@@ -60,8 +62,9 @@ function parsePeaks(arrayBuffer) {
            bits, body, duration };
 }
 
-async function loadAlbumPeaks(albumId) {
-  const r = await fetch(`/api/album/${encodeURIComponent(albumId)}/peaks`);
+async function _loadOneSidePeaks(albumId, sideIdx) {
+  const r = await fetch(
+    `/api/album/${encodeURIComponent(albumId)}/peaks/${sideIdx}`);
   if (!r.ok) {
     let msg = `HTTP ${r.status}`;
     try { msg = (await r.json()).detail || msg; } catch (e) {}
@@ -70,12 +73,63 @@ async function loadAlbumPeaks(albumId) {
   return parsePeaks(await r.arrayBuffer());
 }
 
+// Fetch one .peaks.dat per side in parallel. Returns
+//   { sides: [{peaks, offset, duration}, ...], total }
+// where `offset` is the cumulative album-time start of each side. The
+// caller (wave-editor) feeds this into drawPeaks() which resolves
+// columns -> (sideIdx, sideTime) at draw time. All sides come from the
+// same upstream session, so samplesPerPixel + sampleRate are identical
+// across them; we validate that on load and throw a clear error if not.
+async function loadAlbumPeaks(albumId, sides) {
+  if (!Array.isArray(sides) || !sides.length) {
+    throw new Error('loadAlbumPeaks needs a non-empty sides[] array');
+  }
+  const peaksPerSide = await Promise.all(
+    sides.map((_, i) => _loadOneSidePeaks(albumId, i)));
+
+  // The render math assumes uniform bucket size and sample rate. Bail
+  // explicitly if the upstream changed mid-album — the alternative is
+  // silently misaligned playhead/cuts.
+  const ref = peaksPerSide[0];
+  for (let i = 1; i < peaksPerSide.length; i++) {
+    const p = peaksPerSide[i];
+    if (p.samplesPerPixel !== ref.samplesPerPixel
+        || p.sampleRate     !== ref.sampleRate
+        || p.channels       !== ref.channels) {
+      throw new Error(
+        `side ${i} peaks header mismatch: `
+        + `spp=${p.samplesPerPixel}/${ref.samplesPerPixel}, `
+        + `sr=${p.sampleRate}/${ref.sampleRate}, `
+        + `ch=${p.channels}/${ref.channels}`);
+    }
+  }
+
+  const out = [];
+  let offset = 0;
+  for (let i = 0; i < peaksPerSide.length; i++) {
+    const p = peaksPerSide[i];
+    // Prefer the manifest's authoritative duration when available — the
+    // dat's own duration is bucket-quantised (off by up to one bucket
+    // ≈ 2.7 ms at 96 kHz). Falls back to the dat-derived value if the
+    // manifest doesn't have it (older clients of /api/albums).
+    const dur = (sides[i] && typeof sides[i].duration_seconds === 'number')
+      ? sides[i].duration_seconds
+      : p.duration;
+    out.push({ peaks: p, offset, duration: dur });
+    offset += dur;
+  }
+  return { sides: out, total: offset };
+}
+
 // Draw the time range [viewStart, viewEnd] onto `canvas`. We compute one
 // (min, max) pair per pixel column by walking the buckets that fall in
 // the column's time slice, then render the envelope as a vertical line.
-// At deepest zoom each bucket spans multiple pixels — we still draw one
-// line per column (with the bucket's value) so the envelope renders
-// crisply rather than alising.
+//
+// Accepts either a single parsed dat (legacy single-side form) or the
+// multi-side struct produced by loadAlbumPeaks (`{sides, total}`). The
+// multi-side branch resolves each column to a (sideIdx, sideTime) before
+// reducing buckets, so the envelope reads as continuous album-time even
+// though each side has its own dat.
 function drawPeaks(canvas, peaks, viewStart, viewEnd, color) {
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
@@ -90,47 +144,63 @@ function drawPeaks(canvas, peaks, viewStart, viewEnd, color) {
   const len = Math.max(1e-6, viewEnd - viewStart);
   const mid = H / 2;
 
-  if (!peaks || !peaks.body || !peaks.length) {
+  // Normalise to the multi-side shape so the loop has one path. A bare
+  // parsed dat becomes a single side at offset 0.
+  let sides;
+  if (peaks && Array.isArray(peaks.sides)) {
+    sides = peaks.sides;
+  } else if (peaks && peaks.body) {
+    sides = [{ peaks: peaks, offset: 0, duration: peaks.duration || 0 }];
+  } else {
     ctx.fillRect(0, Math.round(mid), W, 1);  // empty centerline placeholder
     return;
   }
+  if (!sides.length) {
+    ctx.fillRect(0, Math.round(mid), W, 1);
+    return;
+  }
 
-  const sr = peaks.sampleRate;
-  const spp = peaks.samplesPerPixel;
+  const ref = sides[0].peaks;
+  const sr = ref.sampleRate;
+  const spp = ref.samplesPerPixel;
   const bucketSec = spp / sr;
   if (bucketSec <= 0) return;
-
-  // Window of buckets that intersect the view.
-  const i0 = Math.max(0, Math.floor(viewStart / bucketSec));
-  const i1 = Math.min(peaks.length, Math.ceil(viewEnd / bucketSec));
-  const body = peaks.body;
-  // For multi-channel dats every bucket holds (min,max) per channel
-  // contiguously. Combine into a single envelope by taking the min across
-  // all channels' min and max across all channels' max, so the rendered
-  // wave shows the loudest extreme.
-  const channels = Math.max(1, peaks.channels || 1);
+  const channels = Math.max(1, ref.channels || 1);
   const bucketBytes = 2 * channels;
 
-  // Iterate pixel columns and reduce every bucket whose time range
-  // intersects the column into its (min, max). This handles both
-  // bucket-per-pixel densities uniformly: when zoomed out a column spans
-  // many buckets (envelope summary), when zoomed in many columns share
-  // one bucket (the envelope reads as a continuous bar at full extent
-  // rather than a comb of one-pixel spikes).
+  // Pre-compute, for each pixel column, the side whose time range
+  // covers that column's start. Sides are in order with monotonic
+  // `offset`; a linear scan in lockstep with the column loop is cheap.
   for (let c = 0; c < W; c++) {
     const tStart = viewStart + (c / W) * len;
     const tEnd   = viewStart + ((c + 1) / W) * len;
-    const b0 = Math.max(i0, Math.floor(tStart / bucketSec));
-    let b1 = Math.min(i1, Math.ceil(tEnd / bucketSec));
-    if (b1 <= b0) b1 = Math.min(i1, b0 + 1);  // ensure ≥1 bucket per column
+
     let minV = 127, maxV = -128;
-    for (let i = b0; i < b1; i++) {
-      const base = i * bucketBytes;
-      for (let ch = 0; ch < channels; ch++) {
-        const m1 = body[base + 2 * ch];
-        const m2 = body[base + 2 * ch + 1];
-        if (m1 < minV) minV = m1;
-        if (m2 > maxV) maxV = m2;
+    // Walk every side that overlaps [tStart, tEnd]. In practice all but
+    // one side contribute zero buckets, but a column that straddles a
+    // side boundary will visit two — both are reduced into the same
+    // (min, max) so the envelope reads as continuous.
+    for (let s = 0; s < sides.length; s++) {
+      const side = sides[s];
+      const sStart = side.offset;
+      const sEnd   = side.offset + side.duration;
+      if (sEnd <= tStart) continue;
+      if (sStart >= tEnd) break;
+      const local0 = Math.max(0, tStart - sStart);
+      const local1 = Math.max(local0, tEnd - sStart);
+      const body = side.peaks.body;
+      const length = side.peaks.length;
+      const b0 = Math.max(0, Math.min(length, Math.floor(local0 / bucketSec)));
+      let b1 = Math.max(b0, Math.min(length, Math.ceil(local1 / bucketSec)));
+      if (b1 <= b0) b1 = Math.min(length, b0 + 1);  // ensure ≥1 bucket per column
+      for (let i = b0; i < b1; i++) {
+        const base = i * bucketBytes;
+        for (let ch = 0; ch < channels; ch++) {
+          const m1 = body[base + 2 * ch];
+          const m2 = body[base + 2 * ch + 1];
+          if (m1 < minV) minV = m1;
+          if (m2 > maxV) maxV = m2;
+        }
       }
     }
     if (minV > maxV) continue;
@@ -149,13 +219,24 @@ function drawPeaks(canvas, peaks, viewStart, viewEnd, color) {
 // "~ -X.X dB" in the editor until astats has run, at which point the
 // exact value replaces it.
 function approxPeakDbFromPeaks(peaks) {
-  if (!peaks || !peaks.body) return null;
-  const body = peaks.body;
+  if (!peaks) return null;
+  // Same dual-shape input as drawPeaks: either a parsed dat or a
+  // multi-side struct from loadAlbumPeaks.
+  let bodies;
+  if (Array.isArray(peaks.sides)) {
+    bodies = peaks.sides.map(s => s.peaks && s.peaks.body).filter(Boolean);
+  } else if (peaks.body) {
+    bodies = [peaks.body];
+  } else {
+    return null;
+  }
   let peakInt = 0;
-  for (let i = 0; i < body.length; i++) {
-    const v = body[i];
-    const a = v < 0 ? -v : v;
-    if (a > peakInt) peakInt = a;
+  for (const body of bodies) {
+    for (let i = 0; i < body.length; i++) {
+      const v = body[i];
+      const a = v < 0 ? -v : v;
+      if (a > peakInt) peakInt = a;
+    }
   }
   if (peakInt <= 0) return null;
   const amp = (peakInt * 256 + 127.5) / 32768;

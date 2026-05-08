@@ -2,10 +2,12 @@
 silence detect, measure, split, per-track download.
 
 Albums are folders under `in-progress/<album_id>/` (see services/albums_fs.py).
-Every endpoint here keys on `album_id` rather than a filename. Editor-facing
-ffmpeg endpoints (waveform, silences, measure, split) all run against a
-single `.cache/concat.flac` rendered on demand from the manifest's `sides`
-list, so the underlying audio is never duplicated."""
+Every endpoint here keys on `album_id` rather than a filename. The wave
+editor consumes per-side resources directly: `GET /peaks/<idx>` returns a
+single side's `.peaks.dat`, and `GET /sides/<idx>/audio` serves the side
+FLAC for `<audio>` playback. Multi-side analysis endpoints (measure,
+split) feed ffmpeg via a transient concat-demuxer playlist — the album-
+wide concat happens in-memory during decode, never persisted."""
 import asyncio
 import re
 import subprocess
@@ -153,25 +155,38 @@ async def update_plan(album_id: str, req: PlanUpdateRequest):
 
 @router.post("/api/album/{album_id}/sides/reorder")
 async def reorder_sides(album_id: str, req: ReorderSidesRequest):
-    """Persist a permutation of `sides[]`. Forces the editor's concat cache
-    to regenerate on next render."""
+    """Persist a permutation of `sides[]`. Per-side peaks dats are
+    mtime-validated against their source FLACs, so a reorder doesn't need
+    explicit cache invalidation — every dat stays valid for its own side."""
     _require_album(album_id)
     try:
         manifest = albums_fs.reorder_sides(album_id, req.sides)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    albums_fs.invalidate_concat_cache(album_id)
     return {"ok": True, "sides": manifest["sides"]}
 
 
-# ── Wave-editor source: concat cache ─────────────────────────────────────
+# ── Wave-editor source: per-side peaks + audio ───────────────────────────
 
-async def _ensure_cache(album_id: str, job_id: Optional[str] = None) -> Path:
-    """asyncio wrapper around the cache builder so the route doesn't block
-    the event loop while ffmpeg is concatenating sides."""
+def _resolve_side_filename(album_id: str, side_idx: int) -> str:
+    """Map `side_idx` to a side filename from the (reconciled) manifest, or
+    raise 404. Centralises the bounds check so the per-side routes stay
+    thin."""
+    manifest = albums_fs.reconcile_sides(album_id)
+    sides = manifest.get("sides") or []
+    if side_idx < 0 or side_idx >= len(sides):
+        raise HTTPException(404, f"side index {side_idx} out of range")
+    return sides[side_idx]
+
+
+async def _ensure_side_peaks(
+    album_id: str, side_filename: str, job_id: Optional[str] = None,
+) -> Path:
+    """asyncio wrapper around audiowaveform per-side render so the route
+    doesn't block the event loop. Maps file-system errors to HTTP."""
     try:
         return await asyncio.to_thread(
-            albums_fs.ensure_concat_cache, album_id, job_id,
+            albums_fs.ensure_side_peaks_cache, album_id, side_filename, job_id,
         )
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
@@ -179,32 +194,17 @@ async def _ensure_cache(album_id: str, job_id: Optional[str] = None) -> Path:
         raise HTTPException(500, str(e))
 
 
-async def _ensure_peaks(album_id: str, job_id: Optional[str] = None) -> Path:
-    """Build/refresh both the concat cache and `.peaks.dat`. Returns the dat
-    path. The concat cache is a side-effect — it's reused by audio playback
-    and by measure/split, so the user doesn't pay for it twice."""
-    try:
-        return await asyncio.to_thread(
-            albums_fs.ensure_peaks_cache, album_id, job_id,
-        )
-    except FileNotFoundError as e:
-        raise HTTPException(404, str(e))
-    except RuntimeError as e:
-        raise HTTPException(500, str(e))
-
-
-@router.get("/api/album/{album_id}/peaks")
-async def album_peaks(album_id: str, job_id: str = ""):
-    """Serve the album's `.peaks.dat` (binary).
-
-    The wave editor fetches this once per album open and renders zoom/pan
-    locally on a `<canvas>`, replacing the per-zoom server-side PNG render.
-    """
+@router.get("/api/album/{album_id}/peaks/{side_idx}")
+async def album_side_peaks(album_id: str, side_idx: int, job_id: str = ""):
+    """Serve a single side's `.peaks.dat` (binary). The wave editor fetches
+    one of these per side and stitches them together at draw time so zoom
+    and pan stay local — no per-zoom server round-trip."""
     _require_album(album_id)
+    side_filename = _resolve_side_filename(album_id, side_idx)
     if job_id:
         start_job(job_id, "peaks")
     try:
-        dat = await _ensure_peaks(album_id, job_id or None)
+        dat = await _ensure_side_peaks(album_id, side_filename, job_id or None)
     finally:
         if job_id:
             finish_job(job_id)
@@ -215,15 +215,17 @@ async def album_peaks(album_id: str, job_id: str = ""):
     )
 
 
-@router.get("/api/album/{album_id}/audio")
-async def album_audio(album_id: str):
-    """Serve the album's combined FLAC for `<audio>` playback in the wave
-    editor. Builds the concat cache on first request (subsequent calls
-    return the cached file directly)."""
+@router.get("/api/album/{album_id}/sides/{side_idx}/audio")
+async def album_side_audio(album_id: str, side_idx: int):
+    """Serve a single side FLAC for `<audio>` playback in the wave editor.
+    The editor maintains an album-time → (side, side-time) mapping client-
+    side and swaps the `<audio>` element's src at side boundaries."""
     _require_album(album_id)
-    src = await _ensure_cache(album_id)
-    return FileResponse(str(src), media_type="audio/flac",
-                        filename=f"{album_id}.flac")
+    side_filename = _resolve_side_filename(album_id, side_idx)
+    p = albums_fs.album_dir(album_id) / side_filename
+    if not p.exists():
+        raise HTTPException(404, f"side {side_filename!r} missing on disk")
+    return FileResponse(str(p), media_type="audio/flac", filename=side_filename)
 
 
 @router.post("/api/album/detect-silences")
@@ -239,19 +241,54 @@ async def detect_silences(req: SilenceDetectRequest):
     """
     _require_album(req.album_id)
     threshold_int8 = _resolve_threshold_int8(req)
+    manifest = albums_fs.reconcile_sides(req.album_id)
+    sides = manifest.get("sides") or []
+    if not sides:
+        raise HTTPException(404, f"album {req.album_id} has no sides")
     if req.job_id:
         start_job(req.job_id, "detect silences")
     try:
-        dat = await _ensure_peaks(req.album_id, req.job_id or None)
+        # Build any missing per-side dats sequentially; render_peaks is
+        # sub-second per side, parallelism not worth the asyncio overhead.
+        dats: list[Path] = []
+        for s in sides:
+            dats.append(await _ensure_side_peaks(req.album_id, s, req.job_id or None))
     finally:
-        # The dat-build phase finishes before the scan; reset the bar to
-        # 100 % so the UI tears down cleanly even though the scan itself
-        # runs synchronously in <50 ms.
         if req.job_id:
             finish_job(req.job_id)
-    silences = await asyncio.to_thread(
-        silence_runs_from_dat, dat, threshold_int8, req.min_silence,
-    )
+
+    # Scan each side at min_duration_s=0 (no filter) and offset runs into
+    # album time; merge any runs that touch a side boundary; THEN apply
+    # min_silence. Order matters: a silent fadeout at the end of side N and
+    # a silent leadin at the start of side N+1 are physically one continuous
+    # silence and should count as such, even when each half on its own
+    # would fall below min_silence.
+    raw: list[dict] = []
+    offset = 0.0
+    d = albums_fs.album_dir(req.album_id)
+    for s, dat in zip(sides, dats):
+        per_side = await asyncio.to_thread(
+            silence_runs_from_dat, dat, threshold_int8, 0.0,
+        )
+        for run in per_side:
+            raw.append({
+                "start":    run["start"] + offset,
+                "end":      run["end"]   + offset,
+                "duration": run["duration"],
+            })
+        offset += flac_duration_seconds(d / s) or 0.0
+
+    merged: list[dict] = []
+    for run in raw:
+        # 50 ms tolerance covers the bucket-quantisation gap between a side's
+        # final silent bucket and the next side's first silent bucket.
+        if merged and run["start"] - merged[-1]["end"] < 0.05:
+            merged[-1]["end"] = run["end"]
+            merged[-1]["duration"] = merged[-1]["end"] - merged[-1]["start"]
+        else:
+            merged.append(run)
+
+    silences = [r for r in merged if r["duration"] >= req.min_silence]
     return {"silences": silences,
             "threshold_int8": threshold_int8,
             "min_silence": req.min_silence}
@@ -294,19 +331,29 @@ def _astats_filter_for_ranges(ranges: Optional[list[list[float]]]) -> str:
 @router.post("/api/album/measure")
 async def measure_album(req: MeasureRequest):
     _require_album(req.album_id)
-    src = await _ensure_cache(req.album_id, req.job_id)
+    try:
+        playlist, side_paths = albums_fs.album_concat_playlist(req.album_id)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
     af = _astats_filter_for_ranges(req.included_ranges)
     flag = "-filter_complex" if (req.included_ranges) else "-af"
-    cmd = ["ffmpeg", "-hide_banner", "-i", str(src),
+    # The concat demuxer presents every side as one continuous decoded
+    # stream so atrim/astats see album-time positions directly — same
+    # math the cached concat.flac used to produce, but no on-disk artifact.
+    cmd = ["ffmpeg", "-hide_banner", "-f", "concat", "-safe", "0",
+           "-i", str(playlist),
            flag, af, "-f", "null", "-"]
     if req.included_ranges:
         total_dur = sum(max(0.0, e - s) for s, e in req.included_ranges)
     else:
-        total_dur = flac_duration_seconds(src) or 0.0
+        total_dur = sum((flac_duration_seconds(p) or 0.0) for p in side_paths)
     start_job(req.job_id, "measure")
-    rc, stderr = await asyncio.to_thread(
-        run_ffmpeg_with_progress, cmd, total_dur, req.job_id, (0.0, 1.0), "analysing",
-    )
+    try:
+        rc, stderr = await asyncio.to_thread(
+            run_ffmpeg_with_progress, cmd, total_dur, req.job_id, (0.0, 1.0), "analysing",
+        )
+    finally:
+        playlist.unlink(missing_ok=True)
     if rc != 0:
         err = (stderr or b"").decode(errors="replace")[:300]
         finish_job(req.job_id, error=err)
@@ -329,7 +376,7 @@ async def measure_album(req: MeasureRequest):
 
 @router.post("/api/album/split")
 async def split_album(req: SplitRequest):
-    """Cut the concat cache into per-track FLACs in `music/{Artist}/{Album} (Year)/`,
+    """Cut the album into per-track FLACs in `music/{Artist}/{Album} (Year)/`,
     embed manifest tags + cover.jpg in each track, and persist the plan +
     `music_relpath` back into `album.json`. Idempotent on re-run — clears
     any prior music dir first (including the case where artist/album tags
@@ -338,24 +385,30 @@ async def split_album(req: SplitRequest):
     if not req.tracks:
         raise HTTPException(400, "no tracks given")
 
-    src = await _ensure_cache(req.album_id, req.job_id)
-    src_gb = src.stat().st_size / 1e9
-    err = disk_space_error(max(LOW_SPACE_GB, src_gb + 0.5), "split")
+    try:
+        playlist, side_paths = albums_fs.album_concat_playlist(req.album_id)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+    src_bytes = sum(p.stat().st_size for p in side_paths)
+    err = disk_space_error(max(LOW_SPACE_GB, src_bytes / 1e9 + 0.5), "split")
     if err:
+        playlist.unlink(missing_ok=True)
         raise HTTPException(507, err)
 
-    total = flac_duration_seconds(src) or 0.0
+    total = sum((flac_duration_seconds(p) or 0.0) for p in side_paths)
     if total <= 0:
+        playlist.unlink(missing_ok=True)
         raise HTTPException(500, "could not read source duration")
 
     src_fmt: dict = {}
     try:
-        # Reuse flac_format imported above? It's not in the import list yet —
-        # use the same metaflac probe inline to keep the dependency surface
-        # tight. The bit_depth/sample_rate values are only consulted for the
-        # apply_aformat optimization below.
+        # Bit depth comes from the first side; the recorder produces a
+        # single-format upstream so all sides share it. Used for the
+        # `apply_aformat` optimization below — skip aformat when the user
+        # asked for the same bit depth already on disk.
         out = subprocess.check_output(
-            ["metaflac", "--show-bps", "--show-sample-rate", str(src)],
+            ["metaflac", "--show-bps", "--show-sample-rate", str(side_paths[0])],
             stderr=subprocess.DEVNULL, text=True,
         ).split()
         if len(out) >= 1:
@@ -416,71 +469,79 @@ async def split_album(req: SplitRequest):
     out_idx = 0
     progress_acc = 0.0
 
-    for i, t in enumerate(req.tracks, start=1):
-        start_ = cursor
-        end_ = min(total, start_ + max(0.0, t.duration_seconds))
-        if i == len(req.tracks):
-            end_ = total
-        cursor = end_
-        if end_ <= start_:
-            continue
-        if t.skip:
-            continue   # advance cursor only — region is dropped from output
-        out_idx += 1
-        track_name = f"{str(out_idx).zfill(pad)} - {safe_path_component(t.title) or 'Track'}.flac"
-        out = music_dir / track_name
-        af = []
-        if apply_gain:
-            af.append(f"volume={gain_db:.4f}dB")
-        if sample_fmt:
-            af.append(f"aformat=sample_fmts={sample_fmt}")
-        cmd = ["ffmpeg", "-y", "-loglevel", "error",
-               "-ss", f"{start_:.3f}", "-to", f"{end_:.3f}",
-               "-i", str(src)]
-        if af:
-            cmd += ["-af", ",".join(af)]
-        cmd += ["-c:a", "flac", "-compression_level", "5",
-                "-map_metadata", "-1", str(out)]
-        track_dur = end_ - start_
-        slice_a = progress_acc / out_dur_total
-        slice_b = (progress_acc + track_dur) / out_dur_total
-        progress_acc += track_dur
-        rc, stderr = await asyncio.to_thread(
-            run_ffmpeg_with_progress, cmd, track_dur, req.job_id,
-            (slice_a, slice_b), f"track {out_idx}/{out_total}",
-        )
-        if rc != 0:
-            err = (stderr or b"").decode(errors="replace")[:300]
-            finish_job(req.job_id, error=err)
-            raise HTTPException(500, f"ffmpeg failed on track {i}: {err}")
-        # Tags + cover are committed HERE — only at the music/ emit step.
-        tag_args = ["metaflac", "--remove-all-tags",
-                    f"--set-tag=ARTIST={tags.get('artist', '')}",
-                    f"--set-tag=ALBUM={tags.get('album', '')}",
-                    f"--set-tag=DATE={tags.get('year', '')}",
-                    f"--set-tag=GENRE={tags.get('genre', '')}",
-                    f"--set-tag=LABEL={tags.get('label', '')}",
-                    f"--set-tag=CATALOGNUMBER={tags.get('catalog_number', '')}",
-                    f"--set-tag=RELEASECOUNTRY={tags.get('country', '')}",
-                    f"--set-tag=TITLE={t.title}",
-                    f"--set-tag=TRACKNUMBER={out_idx}",
-                    f"--set-tag=TRACKTOTAL={out_total}",
-                    str(out)]
-        if tags.get("musicbrainz_albumid"):
-            tag_args.insert(-1, f"--set-tag=MUSICBRAINZ_ALBUMID={tags['musicbrainz_albumid']}")
-        if tags.get("discogs_release_id"):
-            tag_args.insert(-1, f"--set-tag=DISCOGS_RELEASE_ID={tags['discogs_release_id']}")
-        subprocess.run(tag_args, check=False, stderr=subprocess.DEVNULL)
-        if cover_file:
-            subprocess.run(
-                ["metaflac", f"--import-picture-from={cover_file}", str(out)],
-                check=False, stderr=subprocess.DEVNULL,
+    try:
+        for i, t in enumerate(req.tracks, start=1):
+            start_ = cursor
+            end_ = min(total, start_ + max(0.0, t.duration_seconds))
+            if i == len(req.tracks):
+                end_ = total
+            cursor = end_
+            if end_ <= start_:
+                continue
+            if t.skip:
+                continue   # advance cursor only — region is dropped from output
+            out_idx += 1
+            track_name = f"{str(out_idx).zfill(pad)} - {safe_path_component(t.title) or 'Track'}.flac"
+            out = music_dir / track_name
+            af = []
+            if apply_gain:
+                af.append(f"volume={gain_db:.4f}dB")
+            if sample_fmt:
+                af.append(f"aformat=sample_fmts={sample_fmt}")
+            # The concat demuxer presents the full album as one virtual
+            # input stream so -ss/-to act in album time, including across
+            # side boundaries — same behaviour as the old concat.flac
+            # input but no on-disk artifact.
+            cmd = ["ffmpeg", "-y", "-loglevel", "error",
+                   "-f", "concat", "-safe", "0",
+                   "-ss", f"{start_:.3f}", "-to", f"{end_:.3f}",
+                   "-i", str(playlist)]
+            if af:
+                cmd += ["-af", ",".join(af)]
+            cmd += ["-c:a", "flac", "-compression_level", "5",
+                    "-map_metadata", "-1", str(out)]
+            track_dur = end_ - start_
+            slice_a = progress_acc / out_dur_total
+            slice_b = (progress_acc + track_dur) / out_dur_total
+            progress_acc += track_dur
+            rc, stderr = await asyncio.to_thread(
+                run_ffmpeg_with_progress, cmd, track_dur, req.job_id,
+                (slice_a, slice_b), f"track {out_idx}/{out_total}",
             )
-        created.append({
-            "filename":         track_name,
-            "duration_seconds": end_ - start_,
-            "size_mb":          round(out.stat().st_size / 1e6, 1),
-        })
+            if rc != 0:
+                err = (stderr or b"").decode(errors="replace")[:300]
+                finish_job(req.job_id, error=err)
+                raise HTTPException(500, f"ffmpeg failed on track {i}: {err}")
+            # Tags + cover are committed HERE — only at the music/ emit step.
+            tag_args = ["metaflac", "--remove-all-tags",
+                        f"--set-tag=ARTIST={tags.get('artist', '')}",
+                        f"--set-tag=ALBUM={tags.get('album', '')}",
+                        f"--set-tag=DATE={tags.get('year', '')}",
+                        f"--set-tag=GENRE={tags.get('genre', '')}",
+                        f"--set-tag=LABEL={tags.get('label', '')}",
+                        f"--set-tag=CATALOGNUMBER={tags.get('catalog_number', '')}",
+                        f"--set-tag=RELEASECOUNTRY={tags.get('country', '')}",
+                        f"--set-tag=TITLE={t.title}",
+                        f"--set-tag=TRACKNUMBER={out_idx}",
+                        f"--set-tag=TRACKTOTAL={out_total}",
+                        str(out)]
+            if tags.get("musicbrainz_albumid"):
+                tag_args.insert(-1, f"--set-tag=MUSICBRAINZ_ALBUMID={tags['musicbrainz_albumid']}")
+            if tags.get("discogs_release_id"):
+                tag_args.insert(-1, f"--set-tag=DISCOGS_RELEASE_ID={tags['discogs_release_id']}")
+            subprocess.run(tag_args, check=False, stderr=subprocess.DEVNULL)
+            if cover_file:
+                subprocess.run(
+                    ["metaflac", f"--import-picture-from={cover_file}", str(out)],
+                    check=False, stderr=subprocess.DEVNULL,
+                )
+            created.append({
+                "filename":         track_name,
+                "duration_seconds": end_ - start_,
+                "size_mb":          round(out.stat().st_size / 1e6, 1),
+            })
+    finally:
+        playlist.unlink(missing_ok=True)
 
     plan = {
         "tracks": [
