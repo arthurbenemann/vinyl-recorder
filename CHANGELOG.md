@@ -1,3 +1,21 @@
+## v0.7.0 — 2026-05-08
+
+### Features
+- **albums:** Faster waveform scrub, audiowaveform dat generated server size, client-rendered waveform (#79)
+
+### Bug Fixes
+- **wave-editor:** Dirty-gate auto-save + saved-flash + global pageerror trap (#82)
+
+### Refactoring
+- **albums:** Per-side .peaks.dat + side-swap playback, no concat.flac (#88)
+
+### Tests
+- **library:** Pin partial-plan merge, demote-preserves-music, has_draft, safe_path (#81)
+
+### Changes
+- One workflow for raw → in-progress (combine + tag merged, single-side ok) (#85)
+- Reject combine/promote while a recording is in progress (#87)
+
 ## v0.6.0 — 2026-05-07
 
 ### ⚠ Breaking Changes
