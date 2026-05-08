@@ -8,10 +8,8 @@
 .PHONY: up test test-down test-logs test-rebuild release major minor patch
 
 # Dev flow — base + dev overlay (build from source instead of pulling the
-# published image). `COMPOSE_ARGS` is an optional escape hatch so contributors
-# can layer their own files without editing the Makefile, e.g.:
-#   make up COMPOSE_ARGS="-f docker-compose.mine.yml"
-COMPOSE_DEV := docker compose -f docker-compose.yml -f docker-compose.dev.yml $(COMPOSE_ARGS)
+# published image).
+COMPOSE_DEV := docker compose -f docker-compose.yml -f docker-compose.dev.yml
 
 up:
 	$(COMPOSE_DEV) up --build -d

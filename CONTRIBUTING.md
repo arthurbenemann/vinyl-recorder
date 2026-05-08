@@ -1,5 +1,44 @@
 # Contributing
 
+## Local development
+
+The tracked [docker-compose.yml](docker-compose.yml) pulls the published
+image so end users don't need this repo. To run the recorder against the
+code in your checkout, layer
+[docker-compose.dev.yml](docker-compose.dev.yml) on top — `make` does this
+for you:
+
+```bash
+make            # docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
+```
+
+### Test streams ([test-streams/](test-streams/))
+
+For exercising the recorder UI without a real Pi, an opt-in compose overlay
+spins up a synthetic audio source alongside the recorder. It stacks on top
+of the dev overlay so the recorder is still built from your checkout:
+
+```bash
+make test            # adds -f docker-compose.test.yml on top of the dev stack
+```
+
+Then open <http://localhost:8080>. The overlay also overrides the default
+host networking with a private bridge network, so the same command works on
+Linux, macOS, and Windows.
+
+Stop the stack with `make test-down`; tail logs with `make test-logs`.
+
+The `test-streams` container serves three pre-rendered 96 kHz / 24-bit
+stereo WAVs on its `:8090`, looped forever, and `DEFAULT_STREAM_URL` is
+wired to `/loop`. Switch streams from the UI's "Stream source" field to hit
+the others:
+
+| Path     | What it is                                        | What it tests                                                    |
+| -------- | ------------------------------------------------- | ---------------------------------------------------------------- |
+| `/loop`  | 60 s of 440 Hz on L + 660 Hz on R at ~−8 dBFS     | VU meter, basic recording, multi-tab connect/disconnect sync     |
+| `/album` | 4 tones (30/25/30/25 s) with 2 s gaps + 20 s side break | Wave-editor split, silence detection, auto-skip ≥15 s rule |
+| `/clip`  | 50 s sine that intentionally clips for 5 s after a 20 s lead-in | CLIP latch, badge, log line, clip-during-record path |
+
 ## Pull request titles
 
 PR titles drive the changelog. Releases run `git-cliff` over the merge
