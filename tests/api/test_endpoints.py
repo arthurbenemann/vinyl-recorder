@@ -278,3 +278,20 @@ def test_index_serves_html():
     r = _client().get("/")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/html")
+
+
+# ── /api/metrics — Prometheus scrape ─────────────────────────────────────
+def test_metrics_returns_prometheus_text():
+    """Smoke test: the metrics endpoint emits text/plain with the documented
+    counter+gauge family names so a Prometheus scrape doesn't 500."""
+    body = _client().get("/api/metrics").text
+    # A handful of family names that should always be present, regardless
+    # of upstream connection state.
+    for family in (
+        "vinyl_upstream_connected",
+        "vinyl_upstream_bytes_per_sec",
+        "vinyl_active_recordings",
+        "vinyl_disk_free_gb",
+    ):
+        assert f"# HELP {family}" in body, f"missing {family} HELP line"
+        assert f"# TYPE {family}" in body, f"missing {family} TYPE line"

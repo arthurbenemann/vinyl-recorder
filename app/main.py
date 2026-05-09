@@ -1,13 +1,15 @@
 """App wiring: middleware, top-level health/index/config endpoints, route
 registration, static files. Business logic lives in routes/ and services/."""
 import asyncio
+import logging
+import os
 import time
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from routes import albums, recordings, tagging, ws as ws_route
@@ -20,6 +22,48 @@ from state import (
     DISCOGS_USERNAME, PRE_ROLL_SECONDS, active, upstream,
 )
 from version import VERSION
+
+
+# Structured logging — JSON lines on stdout when LOG_FORMAT=json, plain
+# human text otherwise. Reads `LOG_LEVEL` (default INFO) at startup. The
+# upstream / route layers already use `logging.getLogger(__name__)`, so
+# wiring the formatter here gives every log line a consistent shape that
+# `docker compose logs --tail | jq` can drink.
+def _configure_logging() -> None:
+    level = os.getenv("LOG_LEVEL", "INFO").upper()
+    fmt = os.getenv("LOG_FORMAT", "text").lower()
+    handler = logging.StreamHandler()
+    if fmt == "json":
+        # Keep this dependency-free — adding python-json-logger would mean
+        # another wheel to install in the runtime image.
+        import json
+        class _JsonFormatter(logging.Formatter):
+            def format(self, record: logging.LogRecord) -> str:
+                payload = {
+                    "ts":     self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+                    "level":  record.levelname,
+                    "logger": record.name,
+                    "msg":    record.getMessage(),
+                }
+                if record.exc_info:
+                    payload["exc"] = self.formatException(record.exc_info)
+                return json.dumps(payload)
+        handler.setFormatter(_JsonFormatter())
+    else:
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        ))
+    root = logging.getLogger()
+    root.setLevel(level)
+    # Replace any default handlers (uvicorn installs its own; we leave it
+    # alone here and just set the root so first-party `logging.getLogger`
+    # calls show up).
+    if not any(isinstance(h, logging.StreamHandler) for h in root.handlers):
+        root.addHandler(handler)
+
+
+_configure_logging()
 
 # Resolved relative to this file so the app runs inside the container
 # (where main.py lives at /app/main.py) and from a checkout (e.g. pytest
@@ -144,6 +188,39 @@ async def clip_clear(ch: str = ""):
         raise HTTPException(400, "ch must be L, R, or empty")
     upstream.clear_clip(ch or None)
     return {"clipped_l": upstream.clipped_l, "clipped_r": upstream.clipped_r}
+
+
+@app.get("/api/metrics", response_class=PlainTextResponse)
+async def metrics():
+    """Tiny Prometheus-text-format scrape endpoint. Surfaces a handful of
+    counters/gauges from the upstream session and recording state — enough
+    for "is the Pi flapping?" / "are we missing audio?" dashboards. Doesn't
+    require the prometheus-client dependency; we render the text directly."""
+    h = upstream.state().get("health") or {}
+    lines = [
+        "# HELP vinyl_upstream_connected 1 if the shared upstream ffmpeg is up.",
+        "# TYPE vinyl_upstream_connected gauge",
+        f"vinyl_upstream_connected {1 if upstream.connected else 0}",
+        "# HELP vinyl_upstream_bytes_per_sec Recent measured bytes/sec from the upstream reader.",
+        "# TYPE vinyl_upstream_bytes_per_sec gauge",
+        f"vinyl_upstream_bytes_per_sec {int(h.get('bytes_per_sec') or 0)}",
+        "# HELP vinyl_upstream_expected_bps Expected bytes/sec for the active stream format.",
+        "# TYPE vinyl_upstream_expected_bps gauge",
+        f"vinyl_upstream_expected_bps {int(h.get('expected_bps') or 0)}",
+        "# HELP vinyl_upstream_gap_count Total stream gaps seen since the most recent connect.",
+        "# TYPE vinyl_upstream_gap_count counter",
+        f"vinyl_upstream_gap_count {int(h.get('gap_count') or 0)}",
+        "# HELP vinyl_upstream_reconnect_count Reconnect attempts since process start.",
+        "# TYPE vinyl_upstream_reconnect_count counter",
+        f"vinyl_upstream_reconnect_count {int(h.get('reconnect_count') or 0)}",
+        "# HELP vinyl_active_recordings Recording sessions currently running.",
+        "# TYPE vinyl_active_recordings gauge",
+        f"vinyl_active_recordings {len(active)}",
+        "# HELP vinyl_disk_free_gb Free space on the output volume, in GB.",
+        "# TYPE vinyl_disk_free_gb gauge",
+        f"vinyl_disk_free_gb {disk_free_gb()}",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 @app.get("/api/jobs/{job_id}")

@@ -129,10 +129,11 @@ def test_read_tags_missing_file_returns_empty_dict():
 
 
 # ── write_tags shape (no metaflac dependency) ────────────────────────────
-def test_write_tags_skips_subprocess_when_only_empty_fields(monkeypatch):
-    """If every supplied field is empty, write_tags must NOT spawn the
-    setter call — only the remove pass runs. We mock subprocess.run and
-    confirm exactly one invocation (the remove)."""
+def test_write_tags_emits_one_invocation_for_empty_fields(monkeypatch):
+    """When every supplied field is empty, write_tags still issues a
+    single metaflac call: the --remove-tag pass that clears any leftover
+    values from a prior tagging round. Same call also gets the file path
+    appended at the end."""
     calls = []
 
     def fake_run(args, **kw):
@@ -145,13 +146,16 @@ def test_write_tags_skips_subprocess_when_only_empty_fields(monkeypatch):
     monkeypatch.setattr(ffmpeg_mod.subprocess, "run", fake_run)
     ffmpeg_mod.write_tags(Path("/tmp/dummy.flac"), {"artist": "", "tracks": []})
 
-    # One call (the --remove-tag pass). The setter pass is skipped because
-    # there's nothing to set.
     assert len(calls) == 1
-    assert any(a.startswith("--remove-tag=") for a in calls[0])
+    cmd = calls[0]
+    assert any(a.startswith("--remove-tag=") for a in cmd)
+    assert cmd[-1] == "/tmp/dummy.flac"
 
 
 def test_write_tags_emits_set_tags_for_known_fields(monkeypatch):
+    """Combined "remove existing + set new" in a single metaflac call —
+    metaflac honors the flags in argv order, so this is half the
+    subprocess overhead of the previous two-pass version."""
     calls = []
 
     def fake_run(args, **kw):
@@ -166,11 +170,12 @@ def test_write_tags_emits_set_tags_for_known_fields(monkeypatch):
         Path("/tmp/dummy.flac"),
         {"artist": "Foo", "album": "Bar", "year": "1999", "tracks": ["A", "B"]},
     )
-    # Two passes now: remove, then setter.
-    assert len(calls) == 2
-    setters = calls[1]
-    assert "--set-tag=ARTIST=Foo" in setters
-    assert "--set-tag=ALBUM=Bar" in setters
-    assert "--set-tag=DATE=1999" in setters
-    # tracks → TRACKLIST joined with " / "
-    assert any(s == "--set-tag=TRACKLIST=A / B" for s in setters)
+    assert len(calls) == 1
+    cmd = calls[0]
+    # Same call carries both the removes AND the sets.
+    assert any(a.startswith("--remove-tag=") for a in cmd)
+    assert "--set-tag=ARTIST=Foo" in cmd
+    assert "--set-tag=ALBUM=Bar" in cmd
+    assert "--set-tag=DATE=1999" in cmd
+    assert any(s == "--set-tag=TRACKLIST=A / B" for s in cmd)
+    assert cmd[-1] == "/tmp/dummy.flac"
