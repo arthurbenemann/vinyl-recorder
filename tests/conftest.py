@@ -19,8 +19,19 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Pin the test output dir BEFORE any app import — `state.py` mkdirs the
 # layout at import time. setdefault so a parent suite can override.
-_TEST_OUTPUT = tempfile.mkdtemp(prefix="vinyl-recorder-test-")
-os.environ.setdefault("OUTPUT_DIR", _TEST_OUTPUT)
+#
+# Under xdist (-n auto), every worker inherits the controller's environment,
+# including any OUTPUT_DIR the controller's conftest already set. If we left
+# `setdefault` alone, all workers would share one OUTPUT_DIR and races on
+# in-progress/ (one test enumerating while another cleans up) would surface
+# as FileNotFoundError. Detect the xdist worker and force a per-worker tmp
+# dir; the controller / non-xdist run keeps the original setdefault behaviour.
+_XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER")
+_TEST_OUTPUT = tempfile.mkdtemp(prefix=f"vinyl-recorder-test-{_XDIST_WORKER or 'main'}-")
+if _XDIST_WORKER:
+    os.environ["OUTPUT_DIR"] = _TEST_OUTPUT
+else:
+    os.environ.setdefault("OUTPUT_DIR", _TEST_OUTPUT)
 
 # Tests should never trigger the auto-connect path. The app reads this at
 # import time too.
