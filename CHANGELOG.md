@@ -1,3 +1,18 @@
+## v0.8.0 — 2026-05-09
+
+### Bug Fixes
+- **docker:** Keep tracked screenshots in build context so version isn't dirty (#92)
+- **library:** Always show in-progress and music tables (#98)
+
+### Refactoring
+- **compose:** Minimal default, full menu in .env.example (#95)
+
+### Tests
+- Lift unit+api coverage from 50% to 72% (#96)
+
+### Changes
+- Pull published image by default, build via dev overlay (#93)
+
 ## v0.7.0 — 2026-05-08
 
 ### Features
