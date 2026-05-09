@@ -340,7 +340,7 @@
         </div>
         <button class="btn-small" id="we-measure-btn" onclick="weMeasure()">measure</button>
       </div>
-      <div class="we-process-row">
+      <div class="we-process-row" style="flex-wrap:wrap">
         <label class="we-process-toggle">
           <input type="checkbox" id="we-normalize"> normalize album
         </label>
@@ -350,6 +350,16 @@
             <option value="0">keep source</option>
             <option value="16">16-bit</option>
             <option value="24">24-bit</option>
+          </select>
+        </label>
+        <label class="we-process-bits">
+          output sample rate
+          <select id="we-sample-rate">
+            <option value="0">keep source</option>
+            <option value="44100">44.1 kHz (CD)</option>
+            <option value="48000">48 kHz</option>
+            <option value="88200">88.2 kHz</option>
+            <option value="96000">96 kHz</option>
           </select>
         </label>
       </div>

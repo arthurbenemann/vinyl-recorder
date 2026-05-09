@@ -1347,6 +1347,7 @@ async function weApplySplit() {
   if (!tracks.length || tracks.every(t => t.skip)) return;
   const normalize = !!document.getElementById('we-normalize').checked;
   const bitDepth = parseInt(document.getElementById('we-bitdepth').value, 10) || 0;
+  const sampleRate = parseInt(document.getElementById('we-sample-rate').value, 10) || 0;
   if (normalize && (we.measured == null || we.measured.peak_db == null)) {
     // Either nothing measured yet, or skipping/cut changes invalidated it.
     await weMeasure();
@@ -1361,7 +1362,7 @@ async function weApplySplit() {
   showBar(bar, 'encoding tracks');
   try {
     const d = await withJobProgress(bar, async (jobId) => {
-      const body = { album_id: we.albumId, tracks, bit_depth: bitDepth, job_id: jobId };
+      const body = { album_id: we.albumId, tracks, bit_depth: bitDepth, sample_rate: sampleRate, job_id: jobId };
       if (normalize) {
         body.normalize         = true;
         body.target_peak_db    = we.targetPeakDb;

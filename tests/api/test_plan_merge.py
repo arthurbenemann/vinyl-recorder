@@ -180,6 +180,59 @@ def test_post_to_album_with_no_existing_plan_creates_one():
         _cleanup(album_id)
 
 
+def test_partial_post_preserves_prior_sample_rate():
+    """The sample_rate knob has the same merge contract as bit_depth — a
+    debounced save that doesn't include sample_rate must NOT default it
+    away from whatever the user previously chose."""
+    album_id = "tplan006"
+    _seed_album(album_id, plan={
+        "tracks": [{"title": "old", "duration_seconds": 30.0, "skip": False}],
+        "normalize": True,
+        "target_peak_db": -2.0,
+        "measured_peak_db": -4.5,
+        "bit_depth": 24,
+        "sample_rate": 96000,
+    })
+    try:
+        r = _client().post(
+            f"/api/album/{album_id}/plan",
+            json={
+                "tracks": [
+                    {"title": "newA", "duration_seconds": 12.0, "skip": False},
+                ],
+                # No sample_rate — must survive the merge.
+            },
+        )
+        assert r.status_code == 200
+        plan = _read_plan(album_id)
+        assert plan["sample_rate"] == 96000
+    finally:
+        _cleanup(album_id)
+
+
+def test_explicit_sample_rate_overrides_prior_value():
+    """When the user changes the sample-rate dropdown, the new value must
+    overwrite the prior one — same semantics as bit_depth."""
+    album_id = "tplan007"
+    _seed_album(album_id, plan={
+        "tracks": [{"title": "x", "duration_seconds": 10.0, "skip": False}],
+        "sample_rate": 44100,
+    })
+    try:
+        r = _client().post(
+            f"/api/album/{album_id}/plan",
+            json={
+                "tracks": [{"title": "x", "duration_seconds": 10.0, "skip": False}],
+                "sample_rate": 48000,
+            },
+        )
+        assert r.status_code == 200
+        plan = _read_plan(album_id)
+        assert plan["sample_rate"] == 48000
+    finally:
+        _cleanup(album_id)
+
+
 def test_post_to_unknown_album_404s():
     """Bad album_id → 404, not a stub-creation."""
     r = _client().post(

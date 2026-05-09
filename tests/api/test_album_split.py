@@ -455,6 +455,116 @@ def test_split_aformat_added_for_bit_depth_change(monkeypatch):
         _cleanup_album(aid)
 
 
+def test_split_sample_rate_default_keeps_source(monkeypatch):
+    """sample_rate omitted (or 0) → no `-ar` on the ffmpeg cmd, no
+    aresample filter. The source rate flows through untouched."""
+    env = _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+        })
+        assert r.status_code == 200
+        cmd = env.ffmpeg_calls[0]
+        assert "-ar" not in cmd
+        # When neither normalize nor bit-depth nor sample-rate is set, no
+        # `-af` flag is emitted at all.
+        assert "-af" not in cmd
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_sample_rate_adds_ar_and_soxr_filter(monkeypatch):
+    """Non-zero sample_rate → `-ar <rate>` and a SoX-resampler aresample
+    filter on the per-track encode."""
+    env = _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+            "sample_rate": 44100,
+        })
+        assert r.status_code == 200, r.text
+        cmd = env.ffmpeg_calls[0]
+        # `-ar 44100` lands on the output side.
+        assert "-ar" in cmd
+        assert cmd[cmd.index("-ar") + 1] == "44100"
+        # And the SoX-resampler aresample filter is in the -af chain.
+        af = cmd[cmd.index("-af") + 1]
+        assert "aresample=resampler=soxr" in af
+        assert "precision=28" in af
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_sample_rate_combines_with_bit_depth(monkeypatch):
+    """Both knobs together: aresample BEFORE aformat in the filter chain
+    (so the bit-depth conversion happens after rate change), and `-ar`
+    still lands on the output side."""
+    env = _MockSplitEnv(monkeypatch, src_bit_depth=24)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+            "bit_depth": 16,
+            "sample_rate": 48000,
+        })
+        assert r.status_code == 200, r.text
+        cmd = env.ffmpeg_calls[0]
+        assert cmd[cmd.index("-ar") + 1] == "48000"
+        af = cmd[cmd.index("-af") + 1]
+        assert "aresample=resampler=soxr" in af
+        assert "aformat=sample_fmts=s16" in af
+        # aresample appears before aformat so bit-depth conversion follows
+        # the rate change.
+        assert af.index("aresample") < af.index("aformat")
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_unsupported_sample_rate_rejected(monkeypatch):
+    """Server-side defence in depth: an unsupported `-ar` value (one not
+    in the allowed set) must be rejected. The UI's <select> already pins
+    the client side, but a hand-crafted POST mustn't slip arbitrary
+    values to ffmpeg."""
+    env = _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+            "sample_rate": 12345,
+        })
+        assert r.status_code == 400
+        # ffmpeg never invoked.
+        assert env.ffmpeg_calls == []
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_sample_rate_persisted_in_plan(monkeypatch):
+    """The chosen sample rate flows back into album.json.plan alongside
+    bit_depth, so a re-edit reload sees the same knob position."""
+    _MockSplitEnv(monkeypatch)
+    from services import albums_fs
+
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+            "sample_rate": 96000,
+        })
+        assert r.status_code == 200, r.text
+        manifest = albums_fs.read_manifest(aid)
+        assert manifest["plan"]["sample_rate"] == 96000
+    finally:
+        _cleanup_album(aid)
+
+
 def test_split_concat_input_used(monkeypatch):
     """Every per-track ffmpeg invocation reads the SAME album-wide concat
     playlist — that's how -ss/-to act in album time across side

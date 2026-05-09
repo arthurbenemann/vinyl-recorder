@@ -25,9 +25,9 @@ from services.ffmpeg import (
 from services.peaks import silence_runs_from_dat
 from services.jobs import finish_job, start_job
 from state import (
-    CombineRequest, MUSIC_DIR, MeasureRequest, PlanUpdateRequest,
-    PromoteRequest, ReorderSidesRequest, SilenceDetectRequest, SplitRequest,
-    active,
+    ALLOWED_SPLIT_SAMPLE_RATES, CombineRequest, MUSIC_DIR, MeasureRequest,
+    PlanUpdateRequest, PromoteRequest, ReorderSidesRequest,
+    SilenceDetectRequest, SplitRequest, active,
 )
 
 router = APIRouter()
@@ -153,6 +153,7 @@ async def update_plan(album_id: str, req: PlanUpdateRequest):
     if req.target_peak_db   is not None: plan["target_peak_db"]   = req.target_peak_db
     if req.measured_peak_db is not None: plan["measured_peak_db"] = req.measured_peak_db
     if req.bit_depth        is not None: plan["bit_depth"]        = req.bit_depth
+    if req.sample_rate      is not None: plan["sample_rate"]      = req.sample_rate
     manifest["plan"] = plan
     albums_fs.write_manifest(album_id, manifest)
     return {"ok": True, "plan": plan}
@@ -389,6 +390,15 @@ async def split_album(req: SplitRequest):
     manifest = _require_album(req.album_id)
     if not req.tracks:
         raise HTTPException(400, "no tracks given")
+    # Defence in depth — the UI's <select> only offers values from
+    # ALLOWED_SPLIT_SAMPLE_RATES, but a hand-crafted POST mustn't be able
+    # to slip an arbitrary -ar through to ffmpeg.
+    if req.sample_rate not in ALLOWED_SPLIT_SAMPLE_RATES:
+        raise HTTPException(
+            400,
+            f"unsupported sample_rate {req.sample_rate}; "
+            f"allowed: {sorted(ALLOWED_SPLIT_SAMPLE_RATES)}",
+        )
 
     try:
         playlist, side_paths = albums_fs.album_concat_playlist(req.album_id)
@@ -428,6 +438,11 @@ async def split_album(req: SplitRequest):
     apply_gain = req.normalize and abs(gain_db) >= 0.01
     apply_aformat = req.bit_depth in (16, 24) and req.bit_depth != src_bits
     sample_fmt = {16: "s16", 24: "s32"}.get(req.bit_depth) if apply_aformat else None
+    # 0 = keep source rate (skip resample). When set, route adds `-ar
+    # <rate>` to the per-track encode and prepends a SoX-resampler aresample
+    # filter for high-quality conversion; alpine's ffmpeg (see Dockerfile)
+    # ships with libsoxr enabled.
+    target_rate = req.sample_rate if req.sample_rate else None
 
     tags = manifest.get("tags") or {}
     music_dir, relpath = _music_dir_for(tags)
@@ -465,7 +480,8 @@ async def split_album(req: SplitRequest):
                 req=req, t=t, i=i, out_idx=out_idx, out_total=out_total,
                 pad=pad, music_dir=music_dir, playlist=playlist,
                 start_=start_, end_=end_, apply_gain=apply_gain,
-                gain_db=gain_db, sample_fmt=sample_fmt, tags=tags,
+                gain_db=gain_db, sample_fmt=sample_fmt,
+                target_rate=target_rate, tags=tags,
                 cover_file=cover_file, slice_range=(slice_a, slice_b),
             )
             created.append(entry)
@@ -515,7 +531,8 @@ def _kept_duration_total(tracks: list, total: float) -> float:
 async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
                       music_dir: Path, playlist: Path,
                       start_: float, end_: float, apply_gain: bool, gain_db: float,
-                      sample_fmt: Optional[str], tags: dict, cover_file: Optional[Path],
+                      sample_fmt: Optional[str], target_rate: Optional[int],
+                      tags: dict, cover_file: Optional[Path],
                       slice_range: tuple[float, float]) -> dict:
     """Encode one track FLAC into music/, write tags, embed cover. Raises
     HTTPException on ffmpeg failure (the outer handler unlinks the playlist
@@ -525,6 +542,11 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
     af = []
     if apply_gain:
         af.append(f"volume={gain_db:.4f}dB")
+    if target_rate:
+        # SoX resampler at 28-bit precision — well above 24-bit FLAC headroom
+        # so quantisation from the resample is inaudible. Placed BEFORE
+        # aformat so the bit-depth conversion happens after the rate change.
+        af.append("aresample=resampler=soxr:precision=28")
     if sample_fmt:
         af.append(f"aformat=sample_fmts={sample_fmt}")
     # The concat demuxer presents the full album as one virtual input
@@ -536,6 +558,8 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
            "-i", str(playlist)]
     if af:
         cmd += ["-af", ",".join(af)]
+    if target_rate:
+        cmd += ["-ar", str(target_rate)]
     cmd += ["-c:a", "flac", "-compression_level", "5",
             "-map_metadata", "-1", str(out)]
     track_dur = end_ - start_
@@ -598,6 +622,7 @@ def _persist_split_plan(req, relpath: str) -> None:
         "target_peak_db":   req.target_peak_db,
         "measured_peak_db": req.measured_peak_db,
         "bit_depth":        req.bit_depth,
+        "sample_rate":      req.sample_rate,
     }
     manifest = albums_fs.read_manifest(req.album_id)
     manifest["plan"] = plan
