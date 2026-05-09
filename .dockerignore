@@ -1,9 +1,15 @@
-# Anything that doesn't contribute to the image. Keep this aggressive —
-# the version stage runs `git describe` against `.git`, so .git stays in
-# the build context, but every other directory should be excluded so the
-# context tar stays small and a stray `.env` can't sneak into a layer.
+# Anything that doesn't contribute to the image. KEEP THIS LEAN AND
+# UNTRACKED-ONLY. The Dockerfile's version stage does `COPY . /repo` and
+# runs `git describe --tags --always --dirty` against the result; if we
+# exclude any TRACKED file from the build context, git sees a deletion in
+# the working tree relative to the index and the version banner gets a
+# spurious `-dirty` suffix on every clean build.
+#
+# Image-size impact is also nil: the runtime stage explicitly copies only
+# `app/` (`COPY app/ /app/`), so anything else in the context never lands
+# in a layer regardless of whether it's listed here.
 
-# Project-managed
+# Build artefacts and editor cruft (all untracked by .gitignore)
 output/
 __pycache__/
 *.pyc
@@ -12,7 +18,6 @@ __pycache__/
 coverage.xml
 .pytest_cache/
 
-# IDE / editor cruft
 .claude/
 .idea/
 .vscode/
@@ -20,21 +25,12 @@ coverage.xml
 .venv/
 node_modules/
 
-# Tests + dev infra (image runtime never reads them)
-tests/
-test-streams/
-.github/
-docker-compose.dev.yml
-docker-compose.test.yml
+# Local-override compose file is untracked; if a developer has one we
+# don't want it shipped via the build context.
 docker-compose.override.yml
 
-# Docs / project meta
-*.md
-LICENSE
-cliff.toml
-Makefile
-
-# Secrets — never let a developer's .env land in a layer.
+# Secrets — never let a developer's .env land in a layer or in the
+# context tar uploaded to a remote daemon.
 .env
 .env.*
 !.env.example
