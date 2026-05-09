@@ -58,10 +58,16 @@ RUN audiowaveform --version
 RUN pip install --no-cache-dir \
     fastapi \
     "uvicorn[standard]" \
-    python-multipart
+    python-multipart \
+    paramiko
 
 WORKDIR /app
 COPY app/ /app/
+# Pi capture service source — pushed to a Pi over SSH by the in-app
+# "deploy to pi" button (see services/pi_deploy.py). Lives outside /app
+# so the same files keep their canonical location both in the repo and
+# inside the runtime image.
+COPY pi/ /pi/
 COPY --from=version /VERSION /app/VERSION
 
 RUN mkdir -p /output

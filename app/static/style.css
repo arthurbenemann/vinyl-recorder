@@ -26,6 +26,10 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 #disk-free.warn { color: var(--amber); }
 .version-tag { font-size: 10px; letter-spacing: 0.05em; color: var(--muted); padding: 2px 6px; border: 0.5px solid var(--border2); border-radius: 4px; font-variant-numeric: tabular-nums; }
 .version-tag.dev { color: var(--amber); border-color: rgba(186,117,23,0.35); }
+/* Toolbar button in the header — currently only used by "deploy to pi". */
+.header-btn { background: transparent; border: 0.5px solid var(--border2); border-radius: 6px; color: var(--muted); font-family: var(--mono); font-size: 11px; padding: 5px 10px; cursor: pointer; letter-spacing: 0.02em; }
+.header-btn:hover { color: var(--text); border-color: rgba(255,255,255,0.22); background: var(--surface2); }
+.header-btn:disabled { opacity: 0.5; cursor: wait; }
 /* Stream-health button: an always-visible affordance in the header that
    reads as clickable from idle. Border + padding give it button shape; the
    chevron is dimmed until it's actionable (i.e. once connected). */
@@ -363,6 +367,22 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .tracks-sub .ttitle { color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tracks-sub .tdur { font-variant-numeric: tabular-nums; }
 .tracks-sub .tsize { font-variant-numeric: tabular-nums; min-width: 60px; text-align: right; }
+
+/* Pi deployment modal — small two-column form + scrolling log readout. */
+.pi-deploy-grid { display: grid; grid-template-columns: 1fr 110px; gap: 8px 12px; margin-bottom: 12px; }
+.pi-deploy-grid .field:nth-child(3) { grid-column: 1 / 2; }
+.pi-deploy-grid .field:nth-child(4) { grid-column: 1 / -1; }
+.pi-deploy-log {
+  margin-top: 14px; background: var(--surface); border: 0.5px solid var(--border);
+  border-radius: 6px; padding: 10px 12px; font-family: var(--mono); font-size: 11px;
+  line-height: 1.7; color: var(--muted); max-height: 240px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-word;
+}
+.pi-deploy-log[hidden] { display: none; }
+.pi-deploy-log .ok  { color: var(--green); }
+.pi-deploy-log .err { color: var(--accent); }
+.pi-deploy-log .info { color: var(--blue); }
+.pi-deploy-status code { background: var(--surface2); border-radius: 3px; padding: 0 4px; }
 
 /* Wave editor — toolbar */
 /* Editor header right cluster: the auto-saved indicator + close button.
