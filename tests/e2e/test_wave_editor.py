@@ -474,19 +474,28 @@ def test_split_with_cuts_across_side_boundaries(stack, page):
         # predictable. weAddCutAtTime + weSetTitle are the same call sites
         # the user-edit UI hits, so they flip the dirty flag and trigger
         # the debounced /plan save.
-        page.evaluate(
-            """
-            () => {
-                weAddCutAtTime(3.0);
-                weAddCutAtTime(6.0);
-                weSetTitle(0, 'A');
-                weSetTitle(1, 'B');
-                weSetTitle(2, 'C');
-            }
-            """
-        )
-        # Wait for the debounce to settle so the plan landed before split.
-        page.wait_for_timeout(700)
+        # Wait for the debounced /plan POST to actually land — relying on a
+        # fixed wall-clock wait is the classic Playwright anti-pattern and
+        # flakes under GHA load. `expect_response` blocks until a matching
+        # request completes, so the test stays correct regardless of the
+        # debounce timing.
+        with page.expect_response(
+            lambda r: "/api/album/" in r.url and r.url.endswith("/plan")
+                      and r.request.method == "POST"
+                      and r.ok,
+            timeout=10_000,
+        ):
+            page.evaluate(
+                """
+                () => {
+                    weAddCutAtTime(3.0);
+                    weAddCutAtTime(6.0);
+                    weSetTitle(0, 'A');
+                    weSetTitle(1, 'B');
+                    weSetTitle(2, 'C');
+                }
+                """
+            )
 
         # Run split via the API directly — the UI button is present but
         # this path keeps the test focused on the server-side -ss/-to

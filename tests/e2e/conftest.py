@@ -21,7 +21,15 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-COMPOSE_FILES = ["-f", "docker-compose.yml", "-f", "docker-compose.test.yml"]
+# Distinct compose project name so the e2e stack doesn't share state with
+# whatever a developer has up via `make` / `make test`. Without this,
+# `compose down -v` at session start would wipe their dev volumes.
+COMPOSE_PROJECT = "vinyl-e2e-test"
+COMPOSE_FILES = [
+    "-p", COMPOSE_PROJECT,
+    "-f", "docker-compose.yml",
+    "-f", "docker-compose.test.yml",
+]
 # Recorder UI is published to the host on 8080 by docker-compose.test.yml.
 RECORDER_URL = "http://127.0.0.1:8080"
 # Recorder reaches test-streams via container DNS on the bridge network.
@@ -103,14 +111,20 @@ _FATAL_PAGEERROR_RE = re.compile(
 
 
 @pytest.fixture
-def page(page):  # noqa: F811 — intentional override of pytest-playwright's `page`
+def page(page, request):  # noqa: F811 — intentional override of pytest-playwright's `page`
     """Wrap pytest-playwright's `page` fixture to surface uncaught JS
-    exceptions. Console errors aren't enough — a `ReferenceError` thrown
-    inside an event handler aborts the handler silently and only shows up
-    via `page.on('pageerror')`. The dead-`draft` bug that shipped pre-#71
-    was exactly this class; trapping in the fixture catches every future
+    exceptions and capture a Playwright trace on failure. Console errors
+    aren't enough — a `ReferenceError` thrown inside an event handler
+    aborts the handler silently and only shows up via
+    `page.on('pageerror')`. The dead-`draft` bug that shipped pre-#71 was
+    exactly this class; trapping in the fixture catches every future
     regression of that class at the door without each test having to
     remember to register a listener.
+
+    The trace is started at the top of every test and stopped on
+    teardown. If the test failed, we save it to `test-results/` so CI
+    can upload it as an artifact and a developer can replay the run in
+    Playwright's trace viewer. On a passing test the trace is discarded.
 
     Errors are always printed at teardown for visibility. Only errors
     whose message matches `_FATAL_PAGEERROR_RE` (the "this is definitely
@@ -119,7 +133,23 @@ def page(page):  # noqa: F811 — intentional override of pytest-playwright's `p
     listener inline."""
     pageerrors: list[str] = []
     page.on("pageerror", lambda e: pageerrors.append(e.message))
+    page.context.tracing.start(screenshots=True, snapshots=True, sources=True)
+
     yield page
+
+    failed = bool(getattr(request.node, "rep_call", None) and request.node.rep_call.failed)
+    if failed:
+        trace_dir = REPO_ROOT / "test-results"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        # Sanitize the test id for filesystem use — pytest's nodeids contain
+        # `::` / `[]` / `/` that some artifact uploaders mangle.
+        safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", request.node.nodeid)
+        path = trace_dir / f"{safe_id}.zip"
+        page.context.tracing.stop(path=str(path))
+        print(f"[playwright trace saved] {path}")
+    else:
+        page.context.tracing.stop()
+
     if pageerrors:
         # Always print so future failures are diagnosable from the run log.
         for err in pageerrors:
@@ -129,6 +159,16 @@ def page(page):  # noqa: F811 — intentional override of pytest-playwright's `p
             joined = " · ".join(fatal[:5])
             more = "" if len(fatal) <= 5 else f" (+{len(fatal) - 5} more)"
             pytest.fail(f"uncaught JS exceptions in page: {joined}{more}")
+
+
+# Hook to expose the test phase report (setup/call/teardown) on the
+# `request.node` so the `page` fixture above can tell whether the test
+# failed and decide whether to save its trace.
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    setattr(item, f"rep_{rep.when}", rep)
 
 
 @pytest.fixture(scope="session")

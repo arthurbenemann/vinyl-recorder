@@ -60,6 +60,31 @@ def test_ws_record_snapshot_reflects_active_session():
         active.pop(sid, None)
 
 
+# Going forward, prefer the `reset_active_sessions` fixture (see
+# tests/conftest.py) over try/finally + manual pop. The pattern below uses
+# it; the older paired tests in this file are kept on try/finally for
+# backwards-readability and converted opportunistically.
+def test_ws_record_snapshot_via_fixture(reset_active_sessions):
+    """Same shape as `test_ws_record_snapshot_reflects_active_session` but
+    uses the cleanup fixture so an assertion failure mid-test can't leak
+    the sentinel into the next test in this module."""
+    import time
+
+    sid = "ws-fixture-sentinel"
+    reset_active_sessions.insert(sid, {
+        "proc":    None,
+        "paused":  False,
+        "start_time": time.monotonic() - 1,
+        "outfile": "/tmp/fx.flac",
+        "meta":    {},
+        "duration": 0,
+    })
+    with _client().websocket_connect("/api/ws") as ws:
+        msg = json.loads(ws.receive_text())
+        assert msg["record"]["recording"] is True
+        assert any(s["id"] == sid for s in msg["record"]["sessions"])
+
+
 def test_ws_paused_session_freezes_elapsed():
     """A paused session reports elapsed = pause_started - start_time, not
     wall-clock; the UI then doesn't tick the timer while paused."""
