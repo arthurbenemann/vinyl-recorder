@@ -1336,6 +1336,11 @@ function renderCombineSides() {
     const label = f.album ? `${f.album}${f.artist ? ' · ' + f.artist : ''}` : fn;
     const recorded = f.mtime ? fmtDate(f.mtime) : '—';
     const isFirst = i === 0, isLast = i === combineOrder.length - 1;
+    // Reuses the library's `preview` state — same kind ('lib') so the
+    // single shared <audio> + visual badge cover both row sets without
+    // a parallel state machine. preview-btn keeps the badge in sync.
+    const playing = previewIs(fn, 'lib') ? 'playing' : '';
+    const playGlyph = previewIs(fn, 'lib') ? '⏸' : '▶';
     return `
       <div class="side-row" draggable="true" data-i="${i}"
            ondragstart="combineDragStart(event, ${i})"
@@ -1345,6 +1350,7 @@ function renderCombineSides() {
            ondragend="combineDragEnd(event)">
         <div class="drag-handle" title="Drag to reorder">≡</div>
         <div class="num">${i + 1}.</div>
+        <button class="play-side preview-btn ${playing}" data-fname="${htmlEscape(fn)}" data-kind="lib" title="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>
         <div class="name" title="${htmlEscape(fn)}">${htmlEscape(label)}</div>
         <div class="meta">${htmlEscape(recorded)} · ${f.size_mb || '—'} MB</div>
         <div class="arrows">
@@ -1483,6 +1489,8 @@ function closeTag() {
   document.getElementById('tag-modal').hidden = true;
   document.removeEventListener('keydown', tagEscHandler);
   document.getElementById('combine-sides-section').hidden = true;
+  // Stop any preview playback so the row's badge resets and audio stops.
+  if (preview.fname) stopPreview();
   tagPanelTarget = null;
   combineOrder = [];
   if (_tagFocusReturn && typeof _tagFocusReturn.focus === 'function') {

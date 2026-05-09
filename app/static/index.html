@@ -300,6 +300,12 @@
       </div>
     </div>
 
+    <!-- Sides reorder — visible only for albums with ≥2 sides. Drag handle
+         + ▲/▼ swap with the neighbor; both call weMoveSide which posts
+         /sides/reorder, refreshes peaks, and remaps cuts in album-time so
+         existing track titles + skip flags follow their original side. -->
+    <div class="we-sides" id="we-sides" hidden></div>
+
     <div class="we-minimap" id="we-minimap-wrap"
          onmousedown="weMinimapDown(event)">
       <canvas class="we-minimap-img" id="we-minimap-canvas" width="1200" height="40"></canvas>
