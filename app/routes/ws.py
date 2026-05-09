@@ -29,9 +29,9 @@ def _record_snapshot() -> dict:
     sessions = []
     for sid, s in active.items():
         if s.get("paused"):
-            elapsed = int(s.get("pause_started", time.time()) - s["start_time"])
+            elapsed = int(s.get("pause_started", time.monotonic()) - s["start_time"])
         else:
-            elapsed = int(time.time() - s["start_time"])
+            elapsed = int(time.monotonic() - s["start_time"])
         sessions.append({
             "id":       sid,
             "elapsed":  elapsed,
@@ -60,6 +60,12 @@ async def ws(ws: WebSocket):
         while True:
             try:
                 evt = await asyncio.wait_for(q.get(), timeout=15.0)
+                if evt is None:
+                    # Bus evicted us — queue overflowed with a critical
+                    # state change. Closing forces the client to reconnect
+                    # and replay `hello`, which is the only way to be sure
+                    # they're back in sync.
+                    break
                 await ws.send_text(json.dumps(evt))
             except asyncio.TimeoutError:
                 # Periodic ping doubles as a liveness check — disconnected

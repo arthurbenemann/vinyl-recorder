@@ -132,23 +132,27 @@ def test_full_queue_drops_oldest_vu_frame():
     assert len(items) == 128
 
 
-def test_full_queue_does_not_drop_log_events():
-    # Non-VU events (log lines, state) must NOT be coalesced — losing one
-    # is user-visible. The dispatch path silently skips the put_nowait
-    # without evicting anything, so the queue stays at its cap.
+def test_full_queue_evicts_subscriber_on_log_event():
+    # Non-VU events (log lines, state) must NOT be silently dropped —
+    # losing one would leave a tab visibly out of sync. When a queue is so
+    # backed up that we can't deliver a critical event, the bus drains
+    # the queue, pushes a `None` sentinel so the WS handler closes the
+    # socket, and removes the subscriber from its list. On reconnect the
+    # client gets a fresh `hello` snapshot and is back in sync.
     async def scenario():
         bus = EventBus()
         bus.attach_loop(asyncio.get_running_loop())
         q = bus.add_subscriber()
         for i in range(128):
             q.put_nowait({"type": "vu", "n": i})
-        bus._dispatch({"type": "log", "msg": "should be dropped"})
+        bus._dispatch({"type": "log", "msg": "wakes the wedged tab"})
         items = []
         while not q.empty():
             items.append(q.get_nowait())
-        return items
+        return q, items, bus
 
-    items = asyncio.run(scenario())
-    assert all(e["type"] == "vu" for e in items)
-    assert len(items) == 128
-    assert items[0]["n"] == 0  # nothing was evicted
+    q, items, bus = asyncio.run(scenario())
+    # Queue was drained and a single sentinel pushed. The subscriber list
+    # now excludes this queue.
+    assert items == [None]
+    assert q not in bus._subs

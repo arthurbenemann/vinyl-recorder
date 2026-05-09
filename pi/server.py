@@ -172,18 +172,13 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(200, {"gain_db": round(applied, 1)})
 
     def _stream(self):
-        # Kick out any existing stream consumer — last-writer-wins.
-        with _stream_state_lock:
-            old = _stream_state.get("proc")
-            if old and old.poll() is None:
-                try: old.terminate()
-                except Exception: pass
-                try: old.wait(timeout=1)
-                except Exception:
-                    try: old.kill()
-                    except Exception: pass
-
-        proc = None
+        # Headers go out FIRST so a slow start doesn't let the client time
+        # out, and so that two near-simultaneous /stream requests both
+        # establish a response before either starts an arecord. The kicker
+        # then runs under the lock for the whole "terminate old + start new
+        # + register" sequence — without that, two concurrent /stream
+        # handlers could both pass the kick gate and end up with two
+        # arecords producing interleaved garbage on the wire.
         try:
             self.send_response(200)
             self.send_header("Content-Type", "audio/wav")
@@ -191,31 +186,48 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
             self._cors()
             self.end_headers()
-            self.wfile.flush()  # ensure headers reach the socket before arecord starts writing
+            self.wfile.flush()
+        except Exception:
+            return
 
-            cmd = [
-                "arecord",
-                "-D", DEVICE,
-                "-f", ARECORD_FMT,
-                "-r", str(SAMPLE_RATE),
-                "-c", str(CHANNELS),
-                "-t", "wav",
-                # Default ALSA period is ~250 ms — that's a long underrun
-                # window for the browser's audio buffer. 20 ms periods × 4
-                # periods of buffer flow nicely without measurable extra CPU.
-                "--period-time=20000",   # 20 ms (μs)
-                "--buffer-time=80000",   # 80 ms total ring buffer
-            ]
-            # Hand the HTTP socket's fd straight to arecord so audio bytes flow
-            # kernel → arecord → socket without crossing Python — eliminates
-            # the per-chunk read/write loop the naive version had.
-            proc = subprocess.Popen(
-                cmd,
-                stdout=self.connection.fileno(),
-                stderr=subprocess.DEVNULL,
-                close_fds=False,
-            )
+        cmd = [
+            "arecord",
+            "-D", DEVICE,
+            "-f", ARECORD_FMT,
+            "-r", str(SAMPLE_RATE),
+            "-c", str(CHANNELS),
+            "-t", "wav",
+            # Default ALSA period is ~250 ms — that's a long underrun
+            # window for the browser's audio buffer. 20 ms periods × 4
+            # periods of buffer flow nicely without measurable extra CPU.
+            "--period-time=20000",   # 20 ms (μs)
+            "--buffer-time=80000",   # 80 ms total ring buffer
+        ]
+
+        proc = None
+        try:
             with _stream_state_lock:
+                # Tear down any active consumer FIRST under the lock — so
+                # a concurrent /stream handler can't slip past the gate
+                # between our "terminate old" and "register new" steps.
+                old = _stream_state.get("proc")
+                if old and old.poll() is None:
+                    try: old.terminate()
+                    except Exception: pass
+                    try: old.wait(timeout=1)
+                    except Exception:
+                        try: old.kill()
+                        except Exception: pass
+                # Hand the HTTP socket's fd straight to arecord so audio
+                # bytes flow kernel → arecord → socket without crossing
+                # Python — eliminates the per-chunk read/write loop the
+                # naive version had.
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=self.connection.fileno(),
+                    stderr=subprocess.DEVNULL,
+                    close_fds=False,
+                )
                 _stream_state["proc"] = proc
             proc.wait()  # blocks until client disconnects (SIGPIPE) or kicker terminates us
         finally:

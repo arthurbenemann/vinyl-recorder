@@ -95,22 +95,29 @@ async def stream_proxy():
                     break
                 yield chunk
         finally:
-            # Kill ffmpeg FIRST. The subscriber's worker thread may be
-            # blocked inside _sink's proc.stdin.write/flush (waiting for
-            # ffmpeg to drain its stdin pipe), holding the BufferedWriter
-            # _write_lock. If we instead went via unsubscribe -> _on_close
-            # -> proc.stdin.close from this http worker thread, close would
-            # try to acquire the same _write_lock and deadlock. Killing
-            # ffmpeg breaks the worker out of its blocked write with
-            # BrokenPipeError, which releases _write_lock, after which
-            # unsubscribe + close run cleanly.
-            if proc.poll() is None:
-                try: proc.kill()
-                except Exception: pass
-            upstream.unsubscribe(sub_id)
-            _reap(proc)
+            _teardown_proxy(proc, sub_id)
 
     return StreamingResponse(generate(), media_type="audio/mpeg")
+
+
+def _teardown_proxy(proc: subprocess.Popen, sub_id: str) -> None:
+    """Tear down a stream-proxy ffmpeg + its upstream subscription.
+
+    Order matters and is enforced here by code structure (see
+    test_proxy_teardown_kills_before_unsubscribe in
+    tests/unit/test_upstream_unit.py): the subscriber's worker thread
+    may be blocked inside `proc.stdin.write/flush` waiting for ffmpeg
+    to drain its stdin pipe, holding the BufferedWriter `_write_lock`.
+    If we went unsubscribe → `_on_close` → `proc.stdin.close` from this
+    HTTP worker thread, close would try to acquire the same `_write_lock`
+    and deadlock. Killing ffmpeg first breaks the worker out of its
+    blocked write with BrokenPipeError, releasing `_write_lock`; the
+    subsequent unsubscribe + close then run cleanly."""
+    if proc.poll() is None:
+        try: proc.kill()
+        except Exception: pass
+    upstream.unsubscribe(sub_id)
+    _reap(proc)
 
 
 # Background reaper for proxy ffmpegs. A single dedicated thread waits on
@@ -280,15 +287,28 @@ async def start_recording(req: RecordRequest):
             pass
     preroll_done.set()
 
+    # `start_time` and `pause_started` are wall-time deltas displayed as
+    # elapsed; using monotonic protects them against system clock changes
+    # (NTP step at midnight, container TZ surprises) that would otherwise
+    # corrupt the timer mid-recording. `started_unix` keeps the human-
+    # readable wallclock-of-record-start for display only.
     active[sid] = {
         "proc": proc, "outfile": outfile, "log_fh": log_fh,
-        "start_time": time.time(), "duration": req.duration,
+        "start_time":   time.monotonic(),
+        "started_unix": time.time(),
+        "duration": req.duration,
         "meta": {"artist": req.artist, "album": req.album, "year": year},
         "filename": fname,
         "sess_state": sess_state,
     }
     log_paths[sid] = str(log_path)
     log_lines[sid] = [f"▶ Started recording → {fname}"]
+
+    # Spawn a per-session blocking waiter so a self-exit (auto-stop on `-t`,
+    # crash, kill -9) gets reaped within milliseconds — replaces the old
+    # 1 Hz polling loop.
+    threading.Thread(target=_watch_session, args=(sid,),
+                     name=f"rec-watch-{sid}", daemon=True).start()
     bus.log(f"▶ Recording → {fname}", "info")
     bus.publish({"type": "record", "event": "start",
                  "session_id": sid, "filename": fname,
@@ -325,7 +345,7 @@ def _finalize_session(session_id: str, reason: str) -> dict:
     # If we stopped while paused, start_time hasn't been advanced for the
     # current pause window — only resume does that. Use pause_started so the
     # reported elapsed matches the FLAC duration (un-paused recording time).
-    end_time = s.get("pause_started") if s.get("paused") else time.time()
+    end_time = s.get("pause_started") if s.get("paused") else time.monotonic()
     elapsed = int(end_time - s["start_time"])
     fname = Path(s["outfile"]).name
     fsize = round(Path(s["outfile"]).stat().st_size / 1e6, 1) if Path(s["outfile"]).exists() else 0
@@ -362,7 +382,7 @@ async def pause_recording(session_id: str):
         return {"paused": True}
     s["paused"] = True
     s["sess_state"]["paused"] = True
-    s["pause_started"] = time.time()
+    s["pause_started"] = time.monotonic()
     log_lines[session_id].append("‖ Paused")
     bus.log("‖ Recording paused", "info")
     bus.publish({"type": "record", "event": "pause",
@@ -380,7 +400,8 @@ async def resume_recording(session_id: str):
         return {"paused": False}
     # Slide start_time forward by the pause duration so the reported elapsed
     # excludes the time spent paused.
-    paused_for = time.time() - s.get("pause_started", time.time())
+    now = time.monotonic()
+    paused_for = now - s.get("pause_started", now)
     s["start_time"] += paused_for
     s["paused"] = False
     s["sess_state"]["paused"] = False
@@ -389,65 +410,55 @@ async def resume_recording(session_id: str):
     bus.log("▶ Recording resumed", "info")
     bus.publish({"type": "record", "event": "resume",
                  "session_id": session_id,
-                 "elapsed": int(time.time() - s["start_time"])})
+                 "elapsed": int(time.monotonic() - s["start_time"])})
     return {"paused": False}
 
 
-def _watcher_loop(stop_event: threading.Event) -> None:
-    """Reap recording sessions whose ffmpeg exited on its own.
-
-    Two cases:
-      - duration limit reached (ffmpeg's `-t N` exit) → reason="auto"
-      - upstream died, ffmpeg crashed, kill -9, etc.    → reason="crash"
-
-    Without this, `active[sid]` would leak and the UI would show the
-    session running forever."""
-    while not stop_event.is_set():
-        for sid in list(active.keys()):
-            s = active.get(sid)
-            if not s:
-                continue
-            if s["proc"].poll() is None:
-                continue
-            outfile = Path(s["outfile"])
-            duration = s.get("duration", 0)
-            elapsed = time.time() - s["start_time"]
-            # If we hit close to the requested duration with a non-empty file,
-            # call it a clean auto-stop. Otherwise treat as crash and surface
-            # the ffmpeg exit code so the user has something to chase.
-            if duration > 0 and elapsed >= duration - 1 and outfile.exists() and outfile.stat().st_size > 0:
-                reason = "auto"
-            elif outfile.exists() and outfile.stat().st_size > 0 and s["proc"].returncode == 0:
-                reason = "auto"
-            else:
-                reason = "crash"
-            try:
-                _finalize_session(sid, reason)
-            except Exception:
-                # Don't let a finalize error wedge the watcher.
-                active.pop(sid, None)
-        stop_event.wait(1.0)
+def _classify_exit(s: dict) -> str:
+    """Decide whether a self-exited ffmpeg counts as an auto-stop or a
+    crash. Used by the per-session watcher and any explicit reaper."""
+    outfile = Path(s["outfile"])
+    duration = s.get("duration", 0)
+    elapsed = time.monotonic() - s["start_time"]
+    if duration > 0 and elapsed >= duration - 1 and outfile.exists() and outfile.stat().st_size > 0:
+        return "auto"
+    if outfile.exists() and outfile.stat().st_size > 0 and s["proc"].returncode == 0:
+        return "auto"
+    return "crash"
 
 
-_watcher_stop = threading.Event()
-_watcher_thread: threading.Thread | None = None
+def _watch_session(sid: str) -> None:
+    """One thread per recording session — `proc.wait()` blocks in the OS
+    until ffmpeg exits, so the reap is event-driven (≤ a few ms) instead
+    of polled at 1 Hz. The thread also serves as the canonical reaper for
+    its child, so stop_recording's wait() doesn't race the watcher."""
+    s = active.get(sid)
+    if not s:
+        return
+    try:
+        s["proc"].wait()
+    except Exception:
+        pass
+    s = active.get(sid)
+    if not s:
+        # User-stop already finalized us before ffmpeg exited.
+        return
+    reason = _classify_exit(s)
+    try:
+        _finalize_session(sid, reason)
+    except Exception:
+        active.pop(sid, None)
 
 
 def start_watcher() -> None:
-    """Idempotent — wired from main.py at app startup."""
-    global _watcher_thread
-    if _watcher_thread and _watcher_thread.is_alive():
-        return
-    _watcher_stop.clear()
-    _watcher_thread = threading.Thread(
-        target=_watcher_loop, args=(_watcher_stop,),
-        name="rec-watcher", daemon=True,
-    )
-    _watcher_thread.start()
+    """Kept for compatibility with the main.py startup hook. The legacy
+    polling watcher has been replaced by per-session blocking waiters
+    spawned from `start_recording`, so this is now a no-op."""
 
 
 def stop_watcher() -> None:
-    _watcher_stop.set()
+    """No-op — see `start_watcher`. Per-session threads are daemons that
+    die when the process does; nothing to clean up here."""
 
 
 @router.get("/api/log/{session_id}")

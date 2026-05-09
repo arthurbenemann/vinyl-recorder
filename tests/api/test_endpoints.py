@@ -232,7 +232,7 @@ def test_status_reflects_active_session():
     active[sid] = {
         "proc":       None,
         "paused":     False,
-        "start_time": time.time() - 5,
+        "start_time": time.monotonic() - 5,
         "outfile":    "/tmp/active.flac",
         "meta":       {"artist": "X", "album": "Y"},
         "duration":   0,
@@ -253,7 +253,7 @@ def test_status_freezes_elapsed_while_paused():
     from state import active
 
     sid = "status-paused"
-    now = time.time()
+    now = time.monotonic()
     active[sid] = {
         "proc":          None,
         "paused":        True,

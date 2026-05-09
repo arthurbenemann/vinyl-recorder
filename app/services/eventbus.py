@@ -58,23 +58,50 @@ class EventBus:
             pass
 
     def _dispatch(self, event: dict) -> None:
-        """Runs on the event loop. Fans out to all subscriber queues."""
+        """Runs on the event loop. Fans out to all subscriber queues.
+
+        VU frames coalesce: drop the oldest queued frame to make room for a
+        fresher one, so a momentarily-stalled tab catches up rather than
+        accumulating stale peaks.
+
+        Non-VU events (record/upstream/clip state changes, log lines) MUST
+        NOT be silently dropped — losing one would leave a tab visibly out
+        of sync until the user reloaded. If a queue is full we instead
+        evict the subscriber: enqueue a sentinel so the WS handler closes
+        the socket; on reconnect the client gets a fresh `hello` snapshot
+        and is in sync again.
+        """
         with self._subs_lock:
             subs = list(self._subs)
         is_vu = event.get("type") == "vu"
+        evicted: list[asyncio.Queue] = []
         for q in subs:
             try:
                 q.put_nowait(event)
             except asyncio.QueueFull:
                 if is_vu:
-                    # Drop the oldest VU frame to make room for a fresher one.
                     try: q.get_nowait()
                     except asyncio.QueueEmpty: pass
                     try: q.put_nowait(event)
                     except asyncio.QueueFull: pass
-                # For non-VU events, the queue is so backed up that the
-                # client is effectively gone — it'll be reaped on the next
-                # send failure in the WS handler.
+                else:
+                    # Critical event lost = state desync. Drain the queue,
+                    # plant a sentinel so the WS handler exits cleanly, and
+                    # mark this subscriber for removal so we don't keep
+                    # spamming a wedged client.
+                    try:
+                        while True:
+                            q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try: q.put_nowait(None)
+                    except asyncio.QueueFull: pass
+                    evicted.append(q)
+        if evicted:
+            with self._subs_lock:
+                for q in evicted:
+                    try: self._subs.remove(q)
+                    except ValueError: pass
 
     # ── log helpers ───────────────────────────────────────────────────────
     def log(self, msg: str, level: str = "info") -> dict:
