@@ -549,21 +549,185 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .gain-row .gain-db { font-family: var(--mono); font-size: 11px; color: var(--text); width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
 
 /* Mobile — collapse the sidebar above the library so the table gets the
-   full screen. Drops the sidebar log (toasts cover that) and tightens
-   table padding. */
+   full screen, and re-style each <tr> as a card. The HTML stays a real
+   <table>; CSS turns each row into a flex container with the cover thumb
+   pinned at the left, the action buttons stacked at the right, and the
+   text cells wrapping in between. Column header labels for the meta line
+   are injected via ::before on the data-col attribute. The locked
+   colgroup widths (table-layout: fixed) are overridden so nothing forces
+   horizontal scroll at 360px. */
 @media (max-width: 720px) {
   .main { grid-template-columns: 1fr; min-height: auto; }
   .sidebar { border-right: 0; border-bottom: 0.5px solid var(--border2); padding: 14px; gap: 14px; }
   .content { padding: 14px; }
   .header { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
   .meta-grid { grid-template-columns: 1fr; }
-  .lib-table th, .lib-table td { padding: 8px 6px; font-size: 11px; }
   .sidebar .log { display: none; }
   .toast-container { top: 10px; right: 10px; left: 10px; max-width: none; }
   /* Hide the chevron on mobile — the rail style only applies ≥721px so a
      stored "collapsed" flag has no visual effect here, and the toggle would
      be a no-op for users. */
   .sidebar-toggle { display: none; }
+
+  /* --- Card layout for library tables ---
+     The colgroup-driven fixed-width layout is the main culprit on
+     narrow screens: with table-layout: fixed and 8 locked columns the
+     row truncates each cell to a sliver. Drop the table model entirely
+     and re-flow each row as a flex card. */
+  .lib-table { table-layout: auto; display: block; width: 100%; }
+  .lib-table colgroup { display: none; }
+  .lib-table thead { display: none; }
+  .lib-table tbody { display: block; }
+  .lib-table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 4px;
+    padding: 10px 60px 10px 56px;
+    border: 0.5px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    background: var(--surface);
+    position: relative;
+    min-height: 64px;
+  }
+  .lib-table tr:last-child { margin-bottom: 0; }
+  .lib-table tr:hover td { background: transparent; }
+  .lib-table td {
+    display: block;
+    padding: 0;
+    border: none;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    font-size: 12px;
+  }
+
+  /* Album / title — primary line, takes the full card width. */
+  .lib-table td[data-col="album"] {
+    flex: 1 1 100%;
+    order: 1;
+    font-weight: 500;
+    min-width: 0;
+  }
+  .lib-table td[data-col="album"] .row-title { display: block; }
+  .lib-table td[data-col="album"] .row-title-text {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Pull the cover thumb out of the album cell and pin it to the left
+     edge of the card so it visually spans all the text rows. */
+  .lib-table td[data-col="album"] .row-thumb {
+    position: absolute;
+    left: 12px;
+    top: 12px;
+    width: 36px;
+    height: 36px;
+    margin-right: 0;
+  }
+
+  /* Artist — secondary line, full width, primary text colour. */
+  .lib-table td[data-col="artist"] {
+    flex: 1 1 100%;
+    order: 2;
+    font-size: 12px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Meta line — year / recorded / length / size / fmt fold into a
+     single wrapping flex row. Each cell is a chip with its column name
+     as a ::before label. */
+  .lib-table td[data-col="year"],
+  .lib-table td[data-col="recorded"],
+  .lib-table td[data-col="length"],
+  .lib-table td[data-col="size"],
+  .lib-table td[data-col="fmt"] {
+    order: 3;
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  /* Status / sides / tracks count — its own line below the meta chips. */
+  .lib-table td[data-col="status"] {
+    order: 4;
+    flex: 1 1 100%;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* Actions — vertical stack pinned to the right edge of the card. */
+  .lib-table td[data-col="actions"] {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .lib-table td[data-col="actions"] .icon-btn {
+    width: 32px;
+    height: 32px;
+    margin-left: 0;
+    font-size: 14px;
+  }
+
+  /* Bulk-select checkbox — tuck into the top-left corner of the card,
+     overlapping the thumb area. Bulk select isn't a primary mobile flow
+     but we keep the affordance reachable. */
+  .lib-table td[data-col="check"] {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    padding: 4px;
+    z-index: 1;
+  }
+  .lib-table td[data-col="check"] input { width: 14px; height: 14px; }
+
+  /* Column-header labels for the meta chips. */
+  .lib-table td[data-col="year"]::before     { content: "year "; opacity: 0.65; }
+  .lib-table td[data-col="recorded"]::before { content: "rec ";  opacity: 0.65; }
+  .lib-table td[data-col="length"]::before   { content: "len ";  opacity: 0.65; }
+  .lib-table td[data-col="size"]::before     { content: "size "; opacity: 0.65; }
+  .lib-table td[data-col="fmt"]::before      { content: "fmt ";  opacity: 0.65; }
+
+  /* Row accent for untagged rows — was a left inset on the first <td>;
+     promote it to the full card edge. */
+  .lib-table tr.row-untagged { border-left-color: var(--amber); border-left-width: 2px; }
+  .lib-table .row-untagged td:first-child { box-shadow: none; }
+
+  /* Empty-state row keeps its full-width centred message and isn't
+     subject to the card grid. */
+  .lib-table tr:has(td.empty-lib) {
+    display: block;
+    padding: 0;
+    border: 0.5px dashed var(--border2);
+    background: transparent;
+    min-height: 0;
+  }
+  .lib-table td.empty-lib { display: block; padding: 24px 12px; text-align: center; }
+
+  /* Bulk-bar adapts via existing flex; ensure it wraps cleanly. */
+  .bulk-bar { flex-wrap: wrap; row-gap: 6px; }
+
+  /* Drop the rounded card frame around each section's tbody area — the
+     individual row-cards already provide visual grouping, and the outer
+     frame would just nest borders awkwardly. The frame is set inline
+     in index.html, so a more specific selector targets those wrappers. */
+  details.lib-section > div[style*="border-radius"] {
+    background: transparent !important;
+    border: none !important;
+  }
 }
 
 /* Honor prefers-reduced-motion: kill the rec-dot blink, the clip-pulse

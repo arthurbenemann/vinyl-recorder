@@ -896,21 +896,21 @@ function refreshLibRender() {
       const delBtn = _actionBtn('deleteFile', f.filename, {label: 'Delete', glyph: '✕', danger: true});
       return `
       <tr class="row-untagged">
-        <td class="col-check"><input type="checkbox" class="row-check" data-fname="${fn}" ${isSel}
+        <td class="col-check" data-col="check"><input type="checkbox" class="row-check" data-fname="${fn}" ${isSel}
             onclick="toggleRow(this.dataset.fname, this.checked)"></td>
-        <td style="font-weight:500" ondblclick="startInlineRename(this.dataset.fname, this.querySelector('.row-title-text'))" data-fname="${fn}" title="Double-click to rename">
+        <td data-col="album" style="font-weight:500" ondblclick="startInlineRename(this.dataset.fname, this.querySelector('.row-title-text'))" data-fname="${fn}" title="Double-click to rename">
           <div class="row-title">
             <span class="row-thumb"><img src="/api/file-cover/${encodeURIComponent(f.filename)}" loading="lazy" onerror="this.remove()"></span>
             <span class="row-title-text">${titleText}</span>
           </div>
         </td>
-        <td style="color:var(--muted)">${htmlEscape(f.artist || '—')}</td>
-        <td style="color:var(--muted)">${htmlEscape(f.year || '—')}</td>
-        <td style="color:var(--muted);white-space:nowrap" title="${htmlEscape(fmtDateFull(f.mtime))}">${htmlEscape(fmtDate(f.mtime))}</td>
-        <td style="color:var(--muted)">${fmtDuration(f.duration_seconds)}</td>
-        <td style="color:var(--muted)">${f.size_mb} MB</td>
-        <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="bit depth / sample rate (kHz)">${fmtSourceFormat(f)}</td>
-        <td style="white-space:nowrap;text-align:right">${previewBtn}${tagBtn}${dlLink}${delBtn}</td>
+        <td data-col="artist" style="color:var(--muted)">${htmlEscape(f.artist || '—')}</td>
+        <td data-col="year" style="color:var(--muted)">${htmlEscape(f.year || '—')}</td>
+        <td data-col="recorded" style="color:var(--muted);white-space:nowrap" title="${htmlEscape(fmtDateFull(f.mtime))}">${htmlEscape(fmtDate(f.mtime))}</td>
+        <td data-col="length" style="color:var(--muted)">${fmtDuration(f.duration_seconds)}</td>
+        <td data-col="size" style="color:var(--muted)">${f.size_mb} MB</td>
+        <td data-col="fmt" style="color:var(--muted);font-variant-numeric:tabular-nums" title="bit depth / sample rate (kHz)">${fmtSourceFormat(f)}</td>
+        <td data-col="actions" style="white-space:nowrap;text-align:right">${previewBtn}${tagBtn}${dlLink}${delBtn}</td>
       </tr>`;
   }).join('');
   _setTbodyIfChanged(tbody, _libRowsHtml);
@@ -1117,22 +1117,22 @@ function _albumRowHtml(a, opts) {
   const delBtn = _actionBtn('deleteAlbum', a.album_id, {label: 'Delete album', glyph: '✕', danger: true});
   return `
   <tr data-album-id="${fn}">
-    <td class="col-check"><input type="checkbox" class="${opts.checkClass}" data-fname="${fn}" ${isSel}
+    <td class="col-check" data-col="check"><input type="checkbox" class="${opts.checkClass}" data-fname="${fn}" ${isSel}
         onclick="${opts.toggleRow}(this.dataset.fname, this.checked)"></td>
-    <td style="font-weight:500">
+    <td data-col="album" style="font-weight:500">
       <div class="row-title">
         <span class="row-thumb"><img src="/api/file-cover/${fn}" loading="lazy" onerror="this.remove()"></span>
         <span class="row-title-text">${htmlEscape(a.album || '(untitled album)')}</span>
       </div>
     </td>
-    <td style="color:var(--muted)">${htmlEscape(a.artist || '—')}</td>
-    <td style="color:var(--muted)">${htmlEscape(a.year || '—')}</td>
-    <td style="color:var(--muted);white-space:nowrap" title="${htmlEscape(fmtDateFull(a.mtime))}">${htmlEscape(fmtDate(a.mtime))}</td>
-    <td style="color:var(--muted)">${fmtDuration(a.duration_seconds)}</td>
-    <td style="color:var(--muted)">${a.size_mb} MB</td>
-    <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="bit depth / sample rate (kHz)">${fmtSourceFormat(a)}</td>
-    <td style="color:var(--muted)">${countCell}</td>
-    <td style="white-space:nowrap;text-align:right">${tagBtn}${splitBtn}${demBtn}${delBtn}</td>
+    <td data-col="artist" style="color:var(--muted)">${htmlEscape(a.artist || '—')}</td>
+    <td data-col="year" style="color:var(--muted)">${htmlEscape(a.year || '—')}</td>
+    <td data-col="recorded" style="color:var(--muted);white-space:nowrap" title="${htmlEscape(fmtDateFull(a.mtime))}">${htmlEscape(fmtDate(a.mtime))}</td>
+    <td data-col="length" style="color:var(--muted)">${fmtDuration(a.duration_seconds)}</td>
+    <td data-col="size" style="color:var(--muted)">${a.size_mb} MB</td>
+    <td data-col="fmt" style="color:var(--muted);font-variant-numeric:tabular-nums" title="bit depth / sample rate (kHz)">${fmtSourceFormat(a)}</td>
+    <td data-col="status" style="color:var(--muted)">${countCell}</td>
+    <td data-col="actions" style="white-space:nowrap;text-align:right">${tagBtn}${splitBtn}${demBtn}${delBtn}</td>
   </tr>`;
 }
 
