@@ -222,39 +222,40 @@ def test_connect_failure_is_502(monkeypatch):
 
 
 # ── /api/status with an active session ──────────────────────────────────
-def test_status_reflects_active_session():
+def test_status_reflects_active_session(reset_active_sessions):
     """When a session is in `state.active`, /api/status surfaces it under
-    `sessions` with elapsed seconds and the outfile basename."""
+    `sessions` with elapsed seconds and the outfile basename. The
+    `reset_active_sessions` fixture takes care of teardown — guaranteed
+    cleanup even if an assertion fails between insert and the manual pop
+    that this test used to rely on."""
     import time
-    from state import active
 
     sid = "status-sentinel"
-    active[sid] = {
+    reset_active_sessions.insert(sid, {
         "proc":       None,
         "paused":     False,
         "start_time": time.monotonic() - 5,
         "outfile":    "/tmp/active.flac",
         "meta":       {"artist": "X", "album": "Y"},
         "duration":   0,
-    }
-    try:
-        body = _client().get("/api/status").json()
-        assert body["recording"] is True
-        s = next(s for s in body["sessions"] if s["id"] == sid)
-        assert s["outfile"] == "active.flac"
-        assert s["paused"] is False
-        assert s["elapsed"] >= 0
-    finally:
-        active.pop(sid, None)
+    })
+    # Note: this fixture-using test was a PR #103 conversion of the prior
+    # try/finally + manual pop pattern. Cleanup happens via the fixture's
+    # teardown — see tests/conftest.py.
+    body = _client().get("/api/status").json()
+    assert body["recording"] is True
+    s = next(s for s in body["sessions"] if s["id"] == sid)
+    assert s["outfile"] == "active.flac"
+    assert s["paused"] is False
+    assert s["elapsed"] >= 0
 
 
-def test_status_freezes_elapsed_while_paused():
+def test_status_freezes_elapsed_while_paused(reset_active_sessions):
     import time
-    from state import active
 
     sid = "status-paused"
     now = time.monotonic()
-    active[sid] = {
+    reset_active_sessions.insert(sid, {
         "proc":          None,
         "paused":        True,
         "start_time":    now - 10,
@@ -262,14 +263,11 @@ def test_status_freezes_elapsed_while_paused():
         "outfile":       "/tmp/p.flac",
         "meta":          {},
         "duration":      0,
-    }
-    try:
-        body = _client().get("/api/status").json()
-        s = next(s for s in body["sessions"] if s["id"] == sid)
-        assert s["paused"] is True
-        assert s["elapsed"] == 3
-    finally:
-        active.pop(sid, None)
+    })
+    body = _client().get("/api/status").json()
+    s = next(s for s in body["sessions"] if s["id"] == sid)
+    assert s["paused"] is True
+    assert s["elapsed"] == 3
 
 
 # ── / (index) ────────────────────────────────────────────────────────────

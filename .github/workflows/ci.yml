@@ -169,8 +169,17 @@ jobs:
         if: failure()
         run: |
           echo "=== docker compose ps ==="
-          docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.test.yml ps -a || true
+          docker compose -p vinyl-e2e-test -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.test.yml ps -a || true
           echo "=== docker compose logs ==="
-          docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.test.yml logs --no-color || true
+          docker compose -p vinyl-e2e-test -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.test.yml logs --no-color || true
           echo "=== docker ps -a ==="
           docker ps -a || true
+
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14

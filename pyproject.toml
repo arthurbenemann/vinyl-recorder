@@ -11,3 +11,16 @@ addopts = [
 markers = [
     "e2e: end-to-end tests that boot the full docker compose stack (slow, ~2 min)",
 ]
+# Hard cap per test so a hung subprocess / blocked WS handler doesn't burn
+# through the GHA budget. e2e overrides this with its own marker-scoped
+# higher cap when run by the CI e2e job.
+timeout = 60
+# Treat all DeprecationWarnings from first-party code as errors so an MB /
+# Pydantic / FastAPI deprecation surfaces in CI rather than rotting in
+# place. Third-party deprecations stay warnings.
+filterwarnings = [
+    "error::DeprecationWarning:app",
+    "error::DeprecationWarning:services",
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
