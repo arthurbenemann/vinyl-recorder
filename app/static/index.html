@@ -385,31 +385,7 @@
     <!-- Sides reorder — visible only in combine mode. -->
     <div id="combine-sides-section" hidden>
       <div class="col-label" style="margin-top:6px">Sides (in playback order)</div>
-      <div id="combine-sides" class="candidates" style="max-height:none;margin-bottom:8px"></div>
-
-      <!-- Per-recording waveform + transport. The side row's ▶ button
-           drives which peaks/audio load here; one shared canvas keeps
-           the panel compact and matches the wave-editor's idiom. -->
-      <div id="combine-wave" class="combine-wave" hidden>
-        <div class="combine-wave-head">
-          <button type="button" class="btn-small" id="cw-play" onclick="cwTogglePlay()">▶</button>
-          <span class="combine-wave-name" id="cw-name">—</span>
-          <span class="combine-wave-time"><span id="cw-time">0:00.00</span> / <span id="cw-total">0:00.00</span></span>
-        </div>
-        <div class="combine-wave-wrap" id="cw-wrap">
-          <canvas id="cw-canvas" width="2400" height="80"></canvas>
-          <div class="combine-wave-overlay" id="cw-overlay"
-               onmousemove="cwHoverMove(event)"
-               onmouseleave="cwHoverLeave()"
-               onclick="cwSeekClick(event)"></div>
-          <div class="combine-wave-readout" id="cw-readout"></div>
-          <div class="combine-wave-loading" id="cw-loading" hidden>loading waveform…</div>
-        </div>
-        <div class="combine-wave-help">
-          <strong>space</strong> play/pause · <strong>←/→</strong> seek ±0.1s (shift = ±1s) · <strong>click</strong> seek · <strong>↑/↓</strong> prev/next side
-        </div>
-        <audio id="cw-audio" preload="none"></audio>
-      </div>
+      <div id="combine-sides" class="candidates" style="max-height:none;margin-bottom:14px"></div>
     </div>
 
     <div class="tag-grid">
