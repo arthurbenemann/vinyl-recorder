@@ -15,6 +15,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Pin the test output dir BEFORE any app import — `state.py` mkdirs the
@@ -32,3 +34,45 @@ atexit.register(shutil.rmtree, _TEST_OUTPUT, ignore_errors=True)
 _APP = REPO_ROOT / "app"
 if str(_APP) not in sys.path:
     sys.path.insert(0, str(_APP))
+
+
+@pytest.fixture(autouse=True)
+def _reset_external_api_state(monkeypatch):
+    """Reset MB/Discogs module-level state between tests. The runtime
+    pacing/sleep is essential at runtime (MB asks for ≤1 rps; Discogs limits
+    pages); in unit/api tests these would just make the suite slow without
+    exercising real network. Force the sleep windows to zero and clear caches
+    so each test starts from a clean slate."""
+    try:
+        from services import musicbrainz as _mb
+        _mb._clear_caches_for_tests()
+        monkeypatch.setattr(_mb, "_MB_RATE_INTERVAL", 0.0, raising=False)
+    except Exception:
+        pass
+    try:
+        from services import discogs as _dc
+        _dc._clear_caches_for_tests()
+        monkeypatch.setattr(_dc, "_PAGE_SLEEP_S", 0.0, raising=False)
+    except Exception:
+        pass
+    yield
+
+
+@pytest.fixture
+def reset_active_sessions():
+    """Yield a context that pops every key it inserted into `state.active`
+    on teardown. Use instead of try/finally + manual pop in tests that need
+    to plant a fake recording session — guaranteed cleanup even if an
+    assertion fails between insert and pop."""
+    inserted: list = []
+
+    class _Helper:
+        def insert(self, sid: str, value: dict) -> None:
+            from state import active
+            active[sid] = value
+            inserted.append(sid)
+
+    yield _Helper()
+    from state import active
+    for sid in inserted:
+        active.pop(sid, None)

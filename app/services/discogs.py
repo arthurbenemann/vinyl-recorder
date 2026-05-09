@@ -1,27 +1,86 @@
 """Discogs public-API client. Used to enrich MusicBrainz releases with
 vinyl-accurate label/catno/country/format/genres + cover image when MB has
 linked the two — and, when DISCOGS_USERNAME is configured, to surface
-matches from the user's owned collection alongside MB candidates."""
+matches from the user's owned collection alongside MB candidates.
+
+Includes a small TTL cache keyed by release id, an inter-page sleep when
+walking a collection (Discogs's unauthenticated bucket is 25 rpm), and
+shared-token authentication for `release()` so the configured DISCOGS_TOKEN
+actually reaches the wire."""
 import json
 import re
 import threading
 import time
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 from difflib import SequenceMatcher
 from typing import Optional
 
-from services.musicbrainz import _http_json
-from state import DISCOGS_BASE, MB_UA
+from state import DISCOGS_BASE, DISCOGS_TOKEN, MB_UA
+
+
+# Discogs's documented unauthenticated rate is 25 rpm; with a token it's 60.
+# Pace pages of the collection walk so a large collection (~1000 releases)
+# doesn't burst through the bucket. The token bumps the budget but a small
+# inter-page pause is still polite.
+_PAGE_SLEEP_S = 0.5
+
+# Per-release short-lived cache. The "search → release detail → apply" flow
+# can hit the same release id three times within a minute; this collapses
+# that into one network call.
+_RELEASE_CACHE_TTL_S = 300
+_release_cache: dict[int, tuple[float, Optional[dict]]] = {}
+_release_cache_lock = threading.Lock()
+
+
+def _http_json_with_token(url: str, token: Optional[str], timeout: int = 20) -> dict:
+    """Fetch JSON with optional Discogs auth header. Tokens raise rate
+    limits and are required for private collections.
+
+    On 429 (rate limit) we back off once and retry — Discogs uses 429
+    rather than 503, so this is symmetric with the MB client's retry."""
+    headers = {"User-Agent": MB_UA, "Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Discogs token={token}"
+    req = urllib.request.Request(url, headers=headers)
+    for attempt in (0, 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt == 0:
+                time.sleep(2.0)
+                continue
+            raise
 
 
 def release(release_id: int) -> Optional[dict]:
-    """Fetch a Discogs release by ID. Public endpoint, no auth required."""
+    """Fetch a Discogs release by ID. Uses the configured DISCOGS_TOKEN
+    when available so the request lands in the higher rate-limit bucket
+    instead of being unauthenticated. Cached for `_RELEASE_CACHE_TTL_S`."""
+    now = time.monotonic()
+    with _release_cache_lock:
+        cached = _release_cache.get(release_id)
+        if cached and (now - cached[0]) < _RELEASE_CACHE_TTL_S:
+            return cached[1]
     try:
-        return _http_json(f"{DISCOGS_BASE}/releases/{release_id}")
+        data = _http_json_with_token(
+            f"{DISCOGS_BASE}/releases/{release_id}",
+            DISCOGS_TOKEN or None,
+        )
     except Exception:
-        return None
+        data = None
+    with _release_cache_lock:
+        _release_cache[release_id] = (time.monotonic(), data)
+    return data
+
+
+def _clear_caches_for_tests() -> None:
+    """Reset module-level state between tests."""
+    with _release_cache_lock:
+        _release_cache.clear()
 
 
 # ── Collection ───────────────────────────────────────────────────────────
@@ -30,18 +89,6 @@ def release(release_id: int) -> Optional[dict]:
 _CACHE_TTL_S = 3600
 _collection_cache: dict[str, tuple[float, list[dict]]] = {}
 _collection_lock = threading.Lock()
-
-
-def _http_json_with_token(url: str, token: Optional[str], timeout: int = 20) -> dict:
-    """Like services.musicbrainz._http_json but adds a Discogs auth header
-    when a token is supplied. Tokens raise rate limits and are required for
-    private collections."""
-    headers = {"User-Agent": MB_UA, "Accept": "application/json"}
-    if token:
-        headers["Authorization"] = f"Discogs token={token}"
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())
 
 
 def _summarize_release(item: dict) -> dict:
@@ -77,7 +124,8 @@ def collection_releases(username: str, token: Optional[str] = None,
 
     Cached in-process for CACHE_TTL_S. Pass force=True to refetch. Network
     failures fall back to whatever's cached (even stale) so a transient
-    Discogs outage doesn't break tagging."""
+    Discogs outage doesn't break tagging. Pages are spaced by `_PAGE_SLEEP_S`
+    to stay under Discogs's rate limits."""
     if not username:
         return []
     now = time.monotonic()
@@ -112,6 +160,8 @@ def collection_releases(username: str, token: Optional[str] = None,
             # Safety stop — 50 × 100 = 5 000 releases is more than any sane
             # collection. Prevents a runaway loop on a Discogs API quirk.
             break
+        # Stay under Discogs's rate limit when paginating large collections.
+        time.sleep(_PAGE_SLEEP_S)
     with _collection_lock:
         _collection_cache[username] = (now, out)
     return out

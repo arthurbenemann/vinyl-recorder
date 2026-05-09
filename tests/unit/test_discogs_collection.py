@@ -187,3 +187,56 @@ def test_match_collection_respects_limit():
     releases = [_summarized(i, "Same Artist", f"Same Album {i}") for i in range(20)]
     out = discogs.match_collection("Same Artist", "Same Album", releases, limit=3)
     assert len(out) == 3
+
+
+# ── Token + cache (added in API hardening pass) ──────────────────────────
+def test_release_uses_configured_token(monkeypatch):
+    """`release()` must include the Discogs Authorization header when
+    DISCOGS_TOKEN is set, otherwise the request lands in the slower
+    unauthenticated bucket."""
+    captured: dict = {}
+
+    def fake_with_token(url, token, timeout=20):
+        captured["url"] = url
+        captured["token"] = token
+        return {"id": 42, "title": "T"}
+
+    monkeypatch.setattr(discogs, "_http_json_with_token", fake_with_token)
+    monkeypatch.setattr(discogs, "DISCOGS_TOKEN", "secrettoken123")
+    discogs._clear_caches_for_tests()
+    out = discogs.release(42)
+    assert out and out["id"] == 42
+    assert captured["token"] == "secrettoken123"
+    assert "/releases/42" in captured["url"]
+
+
+def test_release_caches_within_ttl(monkeypatch):
+    """Repeat calls for the same release id hit the network once."""
+    calls = {"n": 0}
+
+    def fake_with_token(url, token, timeout=20):
+        calls["n"] += 1
+        return {"id": 7}
+
+    monkeypatch.setattr(discogs, "_http_json_with_token", fake_with_token)
+    discogs._clear_caches_for_tests()
+    a = discogs.release(7)
+    b = discogs.release(7)
+    assert a == b == {"id": 7}
+    assert calls["n"] == 1
+
+
+def test_release_caches_failure_as_none(monkeypatch):
+    """A failed fetch is cached as None so a flaky upstream isn't repeatedly
+    hammered for the same id within the TTL."""
+    calls = {"n": 0}
+
+    def boom(url, token, timeout=20):
+        calls["n"] += 1
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(discogs, "_http_json_with_token", boom)
+    discogs._clear_caches_for_tests()
+    assert discogs.release(99) is None
+    assert discogs.release(99) is None
+    assert calls["n"] == 1
