@@ -1336,6 +1336,8 @@ function renderCombineSides() {
     const label = f.album ? `${f.album}${f.artist ? ' · ' + f.artist : ''}` : fn;
     const recorded = f.mtime ? fmtDate(f.mtime) : '—';
     const isFirst = i === 0, isLast = i === combineOrder.length - 1;
+    const playing = cw.filename === fn ? 'playing' : '';
+    const playGlyph = (cw.filename === fn && cw.isPlaying) ? '⏸' : '▶';
     return `
       <div class="side-row" draggable="true" data-i="${i}"
            ondragstart="combineDragStart(event, ${i})"
@@ -1345,6 +1347,7 @@ function renderCombineSides() {
            ondragend="combineDragEnd(event)">
         <div class="drag-handle" title="Drag to reorder">≡</div>
         <div class="num">${i + 1}.</div>
+        <button class="play-side ${playing}" data-fname="${htmlEscape(fn)}" title="Preview waveform" onclick="cwSelectAndToggle(this.dataset.fname)">${playGlyph}</button>
         <div class="name" title="${htmlEscape(fn)}">${htmlEscape(label)}</div>
         <div class="meta">${htmlEscape(recorded)} · ${f.size_mb || '—'} MB</div>
         <div class="arrows">
@@ -1393,6 +1396,201 @@ function combineDragEnd(e) {
   e.currentTarget.classList.remove('dragging');
   document.querySelectorAll('.side-row.drag-over').forEach(r => r.classList.remove('drag-over'));
 }
+
+// ── Combine-mode waveform + playback ──────────────────────────────────────
+// One shared canvas above the side list. Clicking a row's ▶ loads that
+// recording's `.peaks.dat` (built/cached server-side via audiowaveform) and
+// swaps the `<audio>` src to its FLAC. Click-to-seek + keyboard transport
+// match the wave editor; we just don't expose cuts/skip — this is preview-
+// only, the real splitting happens after combine in the wave editor.
+const cw = {
+  filename:  null,   // currently-loaded recording, or null
+  peaks:     null,   // parsed .peaks.dat (multi-side shape with one entry)
+  duration:  0,      // seconds; from peaks.dat (FLAC may differ by ms)
+  isPlaying: false,
+  hoverX:    null,
+  loadToken: 0,      // bumped on every cwSelect — discard stale fetch results
+};
+
+function _cwAudio()   { return document.getElementById('cw-audio'); }
+function _cwCanvas()  { return document.getElementById('cw-canvas'); }
+function _cwWrapEl()  { return document.getElementById('cw-wrap'); }
+function _cwOverlay() { return document.getElementById('cw-overlay'); }
+
+function cwReset() {
+  // Hide the panel until the user actually clicks a row's ▶. Releases any
+  // prior selection so a re-open of the modal starts clean.
+  cwRelease();
+  document.getElementById('combine-wave').hidden = true;
+}
+
+function cwRelease() {
+  const a = _cwAudio();
+  if (a) { try { a.pause(); } catch (e) {} a.removeAttribute('src'); a.load(); }
+  cw.filename  = null;
+  cw.peaks     = null;
+  cw.duration  = 0;
+  cw.isPlaying = false;
+  cw.hoverX    = null;
+  cw.loadToken += 1;
+  const playBtn = document.getElementById('cw-play');
+  if (playBtn) playBtn.textContent = '▶';
+}
+
+async function cwSelectAndToggle(fname) {
+  if (cw.filename === fname) {
+    cwTogglePlay();
+    return;
+  }
+  await cwSelect(fname);
+  // Auto-play after switching — feels right for a preview button.
+  if (cw.filename === fname) {
+    _cwAudio().play().catch(() => {});
+  }
+}
+
+async function cwSelect(fname) {
+  const token = ++cw.loadToken;
+  cw.filename  = fname;
+  cw.peaks     = null;
+  cw.duration  = 0;
+  cw.isPlaying = false;
+  document.getElementById('combine-wave').hidden = false;
+  document.getElementById('cw-name').textContent = fname;
+  document.getElementById('cw-time').textContent  = '0:00.00';
+  document.getElementById('cw-total').textContent = '0:00.00';
+  document.getElementById('cw-loading').hidden = false;
+  document.getElementById('cw-play').textContent = '▶';
+  // Audio src — `/api/download/{fname}` already serves the FLAC with range
+  // support (FastAPI's FileResponse), so `<audio>` can scrub freely.
+  const audio = _cwAudio();
+  audio.ontimeupdate = cwOnTimeUpdate;
+  audio.onplay  = () => { cw.isPlaying = true;  document.getElementById('cw-play').textContent = '⏸'; renderCombineSides(); };
+  audio.onpause = () => { cw.isPlaying = false; document.getElementById('cw-play').textContent = '▶'; renderCombineSides(); };
+  audio.onended = () => { cw.isPlaying = false; document.getElementById('cw-play').textContent = '▶'; renderCombineSides(); };
+  audio.src = `/api/download/${encodeURIComponent(fname)}`;
+  audio.load();
+  // Peaks fetch in parallel with audio buffering.
+  try {
+    const r = await fetch(`/api/recording/${encodeURIComponent(fname)}/peaks`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const peaks = parsePeaks(await r.arrayBuffer());
+    if (cw.loadToken !== token) return;  // user moved on
+    cw.peaks    = peaks;
+    cw.duration = peaks.duration || 0;
+    document.getElementById('cw-total').textContent = fmtMMSS(cw.duration);
+    cwDraw();
+  } catch (e) {
+    if (cw.loadToken !== token) return;
+    document.getElementById('cw-loading').textContent =
+      'waveform unavailable: ' + (e.message || e);
+    return;
+  } finally {
+    if (cw.loadToken === token) {
+      document.getElementById('cw-loading').hidden = true;
+    }
+  }
+  renderCombineSides();
+}
+
+function cwTogglePlay() {
+  if (!cw.filename) return;
+  const audio = _cwAudio();
+  if (audio.paused) {
+    audio.play().catch(() => {});
+  } else {
+    audio.pause();
+  }
+}
+
+function cwOnTimeUpdate() {
+  const audio = _cwAudio();
+  if (!audio) return;
+  document.getElementById('cw-time').textContent = fmtMMSS(audio.currentTime || 0);
+  cwRenderOverlay();
+}
+
+function cwDraw() {
+  const canvas = _cwCanvas();
+  if (!canvas || !cw.peaks) return;
+  drawPeaks(canvas, cw.peaks, 0, cw.duration || cw.peaks.duration || 1, '#6db3ff');
+  cwRenderOverlay();
+}
+
+function cwRenderOverlay() {
+  const overlay = _cwOverlay();
+  if (!overlay) return;
+  overlay.querySelectorAll('.wave-playhead').forEach(el => el.remove());
+  const audio = _cwAudio();
+  if (!audio || !cw.duration) return;
+  const t = audio.currentTime || 0;
+  if (isNaN(t)) return;
+  const ph = document.createElement('div');
+  ph.className = 'wave-playhead';
+  ph.style.left = (Math.max(0, Math.min(1, t / cw.duration)) * 100) + '%';
+  overlay.appendChild(ph);
+}
+
+function cwSeekClick(e) {
+  if (!cw.duration) return;
+  const r = _cwWrapEl().getBoundingClientRect();
+  const t = Math.max(0, Math.min(cw.duration, ((e.clientX - r.left) / r.width) * cw.duration));
+  const audio = _cwAudio();
+  try { audio.currentTime = t; } catch (err) {}
+  cwRenderOverlay();
+}
+
+function cwHoverMove(e) {
+  if (!cw.duration) return;
+  const r = _cwWrapEl().getBoundingClientRect();
+  cw.hoverX = e.clientX - r.left;
+  const t = Math.max(0, Math.min(cw.duration, (cw.hoverX / r.width) * cw.duration));
+  document.getElementById('cw-readout').textContent = fmtMMSS(t);
+}
+
+function cwHoverLeave() {
+  cw.hoverX = null;
+  document.getElementById('cw-readout').textContent = '';
+}
+
+// Keyboard shortcuts: only handled while the combine modal is open and
+// focus isn't in a text input. Bound globally on capture so we don't have
+// to thread the listener through every modal lifecycle event.
+function cwKeyDown(e) {
+  if (document.getElementById('tag-modal').hidden) return;
+  if (document.getElementById('combine-sides-section').hidden) return;
+  if (!cw.filename) return;
+  const tag = (e.target.tagName || '').toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  const audio = _cwAudio();
+  switch (e.key) {
+    case ' ':
+      e.preventDefault();
+      cwTogglePlay();
+      return;
+    case 'ArrowLeft':
+    case 'ArrowRight': {
+      if (!cw.duration) return;
+      e.preventDefault();
+      const step = (e.shiftKey ? 1.0 : 0.1) * (e.key === 'ArrowLeft' ? -1 : 1);
+      const t = Math.max(0, Math.min(cw.duration, (audio.currentTime || 0) + step));
+      try { audio.currentTime = t; } catch (err) {}
+      cwRenderOverlay();
+      return;
+    }
+    case 'ArrowUp':
+    case 'ArrowDown': {
+      if (!combineOrder.length) return;
+      e.preventDefault();
+      const i = combineOrder.indexOf(cw.filename);
+      const j = i < 0 ? 0 : (i + (e.key === 'ArrowUp' ? -1 : 1));
+      if (j < 0 || j >= combineOrder.length) return;
+      cwSelectAndToggle(combineOrder[j]);
+      return;
+    }
+  }
+}
+document.addEventListener('keydown', cwKeyDown);
 
 // ── Tag panel ─────────────────────────────────────────────────────────────
 let tagPanelMbid = null;        // mbid of currently-picked candidate (drives cover embed on apply)
@@ -1448,6 +1646,7 @@ function openTag(fname) {
     const n = tagPanelTarget.filenames.length;
     document.getElementById('tag-filename').textContent =
       `${n} side${n === 1 ? '' : 's'} → new album`;
+    cwReset();
     renderCombineSides();
   } else {
     document.getElementById('tag-filename').textContent = fname;
@@ -1483,6 +1682,7 @@ function closeTag() {
   document.getElementById('tag-modal').hidden = true;
   document.removeEventListener('keydown', tagEscHandler);
   document.getElementById('combine-sides-section').hidden = true;
+  cwRelease();
   tagPanelTarget = null;
   combineOrder = [];
   if (_tagFocusReturn && typeof _tagFocusReturn.focus === 'function') {

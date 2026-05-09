@@ -1,4 +1,5 @@
 """Recording sessions, library file ops, stream proxy + probe."""
+import asyncio
 import json
 import queue
 import signal
@@ -17,6 +18,7 @@ from services.ffmpeg import (
     LOW_SPACE_GB, disk_free_gb, disk_space_error, find_side, list_recordings,
     safe_name,
 )
+from services.peaks import is_fresh, render_peaks
 from state import (
     BulkDelete, LOG_DIR, RAW_DIR, RecordRequest, RenameRequest, active,
     log_lines, log_paths, upstream,
@@ -596,3 +598,30 @@ async def download(filename: str):
     if not path:
         raise HTTPException(404)
     return FileResponse(str(path), media_type="audio/flac", filename=filename)
+
+
+def _raw_peaks_path(src: Path) -> Path:
+    return RAW_DIR / ".peaks" / f"{src.stem}.dat"
+
+
+@router.get("/api/recording/{filename}/peaks")
+async def recording_peaks(filename: str):
+    """Serve a per-recording `.peaks.dat` for the combine modal's shared
+    waveform. Mtime-validated against the source FLAC, atomically rebuilt
+    on miss/stale. The cache lives at `raw/.peaks/<stem>.dat` so renames
+    naturally invalidate (the new stem won't have a stale dat) and
+    untouched recordings reuse the existing one across sessions."""
+    src = find_side(filename)
+    if not src:
+        raise HTTPException(404)
+    out = _raw_peaks_path(src)
+    if not is_fresh(out, src):
+        try:
+            await asyncio.to_thread(render_peaks, src, out)
+        except RuntimeError as e:
+            raise HTTPException(500, str(e))
+    return FileResponse(
+        str(out),
+        media_type="application/octet-stream",
+        headers={"Cache-Control": "no-cache"},
+    )

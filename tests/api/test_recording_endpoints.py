@@ -253,6 +253,48 @@ def test_download_streams_file_bytes():
         f.unlink(missing_ok=True)
 
 
+# ── /api/recording/{filename}/peaks ──────────────────────────────────────
+def test_recording_peaks_unknown_returns_404():
+    r = _client().get("/api/recording/no-such.flac/peaks")
+    assert r.status_code == 404
+
+
+def test_recording_peaks_renders_and_serves_dat(monkeypatch, tmp_path):
+    """Endpoint renders a .peaks.dat on first hit and serves it on
+    subsequent hits without re-rendering. We stub render_peaks rather than
+    invoking audiowaveform — the unit job doesn't have it on PATH."""
+    from state import RAW_DIR
+    src = RAW_DIR / "peaks_src.flac"
+    src.write_bytes(b"fake-flac")
+    # 24-byte audiowaveform v1 header + minimal body so any future header
+    # validation in the route doesn't reject our stub.
+    fake_dat_payload = b"\x01\x00\x00\x00" + b"\x01\x00\x00\x00" * 4 + b"\x00\x00"
+    calls = {"n": 0}
+
+    def fake_render_peaks(s, out):
+        calls["n"] += 1
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(fake_dat_payload)
+
+    import routes.recordings as rec_mod
+    monkeypatch.setattr(rec_mod, "render_peaks", fake_render_peaks)
+    try:
+        r = _client().get("/api/recording/peaks_src.flac/peaks")
+        assert r.status_code == 200
+        assert r.content == fake_dat_payload
+        assert calls["n"] == 1
+        # Second hit reuses the cached dat (mtime is fresh).
+        r2 = _client().get("/api/recording/peaks_src.flac/peaks")
+        assert r2.status_code == 200
+        assert calls["n"] == 1
+    finally:
+        src.unlink(missing_ok=True)
+        cache = RAW_DIR / ".peaks" / "peaks_src.dat"
+        cache.unlink(missing_ok=True)
+        try: (RAW_DIR / ".peaks").rmdir()
+        except Exception: pass
+
+
 # ── /api/record/pause + /resume guards ───────────────────────────────────
 def test_pause_unknown_session_returns_404():
     r = _client().post("/api/record/pause/no-such")
