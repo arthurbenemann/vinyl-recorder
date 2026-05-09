@@ -230,11 +230,11 @@
 </div>
 
 <!-- Wave-editor split modal -->
-<div class="modal-backdrop" id="we-modal" hidden onclick="if(event.target===this)closeWaveEditor()">
+<div class="modal-backdrop" id="we-modal" hidden role="dialog" aria-modal="true" aria-labelledby="we-modal-title" onclick="if(event.target===this)closeWaveEditor()">
   <div class="modal" style="width:1100px">
     <div class="modal-header">
       <div>
-        <div class="modal-title">Split into tracks</div>
+        <div class="modal-title" id="we-modal-title">Split into tracks</div>
         <div class="modal-sub" id="we-filename">—</div>
       </div>
       <div class="we-header-right">
@@ -372,7 +372,7 @@
 
 <!-- Tag panel modal — also handles "combine into album" when the sides
      section is unhidden (set by openCombine via tagPanelTarget.filenames). -->
-<div class="modal-backdrop" id="tag-modal" hidden onclick="if(event.target===this)closeTag()">
+<div class="modal-backdrop" id="tag-modal" hidden role="dialog" aria-modal="true" aria-labelledby="tag-modal-title" onclick="if(event.target===this)closeTag()">
   <div class="modal">
     <div class="modal-header">
       <div>
