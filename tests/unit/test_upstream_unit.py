@@ -338,3 +338,143 @@ def test_unsubscribe_unknown_name_is_silent():
 def test_disconnect_when_not_connected_is_silent():
     sess, _ = _new_session()
     sess.disconnect()  # no exception, no event fired
+
+
+# ── Regression: stream-proxy teardown order ──────────────────────────────
+def test_proxy_teardown_kills_before_unsubscribe(monkeypatch):
+    """`_teardown_proxy` MUST kill ffmpeg first, then unsubscribe. Killing
+    second can deadlock against the subscriber's worker thread holding the
+    BufferedWriter `_write_lock` while blocked in `stdin.write`. Pin the
+    order with a sentinel so a future refactor that swaps these calls
+    fails the test."""
+    from routes import recordings
+
+    calls: list[str] = []
+
+    class _FakeProc:
+        def __init__(self):
+            self._dead = False
+        def poll(self):
+            return 0 if self._dead else None
+        def kill(self):
+            calls.append("kill")
+            self._dead = True
+
+    def fake_unsubscribe(name):
+        calls.append(f"unsubscribe:{name}")
+
+    def fake_reap(p):
+        calls.append("reap")
+
+    monkeypatch.setattr(recordings.upstream, "unsubscribe", fake_unsubscribe)
+    monkeypatch.setattr(recordings, "_reap", fake_reap)
+
+    p = _FakeProc()
+    recordings._teardown_proxy(p, "proxy-abc")
+    assert calls == ["kill", "unsubscribe:proxy-abc", "reap"], (
+        f"teardown order wrong — kill must precede unsubscribe; got {calls}"
+    )
+
+
+def test_proxy_teardown_skips_kill_if_already_dead(monkeypatch):
+    """If ffmpeg has already exited (e.g. EOF on its stdout flushed the
+    generator), don't bother sending another signal — `proc.poll()` reports
+    a returncode and we skip straight to unsubscribe + reap."""
+    from routes import recordings
+
+    calls: list[str] = []
+
+    class _FakeProc:
+        def poll(self):
+            return 0
+        def kill(self):
+            calls.append("kill")
+
+    monkeypatch.setattr(recordings.upstream, "unsubscribe",
+                        lambda n: calls.append(f"unsub:{n}"))
+    monkeypatch.setattr(recordings, "_reap", lambda p: calls.append("reap"))
+
+    recordings._teardown_proxy(_FakeProc(), "proxy-x")
+    assert "kill" not in calls
+    assert calls == ["unsub:proxy-x", "reap"]
+
+
+# ── Regression: concurrent finalize race (user-stop + watcher) ──────────
+def test_finalize_session_is_idempotent_under_concurrent_calls(monkeypatch):
+    """Pin the user-stop / watcher race fix.
+
+    Both the `/api/record/stop/{sid}` request handler and the per-session
+    watcher's `_watch_session` thread can wake up on the same SIGINT-driven
+    ffmpeg exit and race into `_finalize_session`. Pre-fix, the loser
+    either returned `{"elapsed": 0, ...}` to its caller (so the e2e
+    `test_record_3s_from_loop` assertion `2 <= elapsed <= 6` failed) or
+    raised KeyError on a duplicate `del active[sid]`. Post-fix, the second
+    call returns the same payload as the first and `active` is popped
+    exactly once."""
+    import os
+    import time as _time
+    from routes import recordings as rec
+    from state import active, log_lines
+
+    class _DeadProc:
+        returncode = 0
+        def poll(self): return 0
+        def send_signal(self, sig): pass
+        def terminate(self): pass
+        def wait(self, timeout=None): return 0
+
+    class _FH:
+        def close(self): pass
+
+    monkeypatch.setattr(rec.upstream, "unsubscribe", lambda name: None)
+    monkeypatch.setattr(rec.bus, "log", lambda *a, **kw: None)
+    monkeypatch.setattr(rec.bus, "publish", lambda *a, **kw: None)
+
+    sid = "race-sid"
+    outfile = "/tmp/__race_test_finalize.flac"
+    with open(outfile, "wb") as f:
+        f.write(b"x" * 1024)
+
+    sess = {
+        "proc": _DeadProc(),
+        "outfile": outfile,
+        "log_fh": _FH(),
+        "start_time": _time.monotonic() - 3.0,
+        "duration": 0,
+        "meta": {"artist": "x", "album": "y", "year": "2026"},
+        "filename": "x.flac",
+        "sess_state": {"paused": False},
+        "finalize_lock": threading.Lock(),
+        "finalized": False,
+    }
+    active[sid] = sess
+    log_lines[sid] = []
+
+    try:
+        results: list[dict] = []
+        errors: list[BaseException] = []
+
+        def runner(reason: str) -> None:
+            try:
+                results.append(rec._finalize_session(sid, reason))
+            except BaseException as e:  # pragma: no cover — must NOT happen
+                errors.append(e)
+
+        t1 = threading.Thread(target=runner, args=("user",))
+        t2 = threading.Thread(target=runner, args=("auto",))
+        t1.start(); t2.start()
+        t1.join(timeout=5); t2.join(timeout=5)
+
+        assert not errors, f"finalize race raised: {errors!r}"
+        assert len(results) == 2
+        # Both callers see identical payload — the second got the cached one.
+        assert results[0] == results[1]
+        assert results[0]["filename"] == os.path.basename(outfile)
+        assert results[0]["elapsed"] >= 2
+        # Session removed from `active` exactly once.
+        assert sid not in active
+    finally:
+        active.pop(sid, None)
+        log_lines.pop(sid, None)
+        try: os.unlink(outfile)
+        except OSError: pass

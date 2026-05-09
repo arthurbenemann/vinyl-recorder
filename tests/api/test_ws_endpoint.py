@@ -41,7 +41,7 @@ def test_ws_record_snapshot_reflects_active_session():
     active[sid] = {
         "proc":    None,
         "paused":  False,
-        "start_time": time.time() - 3,  # ~3 s elapsed
+        "start_time": time.monotonic() - 3,  # ~3 s elapsed
         "outfile": "/tmp/sample.flac",
         "meta":    {"artist": "A", "album": "B"},
         "duration": 0,
@@ -67,7 +67,7 @@ def test_ws_paused_session_freezes_elapsed():
     from state import active
 
     sid = "ws-paused-sentinel"
-    now = time.time()
+    now = time.monotonic()
     active[sid] = {
         "proc":          None,
         "paused":        True,

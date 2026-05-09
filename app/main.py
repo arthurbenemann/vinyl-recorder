@@ -127,11 +127,13 @@ async def get_config():
 async def status():
     sessions = []
     for sid, s in active.items():
-        # Frozen elapsed while paused — pause_started captures the freeze point.
+        # Frozen elapsed while paused — pause_started captures the freeze
+        # point. Use monotonic so a system-clock step (NTP correction at
+        # midnight, etc.) doesn't make the timer jump.
         if s.get("paused"):
-            elapsed = int(s.get("pause_started", time.time()) - s["start_time"])
+            elapsed = int(s.get("pause_started", time.monotonic()) - s["start_time"])
         else:
-            elapsed = int(time.time() - s["start_time"])
+            elapsed = int(time.monotonic() - s["start_time"])
         sessions.append({
             "id": sid,
             "elapsed": elapsed,
