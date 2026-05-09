@@ -533,3 +533,19 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
      be a no-op for users. */
   .sidebar-toggle { display: none; }
 }
+
+/* Honor prefers-reduced-motion: kill the rec-dot blink, the clip-pulse
+   bounce, the determinate-progress fill animation, and the indeterminate
+   stripe; soften all transitions to instant. Users who set this OS-level
+   setting do so for genuine reasons (vestibular triggers, focus issues),
+   and the app's animations are decorative — the underlying state is
+   already conveyed by the rec-button colour, the CLIP badge text, etc. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .dot.rec { animation: none; }
+  .vu-clip { animation: none; }
+}

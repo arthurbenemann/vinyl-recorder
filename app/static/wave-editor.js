@@ -387,8 +387,14 @@ function openWaveEditor(fname) {
   }
 
   drawAll();
+  // Remember the activator so close can restore focus to it. See the same
+  // pattern in main.js's openTag/closeTag.
+  _weFocusReturn = document.activeElement;
   document.getElementById('we-modal').hidden = false;
   document.addEventListener('keydown', weKeyDown);
+  // Move focus into the modal so screen readers announce its content.
+  const firstFocusable = document.querySelector('#we-modal button, #we-modal input, #we-modal select');
+  if (firstFocusable) firstFocusable.focus();
   // Repopulate the editor from the saved plan in album.json (if any). When
   // no plan exists yet, fall back to the album's saved Discogs / MB id so a
   // first-time open of an MB-tagged album auto-suggests a tracklist instead
@@ -430,6 +436,8 @@ async function weLoadExistingSplit(fname) {
   }
 }
 
+let _weFocusReturn = null;
+
 function closeWaveEditor() {
   stopPlayback();
   weAudio.release();
@@ -440,6 +448,10 @@ function closeWaveEditor() {
   // the user's last edit. Runs in the background; the modal is already
   // hidden so the user isn't waiting on the network.
   _flushPlanSave();
+  if (_weFocusReturn && typeof _weFocusReturn.focus === 'function') {
+    try { _weFocusReturn.focus(); } catch (e) { /* element gone */ }
+  }
+  _weFocusReturn = null;
 }
 
 // Re-render everything that depends on viewStart/viewEnd or cuts.
@@ -1469,7 +1481,7 @@ async function toggleTracks(fname) {
         <span class="ttitle">${htmlEscape(t.title || t.filename)}</span>
         <span class="tdur">${fmtDuration(t.duration_seconds)}</span>
         <span class="tsize">${t.size_mb} MB</span>
-        <button class="icon-btn preview-btn ${playClass}" data-fname="${htmlEscape(key)}" data-kind="track" title="Preview" onclick="togglePreviewTrack('${fname}', '${htmlEscape(t.filename)}')">${playGlyph}</button>
+        <button class="icon-btn preview-btn ${playClass}" data-album-id="${htmlEscape(fname)}" data-track="${htmlEscape(t.filename)}" data-kind="track" title="Preview" onclick="togglePreviewTrack(this.dataset.albumId, this.dataset.track)">${playGlyph}</button>
         <a class="icon-btn" href="/api/album/${encodeURIComponent(fname)}/track/${encodeURIComponent(t.filename)}" download title="Download">↓</a>
       </div>`;
     }).join('')}</td>`;

@@ -691,11 +691,55 @@ function updateSortHeaders() {
     const active = th.dataset.sort === sortBy;
     th.classList.toggle('sorted', active);
     th.querySelector('.sort-arrow').textContent = active ? arrow : '';
+    // Reflect sort state for screen readers. `aria-sort` on a th is the
+    // standard signal — "ascending" / "descending" on the active column,
+    // "none" on the others.
+    th.setAttribute('aria-sort',
+      active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none');
+  });
+}
+
+// Make `.sortable` headers keyboard-activatable. The HTML uses bare `<th>`
+// with `onclick`, which mouse users can hit but keyboard users can't reach
+// (TH isn't focusable by default). We add role=button + tabindex on first
+// load and forward Enter/Space to the same setSort handler the click uses.
+function _wireSortableHeaders() {
+  document.querySelectorAll('.lib-table th.sortable').forEach(th => {
+    if (th.dataset.kbWired === '1') return;
+    th.dataset.kbWired = '1';
+    th.setAttribute('role', 'button');
+    th.setAttribute('tabindex', '0');
+    th.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setSort(th.dataset.sort);
+      }
+    });
   });
 }
 
 function htmlEscape(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Build an action-cell button. Filenames flow through `data-fname` and the
+// onclick reads `this.dataset.fname` instead of inlining the value as a JS
+// string literal. The previous `onclick="fn('${htmlEscape(fn)}')"` pattern
+// looked safe but isn't: the browser HTML-decodes the attribute BEFORE the
+// JS sees it, so `&#39;` becomes a literal `'` and a filename like
+// `'); alert(1);//` could break out of the JS string. Going through
+// `data-` attributes (HTML escaping is enough; never gets re-parsed as JS)
+// closes that whole class of bug.
+function _actionBtn(handler, fname, opts = {}) {
+  const {label = '', cls = 'icon-btn', danger = false, kind = ''} = opts;
+  const cl = danger ? `${cls} danger` : cls;
+  const k = kind ? ` data-kind="${htmlEscape(kind)}"` : '';
+  const titleAttr = label ? ` title="${htmlEscape(label)}"` : '';
+  return `<button class="${cl}" data-fname="${htmlEscape(fname)}"${k}${titleAttr} onclick="${handler}(this.dataset.fname${kind ? ', this.dataset.kind' : ''})">${opts.glyph || ''}</button>`;
+}
+
+function _downloadLink(href, label = 'Download') {
+  return `<a class="icon-btn" href="${href}" download title="${htmlEscape(label)}">↓</a>`;
 }
 
 // Build a keydown handler that closes a modal on Escape. If focus is in a
@@ -794,6 +838,19 @@ async function refreshLib() {
   } catch(e) { console.error(e); }
 }
 
+// Cache the last HTML written into each tbody so we can skip the
+// `innerHTML = ...` assignment when nothing changed. Rebuilding a table on
+// every 15 s poll otherwise blows away scroll position, focus, and the
+// inline-rename input.
+const _lastTbodyHtml = new Map();
+function _setTbodyIfChanged(tbody, html) {
+  const id = tbody.id;
+  if (_lastTbodyHtml.get(id) === html) return false;
+  tbody.innerHTML = html;
+  _lastTbodyHtml.set(id, html);
+  return true;
+}
+
 function refreshLibRender() {
   applyLibFilterControls();
   const tbody = document.getElementById('lib-tbody');
@@ -816,11 +873,11 @@ function refreshLibRender() {
     const msg = total === 0
       ? 'No recordings yet. Drop the needle!'
       : 'No matches for current filter.';
-    tbody.innerHTML = `<tr><td colspan="9" class="empty-lib">${msg}</td></tr>`;
+    _setTbodyIfChanged(tbody, `<tr><td colspan="9" class="empty-lib">${msg}</td></tr>`);
     updateBulkBar();
     return;
   }
-  tbody.innerHTML = files.map(f => {
+  const _libRowsHtml = files.map(f => {
       const fn = htmlEscape(f.filename);
       const isSel = selected.has(f.filename) ? 'checked' : '';
       const playing = previewIs(f.filename, 'lib') ? 'playing' : '';
@@ -831,6 +888,10 @@ function refreshLibRender() {
       // unconditional. The handler lives on the whole <td> so the entire
       // cell — including padding and whitespace to the right of short
       // titles — is a click target.
+      const previewBtn = `<button class="icon-btn preview-btn ${playing}" data-fname="${fn}" data-kind="lib" title="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>`;
+      const tagBtn = _actionBtn('openTag', f.filename, {label: 'Tag album', glyph: '✎'});
+      const dlLink = _downloadLink(`/api/download/${encodeURIComponent(f.filename)}`, 'Download');
+      const delBtn = _actionBtn('deleteFile', f.filename, {label: 'Delete', glyph: '✕', danger: true});
       return `
       <tr class="row-untagged">
         <td class="col-check"><input type="checkbox" class="row-check" data-fname="${fn}" ${isSel}
@@ -847,14 +908,10 @@ function refreshLibRender() {
         <td style="color:var(--muted)">${fmtDuration(f.duration_seconds)}</td>
         <td style="color:var(--muted)">${f.size_mb} MB</td>
         <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="bit depth / sample rate (kHz)">${fmtSourceFormat(f)}</td>
-        <td style="white-space:nowrap;text-align:right">
-          <button class="icon-btn preview-btn ${playing}" data-fname="${fn}" data-kind="lib" title="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>
-          <button class="icon-btn" title="Tag album" onclick="openTag('${fn}')">✎</button>
-          <a class="icon-btn" href="/api/download/${encodeURIComponent(f.filename)}" download title="Download">↓</a>
-          <button class="icon-btn danger" title="Delete" onclick="deleteFile('${fn}')">✕</button>
-        </td>
+        <td style="white-space:nowrap;text-align:right">${previewBtn}${tagBtn}${dlLink}${delBtn}</td>
       </tr>`;
   }).join('');
+  _setTbodyIfChanged(tbody, _libRowsHtml);
   updateBulkBar();
 }
 
@@ -1037,18 +1094,25 @@ async function refreshAlbums() {
 function _albumRowHtml(a, opts) {
   // The "fn" key is the album_id (a slug like 7f3a8c91); HTML escaping is
   // unnecessary (the slug regex is `[a-z0-9_-]+`) but cheap and safe in
-  // case a hand-named drop-in dir made it here.
+  // case a hand-named drop-in dir made it here. All action buttons go
+  // through `data-fname` rather than inlining the value as a JS string
+  // literal — see the comment on `_actionBtn` for the XSS rationale.
   const fn = htmlEscape(a.album_id);
   const isSel = opts.selected.has(a.album_id) ? 'checked' : '';
   const countCell = a.split
-    ? (a.track_count ? `<a class="track-count-link" onclick="toggleTracks('${fn}')">${a.track_count} tracks</a>` : '—')
+    ? (a.track_count
+        ? `<a class="track-count-link" data-fname="${fn}" onclick="toggleTracks(this.dataset.fname)">${a.track_count} tracks</a>`
+        : '—')
     : `${a.side_count || '—'}`;
   const splitTitle = a.split ? 'Re-edit splits' : 'Split into tracks';
-  // Demote button is offered only on un-split rows by default; for split
-  // albums the dialog warns that music/ stays put.
-  const demoteBtn = a.split
-    ? `<button class="icon-btn" title="Demote to Raw (music/ files preserved)" onclick="demoteAlbum('${fn}', true)">↩</button>`
-    : `<button class="icon-btn" title="Demote to Raw" onclick="demoteAlbum('${fn}', false)">↩</button>`;
+  // Demote button is offered on every album; for split albums the dialog
+  // warns that music/ stays put.
+  const demoteHandler = a.split ? 'demoteAlbumKeepMusic' : 'demoteAlbumDrop';
+  const demoteLabel = a.split ? 'Demote to Raw (music/ files preserved)' : 'Demote to Raw';
+  const tagBtn = _actionBtn('openTagAlbum', a.album_id, {label: 'Edit tags', glyph: '✎'});
+  const splitBtn = _actionBtn('openWaveEditor', a.album_id, {label: splitTitle, glyph: '⌇'});
+  const demBtn = _actionBtn(demoteHandler, a.album_id, {label: demoteLabel, glyph: '↩'});
+  const delBtn = _actionBtn('deleteAlbum', a.album_id, {label: 'Delete album', glyph: '✕', danger: true});
   return `
   <tr data-album-id="${fn}">
     <td class="col-check"><input type="checkbox" class="${opts.checkClass}" data-fname="${fn}" ${isSel}
@@ -1066,14 +1130,16 @@ function _albumRowHtml(a, opts) {
     <td style="color:var(--muted)">${a.size_mb} MB</td>
     <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="bit depth / sample rate (kHz)">${fmtSourceFormat(a)}</td>
     <td style="color:var(--muted)">${countCell}</td>
-    <td style="white-space:nowrap;text-align:right">
-      <button class="icon-btn" title="Edit tags" onclick="openTagAlbum('${fn}')">✎</button>
-      <button class="icon-btn" title="${splitTitle}" onclick="openWaveEditor('${fn}')">⌇</button>
-      ${demoteBtn}
-      <button class="icon-btn danger" title="Delete album" onclick="deleteAlbum('${fn}')">✕</button>
-    </td>
+    <td style="white-space:nowrap;text-align:right">${tagBtn}${splitBtn}${demBtn}${delBtn}</td>
   </tr>`;
 }
+
+// `demoteAlbum(album_id, musicPreserved)` is the underlying call; the row
+// renderer can't invoke it via `data-fname` alone because it carries a
+// second arg. Wrap it as two single-arg helpers so the data-attribute
+// pattern still works.
+function demoteAlbumKeepMusic(album_id) { return demoteAlbum(album_id, true); }
+function demoteAlbumDrop(album_id)      { return demoteAlbum(album_id, false); }
 
 function _renderAlbumSection(opts) {
   // opts: { all, countId, tbodyId, label, emptyMsg, checkClass,
@@ -1093,11 +1159,11 @@ function _renderAlbumSection(opts) {
   if (!filtered.length) {
     const colspan = tbody.parentElement.querySelector('thead tr').children.length;
     const msg = total === 0 ? opts.emptyMsg : 'No matches for current filter.';
-    tbody.innerHTML = `<tr><td colspan="${colspan}" class="empty-lib">${msg}</td></tr>`;
+    _setTbodyIfChanged(tbody, `<tr><td colspan="${colspan}" class="empty-lib">${msg}</td></tr>`);
     opts.updateBulkBar();
     return;
   }
-  tbody.innerHTML = filtered.map(a => _albumRowHtml(a, opts)).join('');
+  _setTbodyIfChanged(tbody, filtered.map(a => _albumRowHtml(a, opts)).join(''));
   opts.updateBulkBar();
 }
 
@@ -1399,9 +1465,19 @@ function openTag(fname) {
     '<div class="empty-results">Hit search to look up this album on MusicBrainz.</div>';
   document.getElementById('t-search-status').textContent = '';
   document.getElementById('tag-modal').dataset.fname = fname;
+  // Remember whatever was focused so closeTag can restore focus to it —
+  // keyboard / screen-reader users should land back on the button that
+  // opened the modal, not at the top of the document.
+  _tagFocusReturn = document.activeElement;
   document.getElementById('tag-modal').hidden = false;
   document.addEventListener('keydown', tagEscHandler);
+  // Move focus into the modal so screen readers announce its content and
+  // the next Tab keeps the user inside it.
+  const firstInput = document.querySelector('#tag-modal input, #tag-modal button, #tag-modal select');
+  if (firstInput) firstInput.focus();
 }
+
+let _tagFocusReturn = null;
 
 function closeTag() {
   document.getElementById('tag-modal').hidden = true;
@@ -1409,6 +1485,10 @@ function closeTag() {
   document.getElementById('combine-sides-section').hidden = true;
   tagPanelTarget = null;
   combineOrder = [];
+  if (_tagFocusReturn && typeof _tagFocusReturn.focus === 'function') {
+    try { _tagFocusReturn.focus(); } catch (e) { /* element gone */ }
+  }
+  _tagFocusReturn = null;
 }
 const tagEscHandler = makeModalEscHandler(closeTag);
 
@@ -1717,11 +1797,24 @@ async function applyConfig() {
 // recording lifecycle, and shared log lines. The hello frame replays the
 // current state so a fresh / refreshed tab catches up immediately.
 let ws = null, wsReconnectMs = 1000;
+let wsReconnectTimer = null;  // single pending reconnect — avoids racing pairs
 
 function wsConnect() {
+  // Cancel any pending reconnect — `onerror` calls `ws.close()` which fires
+  // `onclose` which schedules a reconnect; without this, two reconnects can
+  // race and the loser leaks a half-open socket.
+  if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
   const proto = (location.protocol === 'https:') ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/api/ws`);
-  ws.onopen = () => { wsReconnectMs = 1000; };
+  ws.onopen = () => {
+    wsReconnectMs = 1000;
+    // Library / albums weren't replayed in the `hello` snapshot, so a long
+    // disconnect leaves the UI showing stale rows until the 15 s poll catches
+    // up. Refresh on reconnect so the user sees current state immediately.
+    refreshLib().catch(() => {});
+    refreshAlbums().catch(() => {});
+    refreshDiskFree().catch(() => {});
+  };
   ws.onmessage = (ev) => {
     let m;
     try { m = JSON.parse(ev.data); } catch(e) { return; }
@@ -1731,10 +1824,17 @@ function wsConnect() {
     // Decay meters and gray out status while disconnected.
     upstreamConnected = false;
     peak.L = peak.R = 0; lvl.L = lvl.R = 0;
-    setTimeout(wsConnect, wsReconnectMs);
+    if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = setTimeout(() => { wsReconnectTimer = null; wsConnect(); }, wsReconnectMs);
     wsReconnectMs = Math.min(wsReconnectMs * 2, 8000);
   };
-  ws.onerror = () => { try { ws.close(); } catch(e) {} };
+  ws.onerror = () => {
+    // `close()` will fire `onclose` which handles the reconnect; ignore the
+    // raw error event to keep a single scheduling source.
+    if (ws && ws.readyState !== WebSocket.CLOSED) {
+      try { ws.close(); } catch(e) {}
+    }
+  };
 }
 
 function handleWsEvent(m) {
@@ -1764,8 +1864,11 @@ function handleWsEvent(m) {
         const h = m.upstream.health;
         applyHealthState(h && Object.keys(h).length ? h : null);
       }
-      // Recover recording state on refresh / new tab.
-      if (m.record && m.record.recording && m.record.sessions[0]) {
+      // Recover recording state on refresh / new tab. Optional-chain the
+      // sessions array — a server payload that omits it (older shape, future
+      // protocol shrinkage) shouldn't throw "cannot read properties of
+      // undefined" and break the whole hello handler.
+      if (m.record && m.record.recording && m.record.sessions?.[0]) {
         const s = m.record.sessions[0];
         applyRecordState({
           active: true, paused: !!s.paused, sid: s.id,
@@ -1871,9 +1974,34 @@ function _wireSectionCollapse(id) {
 applyConfig();
 ensureAudioGraph();
 applyMuteState();
+_wireSortableHeaders();
 wsConnect();
 refreshLib();
 refreshAlbums();
 refreshDiskFree();
-setInterval(() => { refreshLib(); refreshAlbums(); }, 15000);
+
+// Polling pauses while the tab is hidden — a backgrounded laptop or
+// tabbed-out user shouldn't keep firing fetches. `visibilitychange` fires
+// when the tab comes back, at which point we refresh once and resume the
+// interval. Avoids the buildup of pending requests that browsers used to
+// queue while the tab was throttled.
+let _libPollTimer = null;
+function _startLibPoll() {
+  if (_libPollTimer) return;
+  _libPollTimer = setInterval(() => { refreshLib(); refreshAlbums(); }, 15000);
+}
+function _stopLibPoll() {
+  if (_libPollTimer) { clearInterval(_libPollTimer); _libPollTimer = null; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    _stopLibPoll();
+  } else {
+    refreshLib().catch(() => {});
+    refreshAlbums().catch(() => {});
+    refreshDiskFree().catch(() => {});
+    _startLibPoll();
+  }
+});
+_startLibPoll();
 setInterval(refreshDiskFree, 30000);
