@@ -335,6 +335,7 @@ function openWaveEditor(fname) {
     measured:    null,
     approxPeakDb: null,
     peaks:       null,
+    sides:       [],   // populated below from the album manifest
     // Flips true once weLoadExistingSplit resolves. _savePlanNow gates on
     // this so the empty default state never races ahead of the load.
     loaded:      false,
@@ -376,6 +377,13 @@ function openWaveEditor(fname) {
   const manifestSides = Array.isArray(a.sides) && a.sides.length
     ? a.sides
     : [{ filename: '', duration_seconds: total }];
+  // Snapshot for the sides-reorder remap math. Each side row carries
+  // {filename, duration_seconds}; we compute album-time offsets on the
+  // fly when we need them.
+  we.sides = manifestSides.map(s => ({
+    filename:         s.filename,
+    duration_seconds: Number(s.duration_seconds) || 0,
+  }));
   weAudio.onTimeUpdate = onAudioTimeUpdate;
   weAudio.onEnded      = () => stopPlayback();
   weAudio.init(fname, manifestSides);
@@ -386,6 +394,7 @@ function openWaveEditor(fname) {
     document.getElementById('we-mini-end').textContent = fmtMMSS(we.total);
   }
 
+  weRenderSides();
   drawAll();
   // Remember the activator so close can restore focus to it. See the same
   // pattern in main.js's openTag/closeTag.
@@ -538,6 +547,278 @@ function _renderApproxStats() {
   text.textContent =
     `peak ~${we.approxPeakDb.toFixed(1)} dB · click measure for noise floor`;
 }
+
+// ── Sides reorder ─────────────────────────────────────────────────────────
+// Most albums are 2-side; a handful go to 4-6 (double LP, etc.). Render a
+// compact pill list above the minimap so reordering is one click away
+// without crowding the canvas. Single-side albums get an empty hidden
+// container — no point showing "drag to reorder" with one row.
+function weRenderSides() {
+  const host = document.getElementById('we-sides');
+  if (!host) return;
+  const sides = we.sides || [];
+  if (sides.length < 2) { host.hidden = true; host.innerHTML = ''; return; }
+  host.hidden = false;
+  const rows = sides.map((s, i) => {
+    const isFirst = i === 0, isLast = i === sides.length - 1;
+    const dur = fmtMMSS(s.duration_seconds || 0);
+    return `
+      <div class="we-side-row" draggable="true" data-i="${i}"
+           ondragstart="weSidesDragStart(event, ${i})"
+           ondragover="weSidesDragOver(event, ${i})"
+           ondragleave="weSidesDragLeave(event)"
+           ondrop="weSidesDrop(event, ${i})"
+           ondragend="weSidesDragEnd(event)">
+        <span class="drag-handle" title="Drag to reorder">≡</span>
+        <span class="num">${i + 1}.</span>
+        <span class="name" title="${htmlEscape(s.filename)}">${htmlEscape(s.filename)}</span>
+        <span class="dur">${dur}</span>
+        <span class="arrows">
+          <button class="arrow-btn" onclick="weMoveSide(${i}, -1)" ${isFirst ? 'disabled' : ''} title="Move up">▲</button>
+          <button class="arrow-btn" onclick="weMoveSide(${i},  1)" ${isLast  ? 'disabled' : ''} title="Move down">▼</button>
+        </span>
+      </div>`;
+  }).join('');
+  host.innerHTML = `<span class="we-sides-label">Sides</span>` + rows;
+}
+
+let _weSidesDragFrom = null;
+function weSidesDragStart(e, i) {
+  _weSidesDragFrom = i;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', String(i));
+  e.currentTarget.classList.add('dragging');
+}
+function weSidesDragOver(e, i) {
+  if (_weSidesDragFrom == null || _weSidesDragFrom === i) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  e.currentTarget.classList.add('drag-over');
+}
+function weSidesDragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
+function weSidesDrop(e, j) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over');
+  const i = _weSidesDragFrom;
+  _weSidesDragFrom = null;
+  if (i == null || i === j) return;
+  // Build the permutation: move sides[i] into the j slot, shifting others.
+  const order = we.sides.map((_, idx) => idx);
+  const moved = order.splice(i, 1)[0];
+  order.splice(j, 0, moved);
+  weReorderSides(order);
+}
+function weSidesDragEnd(e) {
+  _weSidesDragFrom = null;
+  e.currentTarget.classList.remove('dragging');
+  document.querySelectorAll('.we-side-row.drag-over').forEach(r =>
+    r.classList.remove('drag-over'));
+}
+
+// Arrow-button swap: shorthand for "swap with my immediate neighbor".
+function weMoveSide(i, delta) {
+  const j = i + delta;
+  if (j < 0 || j >= we.sides.length) return;
+  const order = we.sides.map((_, idx) => idx);
+  [order[i], order[j]] = [order[j], order[i]];
+  weReorderSides(order);
+}
+
+// Apply a permutation `newOrder[k] = oldIndex` to the editor state:
+//   1. Remap album-time cuts so each one keeps its position WITHIN its
+//      original side (track A's silences stay attached to track A).
+//   2. POST /sides/reorder so the manifest is durable.
+//   3. Refetch peaks (per-side dats are already cached server-side; the
+//      `loadAlbumPeaks` call goes by index so it picks up the new order).
+//   4. Re-init weAudio so playback follows the new order, redraw, and
+//      flush the plan to album.json.
+async function weReorderSides(newOrder) {
+  const albumId = we.albumId;
+  if (!albumId) return;
+  // Identity permutation = no-op. Skip the round-trip.
+  const isIdentity = newOrder.every((v, i) => v === i);
+  if (isIdentity) return;
+  const oldSides = we.sides.slice();
+  const newSides = newOrder.map(idx => oldSides[idx]);
+  const remapped = _weRemapForSides(oldSides, newSides, {
+    cuts: we.cuts, titles: we.titles, skipped: we.skipped, total: we.total,
+  });
+  // Optimistic: apply locally first so the UI feels instant; on POST
+  // failure we revert. The server is the source of truth for the manifest.
+  we.sides   = newSides;
+  we.cuts    = remapped.cuts;
+  we.titles  = remapped.titles;
+  we.skipped = remapped.skipped;
+  we.dirty   = true;
+  // Stop any in-flight playback so it doesn't keep playing the old
+  // virtual-album-time position into the new layout's audio.
+  stopPlayback();
+  // Update the global album cache so a re-open uses the new order too.
+  const cached = albumsByName[albumId];
+  if (cached) cached.sides = newSides.map(s => ({ ...s }));
+  // Repaint immediately so the user sees the new order.
+  weRenderSides();
+  invalidateMeasure();
+  drawAll();
+  try {
+    const r = await fetch(`/api/album/${encodeURIComponent(albumId)}/sides/reorder`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ sides: newSides.map(s => s.filename) }),
+    });
+    if (!r.ok) throw new Error(await parseError(r));
+  } catch (e) {
+    // Revert local state.
+    we.sides   = oldSides;
+    we.cuts    = remapped.oldCuts;
+    we.titles  = remapped.oldTitles;
+    we.skipped = remapped.oldSkipped;
+    if (cached) cached.sides = oldSides.map(s => ({ ...s }));
+    weRenderSides();
+    drawAll();
+    toast('✗ reorder failed: ' + e.message, 'err');
+    return;
+  }
+  // Refetch peaks for the new order. Per-side .peaks.dat is keyed by
+  // filename stem on the server, so the data lands fast (cache hit) and
+  // loadAlbumPeaks just re-stitches the album-time view.
+  try {
+    const peaks = await loadAlbumPeaks(albumId, newSides);
+    if (we.albumId === albumId) {
+      we.peaks = peaks;
+      we.approxPeakDb = approxPeakDbFromPeaks(peaks);
+      _renderApproxStats();
+      drawAll();
+    }
+  } catch (e) { /* leave the existing render in place */ }
+  // Re-init audio against the new side order so playback boundaries
+  // match the new manifest.
+  weAudio.init(albumId, newSides);
+  _persistDraft();
+}
+
+// Pure remap helper. Side-effect-free so it's unit-testable; the
+// editor's mutable state is passed in via `plan`.
+//
+// Algorithm:
+//   1. Augment the cut list with every interior side boundary so no
+//      region crosses a boundary in the OLD layout. Each augmented
+//      sub-region is wholly within one side and can be moved with it.
+//   2. For each augmented region, remap [start, end] via that side's
+//      old → new offset shift. Title + skip flag come from the ORIGINAL
+//      region the augmented piece was carved out of.
+//   3. Sort by new start. Coalesce adjacent regions that share
+//      title + skip (so a cut exactly on a side boundary doesn't leak
+//      a no-op subdivision through to the user).
+//
+// Side effect: a track whose audio physically straddled a side boundary
+// in the OLD layout (the typical "side flip" track) ends up as TWO
+// sibling regions sharing the same title in the new layout. That's
+// honest about the audio actually being split — the user can rename
+// one half, mark both skip, or merge by deleting the new cut.
+function _weRemapForSides(oldSides, newSides, plan) {
+  function offsetsFor(sides) {
+    const offs = []; let off = 0;
+    for (const s of sides) {
+      offs.push(off);
+      off += Number(s.duration_seconds) || 0;
+    }
+    return { offs, total: off };
+  }
+  const oldO = offsetsFor(oldSides);
+  const newO = offsetsFor(newSides);
+  const newOffByFn = new Map();
+  newSides.forEach((s, i) => newOffByFn.set(s.filename, newO.offs[i]));
+  const total = plan.total || oldO.total;
+
+  function sideOf(t) {
+    // Half-open intervals [offs[i], offs[i] + dur). Final side absorbs t = total.
+    for (let i = 0; i < oldSides.length; i++) {
+      const start = oldO.offs[i];
+      const end   = start + (Number(oldSides[i].duration_seconds) || 0);
+      if (t < end) return i;
+    }
+    return Math.max(0, oldSides.length - 1);
+  }
+  function remap(t) {
+    const i = sideOf(t);
+    const fn = oldSides[i].filename;
+    const newOff = newOffByFn.get(fn);
+    if (newOff == null) return Math.min(newO.total, t);
+    return Math.max(0, Math.min(newO.total, newOff + (t - oldO.offs[i])));
+  }
+
+  const oldBoundaries = [0, ...plan.cuts, total];
+  function originalRegion(t) {
+    // Half-open in the same direction as sideOf so a region [a, b] is
+    // matched by `t = (a + b) / 2`.
+    for (let i = 0; i < oldBoundaries.length - 1; i++) {
+      if (t >= oldBoundaries[i] && t < oldBoundaries[i + 1]) return i;
+    }
+    return Math.max(0, oldBoundaries.length - 2);
+  }
+
+  // Step 1 — augmented cut list. Add interior side boundaries that
+  // aren't already a cut so every augmented region sits on one side.
+  const interior = [...plan.cuts, ...oldO.offs.slice(1)]
+    .filter(t => t > 0.001 && t < total - 0.001)
+    .sort((a, b) => a - b);
+  const augCuts = [];
+  for (const t of interior) {
+    if (!augCuts.length || Math.abs(augCuts[augCuts.length - 1] - t) > 0.001) {
+      augCuts.push(t);
+    }
+  }
+  const augBoundaries = [0, ...augCuts, total];
+
+  // Step 2 — remap each augmented region.
+  const regions = [];
+  for (let i = 0; i < augBoundaries.length - 1; i++) {
+    const a = augBoundaries[i], b = augBoundaries[i + 1];
+    if (b <= a) continue;
+    const origIdx = originalRegion((a + b) / 2);
+    regions.push({
+      newStart: remap(a),
+      newEnd:   remap(b),
+      title:    plan.titles[origIdx] || `Track ${origIdx + 1}`,
+      skip:     !!plan.skipped[origIdx],
+    });
+  }
+  regions.sort((a, b) => a.newStart - b.newStart);
+
+  // Step 3 — coalesce adjacent regions whose origin (title + skip) is
+  // identical and that meet at the same point in the new layout. This
+  // collapses synthetic subdivisions introduced by step 1 when a cut
+  // sat exactly on a side boundary in the old layout.
+  const merged = [];
+  for (const r of regions) {
+    const last = merged[merged.length - 1];
+    if (last && last.title === r.title && last.skip === r.skip
+        && Math.abs(last.newEnd - r.newStart) < 0.001) {
+      last.newEnd = r.newEnd;
+    } else {
+      merged.push({ newStart: r.newStart, newEnd: r.newEnd,
+                    title: r.title, skip: r.skip });
+    }
+  }
+
+  const cuts = [];
+  for (let i = 0; i < merged.length - 1; i++) {
+    const c = merged[i].newEnd;
+    if (c > 0.001 && c < newO.total - 0.001) cuts.push(c);
+  }
+  return {
+    willResetCuts: false,
+    cuts,
+    titles:  merged.map(r => r.title),
+    skipped: merged.map(r => r.skip),
+    oldCuts:    plan.cuts.slice(),
+    oldTitles:  plan.titles.slice(),
+    oldSkipped: plan.skipped.slice(),
+  };
+}
+// Expose for unit tests. The browser globally has `window`; the node
+// sandbox in tests/unit/wave_editor_remap.test.js stubs it the same way.
+if (typeof window !== 'undefined') window._weRemapForSides = _weRemapForSides;
 
 // ── Minimap viewport rect + cut markers ───────────────────────────────────
 function renderMinimapOverlay() {

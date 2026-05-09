@@ -372,7 +372,23 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .we-toolbar .readout { font-family: var(--mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 80px; }
 .we-toolbar .readout strong { color: var(--text); font-weight: 500; }
 
-/* Wave editor — minimap + main waveform */
+/* Wave editor — sides reorder + minimap + main waveform */
+.we-sides { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; align-items: center; font-size: 11px; color: var(--muted); }
+.we-sides .we-sides-label { letter-spacing: 0.05em; text-transform: uppercase; font-size: 10px; padding-right: 4px; }
+.we-sides .we-side-row { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; transition: opacity 0.12s, border-color 0.12s; }
+.we-sides .we-side-row.dragging { opacity: 0.4; }
+.we-sides .we-side-row.drag-over { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; }
+.we-sides .drag-handle { color: var(--muted); cursor: grab; user-select: none; font-size: 13px; line-height: 1; }
+.we-sides .drag-handle:active { cursor: grabbing; }
+.we-sides .we-side-row.dragging .drag-handle { cursor: grabbing; }
+.we-sides .num { color: var(--muted); font-variant-numeric: tabular-nums; }
+.we-sides .name { color: var(--text); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.we-sides .dur { color: var(--muted); font-variant-numeric: tabular-nums; }
+.we-sides .arrows { display: inline-flex; gap: 2px; }
+.we-sides .arrow-btn { width: 18px; height: 18px; padding: 0; border-radius: 3px; background: var(--surface2); border: 0.5px solid var(--border2); color: var(--muted); font-size: 9px; cursor: pointer; line-height: 1; }
+.we-sides .arrow-btn:hover:not([disabled]) { background: var(--bg); color: var(--text); }
+.we-sides .arrow-btn[disabled] { opacity: 0.3; cursor: default; }
+
 .we-minimap { position: relative; background: #0a0e16; border: 0.5px solid var(--border); border-radius: 6px; overflow: hidden; height: 40px; user-select: none; cursor: pointer; }
 .we-minimap-img { width: 100%; height: 100%; display: block; pointer-events: none; opacity: 0.7; }
 .we-minimap-vp { position: absolute; top: 0; bottom: 0; background: rgba(55,138,221,0.18); border-left: 1px solid var(--blue); border-right: 1px solid var(--blue); cursor: grab; }
