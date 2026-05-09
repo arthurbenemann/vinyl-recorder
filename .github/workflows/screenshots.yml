@@ -94,11 +94,12 @@ jobs:
             playwright-${{ runner.os }}-
 
       - name: Install Playwright + Python deps
-        # pytest-playwright pulls in playwright. The screenshot script
-        # itself only needs `playwright`, but installing the same shape
-        # the e2e job does keeps the cache key meaningful.
+        # `playwright` drives the screenshot capture; `Pillow` powers the
+        # perceptual-diff gate (tools/compare_screenshots.py). Adding both
+        # to the install line keeps the workflow self-contained — neither
+        # is a runtime app dep.
         run: |
-          pip install playwright
+          pip install playwright Pillow
           playwright install --with-deps chromium
 
       - name: Build stack with layer cache
@@ -170,20 +171,17 @@ jobs:
             --url http://127.0.0.1:8080 \
             --output-dir ./images
 
-      - name: Detect changes
+      - name: Detect visible changes
         id: diff
-        # `git diff --quiet` exits 0 when there are no changes and 1 when
-        # there are. Capture that into a step output so subsequent steps
-        # can branch without re-running the diff.
+        # Perceptual diff against HEAD instead of byte-equality. PNG
+        # encoder timing + chromium sub-pixel rendering produce small
+        # byte differences even when the visible UI is identical, which
+        # would otherwise spam the PR with no-op refresh commits. The
+        # script writes `changed=true|false` to stdout per the threshold;
+        # piping that into $GITHUB_OUTPUT carries the verdict to the
+        # commit-back step's `if:` condition.
         run: |
-          if git diff --quiet -- images/; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "no image changes — nothing to commit"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "images/ changed:"
-            git diff --stat -- images/
-          fi
+          python tools/compare_screenshots.py --directory images >> "$GITHUB_OUTPUT"
 
       - name: Upload screenshots artifact
         # Always upload — even when the commit-back path runs, the

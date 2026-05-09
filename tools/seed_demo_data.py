@@ -210,6 +210,114 @@ def _make_sine_flac(
     ])
 
 
+# Per-track peak amplitudes cycled through the album's tracklist so the
+# wave editor's rendered envelope shows believable loudness variation
+# instead of a uniform bar. Skip tracks (lead-in / run-out) get near-
+# silence; the inter-track DIP_* values produce ~180 ms gaps that read as
+# track boundaries in the waveform.
+_LP_TRACK_AMPS  = [0.55, 0.40, 0.65, 0.50, 0.70, 0.55, 0.45, 0.60, 0.65]
+_LP_DIP_DUR     = 0.18
+_LP_DIP_AMP     = 0.02
+_LP_SKIP_AMP    = 0.04
+
+
+def _make_album_envelope_sides(
+    side_paths: list[Path], side_durations: list[float],
+    plan: dict, sample_rate: int = 96000,
+) -> None:
+    """Render an LP-shaped audio timeline matching `plan`, split into
+    multiple sides whose concatenation reproduces the full album.
+
+    Each plan track gets a pink-noise segment at a track-specific peak
+    amplitude (cycled through `_LP_TRACK_AMPS`); skip tracks render as
+    quiet groove noise. Brief low-amplitude dips between tracks stand in
+    for the inter-track silences a real LP rip would have, so the wave
+    editor's silence overlay + track markers line up with the audio
+    instead of floating over a flat bar.
+
+    All segments are concatenated via a single ffmpeg `filter_complex`,
+    then split into the requested side durations and emitted as 24-bit
+    96 kHz stereo FLACs (matches the production Pi capture format).
+    """
+    if len(side_paths) != len(side_durations):
+        raise ValueError("side_paths and side_durations must be parallel")
+    total = sum(side_durations)
+
+    # Build the (duration, amplitude) timeline from the plan. Each non-final
+    # track's body is shortened by `_LP_DIP_DUR` and a quiet dip is appended
+    # so the boundary is visible in the waveform without changing the
+    # overall track-end times.
+    segs: list[tuple[float, float]] = []
+    accounted = 0.0
+    loud_i = 0
+    plan_tracks = plan["tracks"]
+    last = len(plan_tracks) - 1
+    for i, track in enumerate(plan_tracks):
+        dur = float(track["duration_seconds"])
+        amp = _LP_SKIP_AMP if track.get("skip") else _LP_TRACK_AMPS[loud_i % len(_LP_TRACK_AMPS)]
+        if not track.get("skip"):
+            loud_i += 1
+        if i < last and dur > _LP_DIP_DUR + 0.05:
+            segs.append((dur - _LP_DIP_DUR, amp))
+            segs.append((_LP_DIP_DUR, _LP_DIP_AMP))
+        else:
+            segs.append((dur, amp))
+        accounted += dur
+    # Trailing run-out groove fills any leftover time at the end.
+    if accounted < total - 0.01:
+        segs.append((total - accounted, _LP_SKIP_AMP))
+
+    # ── one ffmpeg call: anoisesrc per seg → stereo → concat → asplit/atrim
+    # → encode each output side. Single-process keeps the seed quick (~3 s
+    # for both Pink Floyd sides on a laptop) and avoids tempfile plumbing.
+    inputs: list[str] = []
+    filters: list[str] = []
+    for i, (dur, amp) in enumerate(segs):
+        # Deterministic per-segment seed so re-running the seed produces
+        # byte-identical FLACs (fed into the perceptual-diff gate later).
+        inputs.extend([
+            "-f", "lavfi",
+            "-i", f"anoisesrc=d={dur:.4f}:c=pink:r={sample_rate}:a={amp:.4f}:seed={1000 + i}",
+        ])
+        # anoisesrc is mono — promote to dual-mono stereo. LP rips have
+        # nearly identical L/R for most material; this reads as believable
+        # in the editor without the cost of two independent noise streams.
+        filters.append(f"[{i}:a]aformat=channel_layouts=stereo[s{i}]")
+
+    # Concat all segments end-to-end into [full]
+    cat_inputs = "".join(f"[s{i}]" for i in range(len(segs)))
+    filters.append(f"{cat_inputs}concat=n={len(segs)}:v=0:a=1[full]")
+
+    # asplit produces N parallel copies of [full]; each copy gets atrim'd to
+    # one side's window. asetpts re-zeros the timestamps so each output
+    # starts at 0 (otherwise the second side would have a leading gap).
+    n_sides = len(side_paths)
+    filters.append(f"[full]asplit={n_sides}{''.join(f'[f{i}]' for i in range(n_sides))}")
+    cum = 0.0
+    output_args: list[str] = []
+    for i, (p, dur) in enumerate(zip(side_paths, side_durations)):
+        end = cum + dur
+        filters.append(
+            f"[f{i}]atrim=start={cum:.4f}:end={end:.4f},asetpts=PTS-STARTPTS[out{i}]"
+        )
+        p.parent.mkdir(parents=True, exist_ok=True)
+        output_args.extend([
+            "-map", f"[out{i}]",
+            "-c:a", "flac",
+            "-sample_fmt", "s32",
+            "-ar", str(sample_rate),
+            "-ac", "2",
+            str(p),
+        ])
+        cum = end
+
+    _ffmpeg([
+        *inputs,
+        "-filter_complex", ";".join(filters),
+        *output_args,
+    ])
+
+
 def _set_mtime(p: Path, minutes_ago: float) -> None:
     """Backdate a file's mtime so the UI's "Recorded" column shows a
     realistic spread."""
@@ -294,14 +402,19 @@ def seed(output_dir: Path, *, verbose: bool = True) -> None:
     for spec in IN_PROGRESS_ALBUMS:
         d = inp_dir / spec["slug"]
         d.mkdir(parents=True, exist_ok=True)
-        sides_filenames: list[str] = []
-        for fn, dur, freq in spec["sides"]:
-            p = d / fn
-            if verbose:
-                print(f"  in-progress/{spec['slug']}/{fn}  ({dur}s @ {freq:.0f} Hz)")
-            _make_sine_flac(p, dur, freq)
+        sides_filenames = [fn for (fn, _dur, _freq) in spec["sides"]]
+        side_paths      = [d / fn for fn in sides_filenames]
+        side_durations  = [float(dur) for (_fn, dur, _freq) in spec["sides"]]
+        # Build the plan once so the audio envelope and the manifest agree
+        # on track boundaries — the wave editor renders both, and any drift
+        # between them would land in the screenshot.
+        plan = _build_plan(spec["plan_tracks"], skip_first_lead_in=True)
+        if verbose:
+            for fn, dur in zip(sides_filenames, side_durations):
+                print(f"  in-progress/{spec['slug']}/{fn}  ({dur}s envelope-shaped)")
+        _make_album_envelope_sides(side_paths, side_durations, plan)
+        for p in side_paths:
             _set_mtime(p, spec["mtime_minutes_ago"])
-            sides_filenames.append(fn)
         # Cover art so the row thumb has something to show.
         cover = d / "cover.jpg"
         _make_cover(cover, spec["tags"]["album"])
@@ -311,7 +424,7 @@ def seed(output_dir: Path, *, verbose: bool = True) -> None:
             "tags":           dict(spec["tags"]),
             "sides":          sides_filenames,
             "cover":          "cover.jpg",
-            "plan":           _build_plan(spec["plan_tracks"], skip_first_lead_in=True),
+            "plan":           plan,
             "music_relpath":  None,  # not split yet — drives "In-progress"
         }
         _write_album_json(d, manifest)

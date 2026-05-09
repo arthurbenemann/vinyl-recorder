@@ -94,6 +94,10 @@ def _hide_volatile_chrome(page) -> None:
     page.add_style_tag(content="""
         /* Disk-free readout flickers as the temp dir fills/empties. */
         #disk-free { visibility: hidden; }
+        /* Header version chip is `<git-describe>-dirty` — changes on every
+           commit and would otherwise force the perceptual-diff to flag the
+           screenshots as changed on every PR even when the UI is identical. */
+        #version-tag { visibility: hidden !important; }
         /* Health dot color depends on whether AUTO_CONNECT happened to
            catch SomaFM mid-buffer. Hide the colored dot, keep the chip's
            layout slot. */
@@ -181,21 +185,23 @@ def _capture_split_editor(page, output_dir: Path) -> Path:
     split_btns.first.click()
     page.wait_for_selector("#we-modal:not([hidden])", timeout=5_000)
     # The waveform fetches `.peaks.dat` over the network, then drawPeaks
-    # paints the canvas. Wait for actual non-blank pixels by sampling a
-    # few centerline points — `we-canvas` starts as a 2400x140 zero buffer.
+    # paints the canvas. Probe centerline pixels for the WAVEFORM colour
+    # (`#6db3ff` — blue dominates) rather than any non-blank pixel: the
+    # cut markers (red) and silence-region hatch land on the canvas
+    # before the peaks do, so a colour-blind probe would let us snap a
+    # screenshot of cuts-on-blank before the audio is rendered.
     page.wait_for_function(
         """() => {
             const c = document.getElementById('we-canvas');
             if (!c) return false;
             const ctx = c.getContext('2d');
             const data = ctx.getImageData(0, 70, c.width, 1).data;
-            // Look for at least one non-transparent, non-default pixel
-            // along the horizontal centerline. 70 is in the middle of
-            // the canvas (h=140).
             for (let i = 0; i < data.length; i += 4) {
-                if (data[i + 3] > 0 && (data[i] || data[i + 1] || data[i + 2])) {
-                    return true;
-                }
+                const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+                // Waveform stroke is `#6db3ff` — blue dominates red.
+                // Cut markers (`#ff…` red) fail the `b > r` check, the
+                // silence-hatch grey fails the `b > 100` check.
+                if (a > 0 && b > r && b > 100) return true;
             }
             return false;
         }""",
