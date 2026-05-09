@@ -894,6 +894,10 @@ function refreshLibRender() {
       const tagBtn = _actionBtn('openTag', f.filename, {label: 'Tag album', glyph: '✎'});
       const dlLink = _downloadLink(`/api/download/${encodeURIComponent(f.filename)}`, 'Download');
       const delBtn = _actionBtn('deleteFile', f.filename, {label: 'Delete', glyph: '✕', danger: true});
+      // Inline rename pencil: same handler the dblclick uses. Filename
+      // travels via data-fname (HTML escaped) — see _actionBtn for the
+      // XSS rationale on never inlining values into the JS string.
+      const renameGlyph = `<button class="rename-glyph" data-fname="${fn}" title="Rename" aria-label="Rename" onclick="event.stopPropagation();startInlineRename(this.dataset.fname, this.previousElementSibling)">✎</button>`;
       return `
       <tr class="row-untagged">
         <td class="col-check"><input type="checkbox" class="row-check" data-fname="${fn}" ${isSel}
@@ -901,7 +905,7 @@ function refreshLibRender() {
         <td style="font-weight:500" ondblclick="startInlineRename(this.dataset.fname, this.querySelector('.row-title-text'))" data-fname="${fn}" title="Double-click to rename">
           <div class="row-title">
             <span class="row-thumb"><img src="/api/file-cover/${encodeURIComponent(f.filename)}" loading="lazy" onerror="this.remove()"></span>
-            <span class="row-title-text">${titleText}</span>
+            <span class="row-title-text">${titleText}</span>${renameGlyph}
           </div>
         </td>
         <td style="color:var(--muted)">${htmlEscape(f.artist || '—')}</td>

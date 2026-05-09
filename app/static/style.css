@@ -146,6 +146,14 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 }
 .lib-section:not([open]) > summary::before { transform: rotate(-90deg) translateX(1px); }
 
+/* Subtle per-stage accent on the table container so the three Library
+   sections read as distinct at a glance. Keep this quiet: a 2 px left bar
+   at ~50% opacity, layered on top of the existing --border outline so the
+   shared chrome stays unchanged. */
+#raw-section > summary + div { box-shadow: inset 2px 0 0 rgba(186,117,23,0.5); }
+#in-progress-section > summary + div { box-shadow: inset 2px 0 0 rgba(55,138,221,0.5); }
+#music-section > summary + div { box-shadow: inset 2px 0 0 rgba(99,153,34,0.5); }
+
 /* Stream config */
 .stream-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .stream-row input { flex: 1 1 100%; min-width: 0; background: var(--surface); border: 0.5px solid var(--border2); border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 7px 10px; outline: none; }
@@ -300,6 +308,11 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .row-title { display: flex; align-items: center; }
 .row-title .row-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .row-untagged td[ondblclick] { cursor: text; }
+/* Inline rename pencil: barely visible until the row is hovered, then full
+   strength. Click triggers the same startInlineRename as the dblclick. */
+.rename-glyph { background: transparent; border: 0; padding: 0 4px; margin-left: 6px; cursor: pointer; color: var(--muted); font-size: 11px; line-height: 1; opacity: 0.35; transition: opacity 0.12s, color 0.12s; }
+.lib-table tr:hover .rename-glyph { opacity: 1; }
+.rename-glyph:hover { color: var(--text); }
 .inline-rename { background: var(--surface); border: 0.5px solid var(--blue); border-radius: 4px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 4px 6px; outline: none; }
 
 /* Recording pulse ring */
