@@ -50,9 +50,10 @@ jobs:
 
       - name: Install test deps
         # Pinned to the same shape the runtime image installs (FastAPI +
-        # uvicorn) plus pytest tooling. httpx is what TestClient uses
-        # internally; pytest-cov publishes a coverage report at the end.
-        run: pip install pytest pytest-cov pytest-xdist pytest-timeout fastapi "uvicorn[standard]" httpx pydantic
+        # uvicorn + paramiko for the pi-deploy route) plus pytest tooling.
+        # httpx is what TestClient uses internally; pytest-cov publishes a
+        # coverage report at the end.
+        run: pip install pytest pytest-cov pytest-xdist pytest-timeout fastapi "uvicorn[standard]" httpx pydantic paramiko
 
       - name: Run unit + API tests with coverage
         # `--cov-fail-under` is the floor; bump it whenever a PR meaningfully

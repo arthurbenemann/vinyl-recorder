@@ -14,9 +14,16 @@ from __future__ import annotations
 import logging
 import socket
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
-import paramiko
+if TYPE_CHECKING:
+    # Type-only import — no runtime cost when the test/import path doesn't
+    # actually invoke deploy(). The real `import paramiko` lives inside
+    # deploy() so a sibling test module that just imports `main` (which
+    # imports this route module transitively) doesn't need paramiko on
+    # the path. Runtime callers — the route + the explicit unit tests —
+    # always have it because the runtime image installs it.
+    import paramiko  # noqa: F401
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +89,11 @@ def deploy(
     `_client_factory` is a test seam — production callers leave it None and
     get a default `paramiko.SSHClient`.
     """
+    # Lazy: keeps the import chain that fires from `from main import app`
+    # paramiko-free, so tests that just want a TestClient (i.e. the great
+    # majority of the suite) don't need paramiko installed.
+    import paramiko
+
     lines: list[str] = []
 
     def emit(msg: str) -> None:

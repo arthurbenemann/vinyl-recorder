@@ -14,6 +14,11 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+# These tests genuinely exercise paramiko — even mocked, the module has to
+# import. Skip the whole file (rather than erroring on collection) so a
+# slim local env without paramiko still runs the rest of the suite.
+paramiko = pytest.importorskip("paramiko")
+
 
 def _client():
     from main import app
@@ -122,7 +127,6 @@ def test_deploy_happy_path_uploads_and_runs_install(tmp_path, monkeypatch):
 
 def test_deploy_auth_failure_raises_friendly_error(tmp_path, monkeypatch):
     _fake_pi_source(tmp_path, monkeypatch)
-    import paramiko
     from services import pi_deploy
 
     _, factory = _fake_client_factory(
