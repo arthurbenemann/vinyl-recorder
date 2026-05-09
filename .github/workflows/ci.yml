@@ -58,7 +58,12 @@ jobs:
         # `--cov-fail-under` is the floor; bump it whenever a PR meaningfully
         # raises real coverage. Set deliberately below the current baseline so
         # day-to-day PRs that touch the same line counts don't fail.
-        run: pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=70 -n auto
+        # `--dist loadfile` keeps every test in a single file on the same
+        # xdist worker. Tests within one file share filesystem fixtures
+        # (album dirs, MUSIC_DIR subtrees) and would race on parallel
+        # writes; loadfile preserves the speedup across files without
+        # introducing flakes within them.
+        run: pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=70 -n auto --dist loadfile
 
       - name: Upload coverage artifact
         if: always()
