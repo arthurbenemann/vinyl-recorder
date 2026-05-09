@@ -248,7 +248,7 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .lib-search.active { border-color: rgba(55,138,221,0.5); background: var(--surface2); }
 
 /* Library */
-.lib-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.lib-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
 /* Locked column widths so the Library and Albums tables line up. Order:
    check · Album · Artist · Year · Recorded · Length · Size · Status/Sides · actions */
 .lib-table col.c-check    { width: 30px; }
@@ -269,8 +269,8 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .lib-table th { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); padding: 8px 12px; text-align: left; font-weight: 400; }
 .lib-table th.sortable { cursor: pointer; user-select: none; }
 .lib-table th.sortable:hover { color: var(--text); }
-.lib-table th .sort-arrow { display: inline-block; width: 8px; margin-left: 4px; color: var(--text); opacity: 0; transition: opacity 0.12s; }
-.lib-table th.sorted .sort-arrow { opacity: 1; }
+.lib-table th .sort-arrow { display: inline-block; width: 0; margin-left: 0; color: var(--text); opacity: 0; transition: opacity 0.12s; }
+.lib-table th.sorted .sort-arrow { opacity: 1; width: 8px; margin-left: 4px; }
 .lib-table td { padding: 10px 12px; border-bottom: 0.5px solid var(--border); vertical-align: middle; }
 .lib-table tr:hover td { background: var(--surface2); }
 .lib-table tr:last-child td { border-bottom: none; }
