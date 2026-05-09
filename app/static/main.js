@@ -2002,20 +2002,19 @@ function _wireSectionCollapse(id) {
 // ── Pi deploy modal ───────────────────────────────────────────────────────
 // Pushes pi/server.py + pi-recorder.service to a Raspberry Pi over SSH.
 // Mirrors the manual scp/ssh ceremony documented in README.md "Install on
-// the Pi". Form values for host/user/port persist in localStorage so a
-// repeated push (server.py update) only needs the password.
+// the Pi". Host + username persist in localStorage so a repeat push
+// (server.py update) only needs the password.
 const PI_DEPLOY_HOST_KEY = 'piDeploy.host';
 const PI_DEPLOY_USER_KEY = 'piDeploy.user';
-const PI_DEPLOY_PORT_KEY = 'piDeploy.port';
 let _piDeployFocusReturn = null;
 
 function openPiDeploy() {
   _piDeployFocusReturn = document.activeElement;
   const m = document.getElementById('pi-deploy-modal');
   if (!m) return;
-  // Restore last-used host/user/port; pull a sensible default for host
-  // from the configured stream URL when nothing's saved yet (e.g. on a
-  // fresh install the user typed http://pi-recorder:8000/stream into
+  // Restore last-used host/user; pull a sensible default for host from
+  // the configured stream URL when nothing's saved yet (e.g. on a fresh
+  // install the user typed http://pi-recorder:8000/stream into
   // DEFAULT_STREAM_URL — that hostname is the deploy target too).
   let savedHost = '';
   try { savedHost = localStorage.getItem(PI_DEPLOY_HOST_KEY) || ''; } catch(e) {}
@@ -2032,9 +2031,6 @@ function openPiDeploy() {
   let savedUser = 'pi';
   try { savedUser = localStorage.getItem(PI_DEPLOY_USER_KEY) || 'pi'; } catch(e) {}
   document.getElementById('pi-user').value = savedUser;
-  let savedPort = '22';
-  try { savedPort = localStorage.getItem(PI_DEPLOY_PORT_KEY) || '22'; } catch(e) {}
-  document.getElementById('pi-port').value = savedPort;
   document.getElementById('pi-pass').value = '';
   // Clear prior log so a re-open after a failed deploy starts fresh.
   const logEl = document.getElementById('pi-deploy-log');
@@ -2044,7 +2040,7 @@ function openPiDeploy() {
   document.addEventListener('keydown', piDeployEscHandler);
   // Focus the first empty field so a returning user doesn't have to
   // tab through the saved ones.
-  const firstEmpty = ['pi-host', 'pi-user', 'pi-port', 'pi-pass']
+  const firstEmpty = ['pi-host', 'pi-user', 'pi-pass']
     .map(id => document.getElementById(id))
     .find(el => !el.value);
   (firstEmpty || document.getElementById('pi-pass')).focus();
@@ -2079,7 +2075,6 @@ async function runPiDeploy() {
   const host = document.getElementById('pi-host').value.trim();
   const username = document.getElementById('pi-user').value.trim();
   const password = document.getElementById('pi-pass').value;
-  const port = parseInt(document.getElementById('pi-port').value, 10) || 22;
   if (!host) { toast('✗ host is required', 'err'); return; }
   if (!username) { toast('✗ username is required', 'err'); return; }
   if (!password) { toast('✗ password is required', 'err'); return; }
@@ -2087,7 +2082,6 @@ async function runPiDeploy() {
   try {
     localStorage.setItem(PI_DEPLOY_HOST_KEY, host);
     localStorage.setItem(PI_DEPLOY_USER_KEY, username);
-    localStorage.setItem(PI_DEPLOY_PORT_KEY, String(port));
   } catch (e) {}
 
   const goBtn = document.getElementById('pi-deploy-go');
@@ -2097,13 +2091,13 @@ async function runPiDeploy() {
   const logEl = document.getElementById('pi-deploy-log');
   logEl.innerHTML = '';
   logEl.hidden = false;
-  _piDeployLogLine(`▶ deploying to ${username}@${host}:${port}…`, 'info');
+  _piDeployLogLine(`▶ deploying to ${username}@${host}…`, 'info');
 
   try {
     const r = await fetch('/api/pi/deploy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ host, username, password, port }),
+      body: JSON.stringify({ host, username, password }),
     });
     let payload = null;
     try { payload = await r.json(); } catch(e) {}

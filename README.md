@@ -99,9 +99,10 @@ recorder, fill in host / username / password, hit deploy. The recorder
 SSHes in, copies `pi/server.py` and `pi/pi-recorder.service` into place,
 runs `systemctl daemon-reload` + `enable --now`, and reports the
 service's `is-active` status. Same trust model as everything else in this
-app: the password is used for the one request and never persisted; the
-host / username / port are remembered in `localStorage` so subsequent
-deploys only need the password.
+app: the password is used for the one request and never persisted; host
++ username are remembered in `localStorage` so subsequent deploys only
+need the password. Hard-codes SSH port 22 — the rare custom-port case
+falls back to the manual recipe below.
 
 **By hand** — exactly the steps the in-app deploy button automates:
 

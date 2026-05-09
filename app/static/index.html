@@ -13,7 +13,7 @@
 <div class="header">
   <div class="logo">Vinyl Recorder <sub>PCM → FLAC</sub></div>
   <div class="header-right">
-    <button class="header-btn" id="pi-deploy-btn" onclick="openPiDeploy()" title="Install pi-recorder on a Raspberry Pi over SSH">deploy to pi</button>
+    <button class="header-link" id="pi-deploy-btn" onclick="openPiDeploy()" title="Install pi-recorder on a Raspberry Pi over SSH (one-time setup)">deploy to pi</button>
     <span id="disk-free">— GB free</span>
     <span class="version-tag" id="version-tag" hidden></span>
     <button type="button" class="status-indicator" id="status-indicator" onclick="toggleHealthPanel()" title="Stream health" aria-expanded="false" aria-controls="health-panel">
@@ -463,7 +463,6 @@
 
     <div class="pi-deploy-grid">
       <div class="field"><label>Host / IP</label><input id="pi-host" placeholder="pi-recorder.local or 192.168.1.42" autocomplete="off"></div>
-      <div class="field"><label>Port</label><input id="pi-port" type="number" min="1" max="65535" value="22"></div>
       <div class="field"><label>Username</label><input id="pi-user" value="pi" autocomplete="off"></div>
       <div class="field"><label>Password</label><input id="pi-pass" type="password" autocomplete="new-password"></div>
     </div>

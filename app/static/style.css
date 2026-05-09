@@ -26,10 +26,12 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 #disk-free.warn { color: var(--amber); }
 .version-tag { font-size: 10px; letter-spacing: 0.05em; color: var(--muted); padding: 2px 6px; border: 0.5px solid var(--border2); border-radius: 4px; font-variant-numeric: tabular-nums; }
 .version-tag.dev { color: var(--amber); border-color: rgba(186,117,23,0.35); }
-/* Toolbar button in the header — currently only used by "deploy to pi". */
-.header-btn { background: transparent; border: 0.5px solid var(--border2); border-radius: 6px; color: var(--muted); font-family: var(--mono); font-size: 11px; padding: 5px 10px; cursor: pointer; letter-spacing: 0.02em; }
-.header-btn:hover { color: var(--text); border-color: rgba(255,255,255,0.22); background: var(--surface2); }
-.header-btn:disabled { opacity: 0.5; cursor: wait; }
+/* Header text-link, used by "deploy to pi". Deploying the Pi service is a
+   one-time setup step, so this sits at the same visual weight as the other
+   header status text rather than competing with the recorder controls. */
+.header-link { background: transparent; border: 0; color: var(--muted); font-family: var(--mono); font-size: 12px; padding: 0; cursor: pointer; letter-spacing: 0; }
+.header-link:hover { color: var(--text); text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; }
+.header-link:disabled { opacity: 0.5; cursor: wait; text-decoration: none; }
 /* Stream-health button: an always-visible affordance in the header that
    reads as clickable from idle. Border + padding give it button shape; the
    chevron is dimmed until it's actionable (i.e. once connected). */
@@ -368,10 +370,8 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .tracks-sub .tdur { font-variant-numeric: tabular-nums; }
 .tracks-sub .tsize { font-variant-numeric: tabular-nums; min-width: 60px; text-align: right; }
 
-/* Pi deployment modal — small two-column form + scrolling log readout. */
-.pi-deploy-grid { display: grid; grid-template-columns: 1fr 110px; gap: 8px 12px; margin-bottom: 12px; }
-.pi-deploy-grid .field:nth-child(3) { grid-column: 1 / 2; }
-.pi-deploy-grid .field:nth-child(4) { grid-column: 1 / -1; }
+/* Pi deployment modal — single-column form + scrolling log readout. */
+.pi-deploy-grid { display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 12px; }
 .pi-deploy-log {
   margin-top: 14px; background: var(--surface); border: 0.5px solid var(--border);
   border-radius: 6px; padding: 10px 12px; font-family: var(--mono); font-size: 11px;
