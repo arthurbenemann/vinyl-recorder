@@ -1,3 +1,19 @@
+## v0.8.1 — 2026-05-09
+
+### Features
+- **api:** Rate-limit MusicBrainz, escape Lucene, cache MB+Discogs releases (#99)
+
+### Bug Fixes
+- **ui:** Close XSS class via data-fname; reuse row template; pause polling; a11y (#101)
+- **stream:** Pi /stream race, monotonic time, eventbus state-event eviction (#100)
+- **build:** Drop tracked-file exclusions from .dockerignore (#105)
+
+### Refactoring
+- Extract split_album helpers, single-call write_tags, /api/metrics (#104)
+
+### Tests
+- Timeouts, xdist, traces, fixture cleanup, dedicated compose project (#103)
+
 ## v0.9.0 — 2026-05-09
 
 ### Features
