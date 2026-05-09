@@ -98,6 +98,10 @@ function fmtSourceFormat(f) {
 }
 
 // ── Log helper ────────────────────────────────────────────────────────────
+// The log panel is collapsed by default — most users never need it. The
+// `<details>` summary still surfaces the most recent line as a one-liner so
+// the latest event is visible without expanding. Logging always writes to
+// the panel; only its visibility is gated by the `<details>` open state.
 function log(msg, cls='') {
   const el = document.getElementById('log');
   const line = document.createElement('div');
@@ -107,6 +111,28 @@ function log(msg, cls='') {
   el.scrollTop = el.scrollHeight;
   // trim old lines
   while (el.children.length > 40) el.removeChild(el.firstChild);
+  // Mirror the latest line into the collapsed-state summary so the user can
+  // see the most recent event without expanding.
+  const tail = document.getElementById('log-tail');
+  if (tail) {
+    tail.textContent = msg;
+    if (cls) tail.className = 'log-tail ' + cls;
+    else tail.className = 'log-tail';
+  }
+}
+
+// Persist the user's expanded state across reloads. Default = collapsed.
+const LOG_KEY = 'vr.log.expanded';
+function _wireLogCollapse() {
+  const det = document.getElementById('log-details');
+  if (!det) return;
+  let saved = null;
+  try { saved = localStorage.getItem(LOG_KEY); } catch (_) {}
+  // Default to collapsed; only restore "open" if explicitly remembered.
+  det.open = (saved === '1');
+  det.addEventListener('toggle', () => {
+    try { localStorage.setItem(LOG_KEY, det.open ? '1' : '0'); } catch (_) {}
+  });
 }
 
 // ── Error helper ──────────────────────────────────────────────────────────
@@ -736,12 +762,15 @@ function _actionBtn(handler, fname, opts = {}) {
   const {label = '', cls = 'icon-btn', danger = false, kind = ''} = opts;
   const cl = danger ? `${cls} danger` : cls;
   const k = kind ? ` data-kind="${htmlEscape(kind)}"` : '';
-  const titleAttr = label ? ` title="${htmlEscape(label)}"` : '';
-  return `<button class="${cl}" data-fname="${htmlEscape(fname)}"${k}${titleAttr} onclick="${handler}(this.dataset.fname${kind ? ', this.dataset.kind' : ''})">${opts.glyph || ''}</button>`;
+  // `title` shows on hover; `aria-label` is what screen readers announce for
+  // these icon-only buttons (the glyph alone is meaningless to AT).
+  const a11y = label ? ` title="${htmlEscape(label)}" aria-label="${htmlEscape(label)}"` : '';
+  return `<button class="${cl}" data-fname="${htmlEscape(fname)}"${k}${a11y} onclick="${handler}(this.dataset.fname${kind ? ', this.dataset.kind' : ''})">${opts.glyph || ''}</button>`;
 }
 
 function _downloadLink(href, label = 'Download') {
-  return `<a class="icon-btn" href="${href}" download title="${htmlEscape(label)}">↓</a>`;
+  const lbl = htmlEscape(label);
+  return `<a class="icon-btn" href="${href}" download title="${lbl}" aria-label="${lbl}">↓</a>`;
 }
 
 // Build a keydown handler that closes a modal on Escape. If focus is in a
@@ -890,7 +919,7 @@ function refreshLibRender() {
       // unconditional. The handler lives on the whole <td> so the entire
       // cell — including padding and whitespace to the right of short
       // titles — is a click target.
-      const previewBtn = `<button class="icon-btn preview-btn ${playing}" data-fname="${fn}" data-kind="lib" title="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>`;
+      const previewBtn = `<button class="icon-btn preview-btn ${playing}" data-fname="${fn}" data-kind="lib" title="Preview" aria-label="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>`;
       const tagBtn = _actionBtn('openTag', f.filename, {label: 'Tag album', glyph: '✎'});
       const dlLink = _downloadLink(`/api/download/${encodeURIComponent(f.filename)}`, 'Download');
       const delBtn = _actionBtn('deleteFile', f.filename, {label: 'Delete', glyph: '✕', danger: true});
@@ -1089,9 +1118,46 @@ async function refreshAlbums() {
     [...musicSelected].forEach(id => {
       if (!albumsByName[id] || !albumsByName[id].split) musicSelected.delete(id);
     });
+    // Drop stale failures for albums that no longer exist (deleted/demoted).
+    [...albumErrors.keys()].forEach(id => {
+      if (!albumsByName[id]) albumErrors.delete(id);
+    });
     refreshAlbumsRender();
   } catch (e) { console.error(e); }
 }
+
+// ── Per-album failure tracking (client-only, session-scoped) ──────────────
+// Long-running album jobs (split, measure, normalize, silence-detect) only
+// surface failures via a 4 s toast today, which is easy to miss. We keep a
+// session Map<album_id, "<op>: <message>"> populated by the editor's catch
+// blocks, render a `.fail-pill` in the row's status cell when set, and clear
+// the entry on dismiss / next successful run / album removal.
+//
+// Trade-off note (in PR description): persistence on the album manifest was
+// considered but skipped to keep this PR small. Refreshes / new tabs lose
+// the indicator; that's an acceptable cost for the UX win and avoids
+// touching the jobs registry or albums.json schema.
+const albumErrors = new Map();
+
+function recordAlbumFailure(albumId, op, message) {
+  if (!albumId) return;
+  const msg = String(message || '').trim() || 'unknown error';
+  albumErrors.set(albumId, { op, message: msg, ts: Date.now() });
+  // Re-render so the row picks up the pill without waiting for the next
+  // poll (15 s); refreshAlbums() pulls fresh data, refreshAlbumsRender()
+  // just re-paints from in-memory state.
+  refreshAlbumsRender();
+}
+
+function clearAlbumFailure(albumId) {
+  if (!albumErrors.has(albumId)) return;
+  albumErrors.delete(albumId);
+  refreshAlbumsRender();
+}
+
+// On album success — measure / split / silence — drop any stale failure
+// pill so a re-run that worked clears the warning. Called from the editor.
+function noteAlbumSuccess(albumId) { clearAlbumFailure(albumId); }
 
 function _albumRowHtml(a, opts) {
   // The "fn" key is the album_id (a slug like 7f3a8c91); HTML escaping is
@@ -1101,11 +1167,22 @@ function _albumRowHtml(a, opts) {
   // literal — see the comment on `_actionBtn` for the XSS rationale.
   const fn = htmlEscape(a.album_id);
   const isSel = opts.selected.has(a.album_id) ? 'checked' : '';
-  const countCell = a.split
+  const baseCount = a.split
     ? (a.track_count
         ? `<a class="track-count-link" data-fname="${fn}" onclick="toggleTracks(this.dataset.fname)">${a.track_count} tracks</a>`
         : '—')
     : `${a.side_count || '—'}`;
+  // Failure pill — only present when the editor recorded a failure for this
+  // album in the current session. Clicking dismisses; the title shows the
+  // full server-side message (which can be long).
+  const err = albumErrors.get(a.album_id);
+  const failPill = err
+    ? ` <button class="fail-pill" data-fname="${fn}"
+        title="${htmlEscape(err.op + ': ' + err.message)} — click to dismiss"
+        aria-label="${htmlEscape('Failed: ' + err.op + ' — click to dismiss')}"
+        onclick="clearAlbumFailure(this.dataset.fname)">failed: ${htmlEscape(err.op)}</button>`
+    : '';
+  const countCell = `${baseCount}${failPill}`;
   const splitTitle = a.split ? 'Re-edit splits' : 'Split into tracks';
   // Demote button is offered on every album; for split albums the dialog
   // warns that music/ stays put.
@@ -1356,8 +1433,8 @@ function renderCombineSides() {
         <div class="name" title="${htmlEscape(fn)}">${htmlEscape(label)}</div>
         <div class="meta">${htmlEscape(recorded)} · ${f.size_mb || '—'} MB</div>
         <div class="arrows">
-          <button class="arrow-btn" onclick="moveSide(${i}, -1)" ${isFirst ? 'disabled' : ''} title="Move up">▲</button>
-          <button class="arrow-btn" onclick="moveSide(${i},  1)" ${isLast  ? 'disabled' : ''} title="Move down">▼</button>
+          <button class="arrow-btn" onclick="moveSide(${i}, -1)" ${isFirst ? 'disabled' : ''} title="Move up" aria-label="Move up">▲</button>
+          <button class="arrow-btn" onclick="moveSide(${i},  1)" ${isLast  ? 'disabled' : ''} title="Move down" aria-label="Move down">▼</button>
         </div>
       </div>`;
   }).join('');
@@ -1994,6 +2071,7 @@ applyConfig();
 ensureAudioGraph();
 applyMuteState();
 _wireSortableHeaders();
+_wireLogCollapse();
 wsConnect();
 refreshLib();
 refreshAlbums();

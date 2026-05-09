@@ -1207,7 +1207,7 @@ function renderTracks() {
     return `
       <div class="${rowClass.join(' ')}">
         <span class="pn">${num}</span>
-        <button class="play-track ${playing}" onclick="wePlayTrack(${i})" title="Play this region" ${unfit ? 'disabled' : ''}>▶</button>
+        <button class="play-track ${playing}" onclick="wePlayTrack(${i})" title="Play this region" aria-label="Play this region" ${unfit ? 'disabled' : ''}>▶</button>
         <input type="text" value="${htmlEscape(titleVal)}" ${titleAttrs}>
         <input type="text" class="start-input" value="${fmtMMSS(start)}" placeholder="m:ss.ss"
                ${isFirst || unfit ? 'disabled' : ''}
@@ -1215,8 +1215,9 @@ function renderTracks() {
         <span class="range" title="${rangeTitle}">${rangeText}</span>
         <button class="skip-btn ${skipped ? 'on' : ''}"
                 title="${skipped ? 'Restore region as a track' : 'Skip — drop region from output and measurement'}"
+                aria-label="${skipped ? 'Restore region as a track' : 'Skip region'}"
                 onclick="weToggleSkip(${i})" ${unfit ? 'disabled' : ''}>⊘</button>
-        <button class="del" title="Remove cut" ${isFirst ? 'disabled' : ''}
+        <button class="del" title="Remove cut" aria-label="Remove cut" ${isFirst ? 'disabled' : ''}
                 onclick="weDeleteCut(${i - 1})">✕</button>
       </div>`;
   }).join('');
@@ -1597,8 +1598,12 @@ async function weDetectInternal({ replace }) {
       status.textContent = `${we.silences.length} silences · highlighted (no cuts changed)`;
     }
     drawAll();
+    if (typeof noteAlbumSuccess === 'function') noteAlbumSuccess(we.albumId);
   } catch (e) {
     status.textContent = 'detection failed: ' + e.message;
+    if (typeof recordAlbumFailure === 'function') {
+      recordAlbumFailure(we.albumId, 'silence-detect', e.message);
+    }
   } finally {
     hideBar(bar);
   }
@@ -1657,6 +1662,8 @@ async function weApplySplit() {
       return r.json();
     });
     toast(`✓ Split into ${d.tracks.length} tracks`, 'ok');
+    // Clear any prior session-failure pill on this album — the rerun worked.
+    if (typeof noteAlbumSuccess === 'function') noteAlbumSuccess(we.albumId);
     // No draft to clear — the split route already wrote the same plan to
     // album.json (alongside `music_relpath`). Closing the editor leaves
     // the plan in place so re-edit picks up where this run left off.
@@ -1664,6 +1671,11 @@ async function weApplySplit() {
     refreshAlbums();
   } catch (e) {
     toast('✗ split failed: ' + e.message, 'err');
+    // Persist the failure beyond the toast so the user can see at a glance
+    // which album had a problem when scanning the library.
+    if (typeof recordAlbumFailure === 'function') {
+      recordAlbumFailure(we.albumId, 'split', e.message);
+    }
   } finally {
     btn.disabled = false; btn.textContent = 'apply split';
     hideBar(bar);
@@ -1723,9 +1735,13 @@ async function weMeasure() {
     });
     we.measured = d;
     if (text) text.textContent = formatMeasured(d);
+    if (typeof noteAlbumSuccess === 'function') noteAlbumSuccess(we.albumId);
   } catch (e) {
     we.measured = null;
     if (text) text.textContent = 'measurement failed: ' + e.message;
+    if (typeof recordAlbumFailure === 'function') {
+      recordAlbumFailure(we.albumId, 'measure', e.message);
+    }
   } finally {
     if (btn) btn.disabled = false;
     hideBar(bar);
@@ -1763,8 +1779,8 @@ async function toggleTracks(fname) {
         <span class="ttitle">${htmlEscape(t.title || t.filename)}</span>
         <span class="tdur">${fmtDuration(t.duration_seconds)}</span>
         <span class="tsize">${t.size_mb} MB</span>
-        <button class="icon-btn preview-btn ${playClass}" data-album-id="${htmlEscape(fname)}" data-track="${htmlEscape(t.filename)}" data-kind="track" title="Preview" onclick="togglePreviewTrack(this.dataset.albumId, this.dataset.track)">${playGlyph}</button>
-        <a class="icon-btn" href="/api/album/${encodeURIComponent(fname)}/track/${encodeURIComponent(t.filename)}" download title="Download">↓</a>
+        <button class="icon-btn preview-btn ${playClass}" data-album-id="${htmlEscape(fname)}" data-track="${htmlEscape(t.filename)}" data-kind="track" title="Preview" aria-label="Preview" onclick="togglePreviewTrack(this.dataset.albumId, this.dataset.track)">${playGlyph}</button>
+        <a class="icon-btn" href="/api/album/${encodeURIComponent(fname)}/track/${encodeURIComponent(t.filename)}" download title="Download" aria-label="Download">↓</a>
       </div>`;
     }).join('')}</td>`;
     row.insertAdjacentElement('afterend', sub);
