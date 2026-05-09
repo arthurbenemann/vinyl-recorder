@@ -248,7 +248,7 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .lib-search.active { border-color: rgba(55,138,221,0.5); background: var(--surface2); }
 
 /* Library */
-.lib-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.lib-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
 /* Locked column widths so the Library and Albums tables line up. Order:
    check · Album · Artist · Year · Recorded · Length · Size · Status/Sides · actions */
 .lib-table col.c-check    { width: 30px; }
