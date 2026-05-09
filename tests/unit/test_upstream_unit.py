@@ -397,3 +397,84 @@ def test_proxy_teardown_skips_kill_if_already_dead(monkeypatch):
     recordings._teardown_proxy(_FakeProc(), "proxy-x")
     assert "kill" not in calls
     assert calls == ["unsub:proxy-x", "reap"]
+
+
+# ── Regression: concurrent finalize race (user-stop + watcher) ──────────
+def test_finalize_session_is_idempotent_under_concurrent_calls(monkeypatch):
+    """Pin the user-stop / watcher race fix.
+
+    Both the `/api/record/stop/{sid}` request handler and the per-session
+    watcher's `_watch_session` thread can wake up on the same SIGINT-driven
+    ffmpeg exit and race into `_finalize_session`. Pre-fix, the loser
+    either returned `{"elapsed": 0, ...}` to its caller (so the e2e
+    `test_record_3s_from_loop` assertion `2 <= elapsed <= 6` failed) or
+    raised KeyError on a duplicate `del active[sid]`. Post-fix, the second
+    call returns the same payload as the first and `active` is popped
+    exactly once."""
+    import os
+    import time as _time
+    from routes import recordings as rec
+    from state import active, log_lines
+
+    class _DeadProc:
+        returncode = 0
+        def poll(self): return 0
+        def send_signal(self, sig): pass
+        def terminate(self): pass
+        def wait(self, timeout=None): return 0
+
+    class _FH:
+        def close(self): pass
+
+    monkeypatch.setattr(rec.upstream, "unsubscribe", lambda name: None)
+    monkeypatch.setattr(rec.bus, "log", lambda *a, **kw: None)
+    monkeypatch.setattr(rec.bus, "publish", lambda *a, **kw: None)
+
+    sid = "race-sid"
+    outfile = "/tmp/__race_test_finalize.flac"
+    with open(outfile, "wb") as f:
+        f.write(b"x" * 1024)
+
+    sess = {
+        "proc": _DeadProc(),
+        "outfile": outfile,
+        "log_fh": _FH(),
+        "start_time": _time.monotonic() - 3.0,
+        "duration": 0,
+        "meta": {"artist": "x", "album": "y", "year": "2026"},
+        "filename": "x.flac",
+        "sess_state": {"paused": False},
+        "finalize_lock": threading.Lock(),
+        "finalized": False,
+    }
+    active[sid] = sess
+    log_lines[sid] = []
+
+    try:
+        results: list[dict] = []
+        errors: list[BaseException] = []
+
+        def runner(reason: str) -> None:
+            try:
+                results.append(rec._finalize_session(sid, reason))
+            except BaseException as e:  # pragma: no cover — must NOT happen
+                errors.append(e)
+
+        t1 = threading.Thread(target=runner, args=("user",))
+        t2 = threading.Thread(target=runner, args=("auto",))
+        t1.start(); t2.start()
+        t1.join(timeout=5); t2.join(timeout=5)
+
+        assert not errors, f"finalize race raised: {errors!r}"
+        assert len(results) == 2
+        # Both callers see identical payload — the second got the cached one.
+        assert results[0] == results[1]
+        assert results[0]["filename"] == os.path.basename(outfile)
+        assert results[0]["elapsed"] >= 2
+        # Session removed from `active` exactly once.
+        assert sid not in active
+    finally:
+        active.pop(sid, None)
+        log_lines.pop(sid, None)
+        try: os.unlink(outfile)
+        except OSError: pass
