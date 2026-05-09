@@ -189,24 +189,22 @@ TAG_KEY_MAP = {
 
 
 def write_tags(path: Path, fields: dict):
-    """Replace the standard tag set on a FLAC file. Keys: artist/album/year/genre/label/tracks."""
+    """Replace the standard tag set on a FLAC file. Keys: artist/album/year/
+    genre/label/tracks. metaflac honors --remove-tag and --set-tag flags
+    in argv order, so a single invocation handles "remove existing + set
+    new" — half the subprocess overhead of the previous two-pass approach."""
     args = ["metaflac"]
     for k in list(TAG_KEY_MAP.values()) + ["TRACKLIST"]:
         args.append(f"--remove-tag={k}")
-    args.append(str(path))
-    subprocess.run(args, check=False, stderr=subprocess.DEVNULL)
-
-    setters = ["metaflac"]
     for k, v in fields.items():
         if k == "tracks":
             tl = " / ".join(t.strip() for t in (v or []) if t and t.strip())
             if tl:
-                setters.append(f"--set-tag=TRACKLIST={tl}")
+                args.append(f"--set-tag=TRACKLIST={tl}")
         elif k in TAG_KEY_MAP and v:
-            setters.append(f"--set-tag={TAG_KEY_MAP[k]}={v}")
-    if len(setters) > 1:
-        setters.append(str(path))
-        subprocess.run(setters, check=False, stderr=subprocess.DEVNULL)
+            args.append(f"--set-tag={TAG_KEY_MAP[k]}={v}")
+    args.append(str(path))
+    subprocess.run(args, check=False, stderr=subprocess.DEVNULL)
 
 
 def list_recordings() -> list[dict]:

@@ -432,122 +432,161 @@ async def split_album(req: SplitRequest):
     tags = manifest.get("tags") or {}
     music_dir, relpath = _music_dir_for(tags)
     prior_relpath = manifest.get("music_relpath")
-    if prior_relpath and prior_relpath != relpath:
-        prior_dir = MUSIC_DIR / prior_relpath
-        if prior_dir.is_dir():
-            for old in prior_dir.glob("*.flac"):
-                try: old.unlink()
-                except Exception: pass
-            try: prior_dir.rmdir()
-            except Exception: pass
-            try:
-                if prior_dir.parent != MUSIC_DIR and not any(prior_dir.parent.iterdir()):
-                    prior_dir.parent.rmdir()
-            except Exception:
-                pass
-
+    _wipe_prior_music_dir(prior_relpath, relpath)
     music_dir.mkdir(parents=True, exist_ok=True)
     for old in music_dir.glob("*.flac"):
         try: old.unlink()
         except Exception: pass
 
     cover_file = albums_fs.cover_path(req.album_id)
-
-    # Pre-walk the tracks to compute the slice range for the progress bar
-    # so the bar advances at a constant rate across the whole split, not
-    # per-track. Walk twice with the same cursor logic.
-    _cur = 0.0
-    _kept = 0.0
-    for _i, _t in enumerate(req.tracks, start=1):
-        _s = _cur
-        _e = total if _i == len(req.tracks) else min(total, _s + max(0.0, _t.duration_seconds))
-        _cur = _e
-        if _e > _s and not _t.skip:
-            _kept += _e - _s
-    out_dur_total = _kept or 1.0
+    out_dur_total = _kept_duration_total(req.tracks, total) or 1.0
+    out_total = sum(1 for t in req.tracks if not t.skip)
+    pad = max(2, len(str(out_total)))
     start_job(req.job_id, "split")
 
     created: list[dict] = []
     cursor = 0.0
-    out_total = sum(1 for t in req.tracks if not t.skip)
-    pad = max(2, len(str(out_total)))
     out_idx = 0
     progress_acc = 0.0
 
     try:
         for i, t in enumerate(req.tracks, start=1):
             start_ = cursor
-            end_ = min(total, start_ + max(0.0, t.duration_seconds))
-            if i == len(req.tracks):
-                end_ = total
+            end_ = total if i == len(req.tracks) else min(total, start_ + max(0.0, t.duration_seconds))
             cursor = end_
-            if end_ <= start_:
+            if end_ <= start_ or t.skip:
                 continue
-            if t.skip:
-                continue   # advance cursor only — region is dropped from output
             out_idx += 1
-            track_name = f"{str(out_idx).zfill(pad)} - {safe_path_component(t.title) or 'Track'}.flac"
-            out = music_dir / track_name
-            af = []
-            if apply_gain:
-                af.append(f"volume={gain_db:.4f}dB")
-            if sample_fmt:
-                af.append(f"aformat=sample_fmts={sample_fmt}")
-            # The concat demuxer presents the full album as one virtual
-            # input stream so -ss/-to act in album time, including across
-            # side boundaries — same behaviour as the old concat.flac
-            # input but no on-disk artifact.
-            cmd = ["ffmpeg", "-y", "-loglevel", "error",
-                   "-f", "concat", "-safe", "0",
-                   "-ss", f"{start_:.3f}", "-to", f"{end_:.3f}",
-                   "-i", str(playlist)]
-            if af:
-                cmd += ["-af", ",".join(af)]
-            cmd += ["-c:a", "flac", "-compression_level", "5",
-                    "-map_metadata", "-1", str(out)]
             track_dur = end_ - start_
             slice_a = progress_acc / out_dur_total
             slice_b = (progress_acc + track_dur) / out_dur_total
             progress_acc += track_dur
-            rc, stderr = await asyncio.to_thread(
-                run_ffmpeg_with_progress, cmd, track_dur, req.job_id,
-                (slice_a, slice_b), f"track {out_idx}/{out_total}",
+            entry = await _emit_track(
+                req=req, t=t, i=i, out_idx=out_idx, out_total=out_total,
+                pad=pad, music_dir=music_dir, playlist=playlist,
+                start_=start_, end_=end_, apply_gain=apply_gain,
+                gain_db=gain_db, sample_fmt=sample_fmt, tags=tags,
+                cover_file=cover_file, slice_range=(slice_a, slice_b),
             )
-            if rc != 0:
-                err = (stderr or b"").decode(errors="replace")[:300]
-                finish_job(req.job_id, error=err)
-                raise HTTPException(500, f"ffmpeg failed on track {i}: {err}")
-            # Tags + cover are committed HERE — only at the music/ emit step.
-            tag_args = ["metaflac", "--remove-all-tags",
-                        f"--set-tag=ARTIST={tags.get('artist', '')}",
-                        f"--set-tag=ALBUM={tags.get('album', '')}",
-                        f"--set-tag=DATE={tags.get('year', '')}",
-                        f"--set-tag=GENRE={tags.get('genre', '')}",
-                        f"--set-tag=LABEL={tags.get('label', '')}",
-                        f"--set-tag=CATALOGNUMBER={tags.get('catalog_number', '')}",
-                        f"--set-tag=RELEASECOUNTRY={tags.get('country', '')}",
-                        f"--set-tag=TITLE={t.title}",
-                        f"--set-tag=TRACKNUMBER={out_idx}",
-                        f"--set-tag=TRACKTOTAL={out_total}",
-                        str(out)]
-            if tags.get("musicbrainz_albumid"):
-                tag_args.insert(-1, f"--set-tag=MUSICBRAINZ_ALBUMID={tags['musicbrainz_albumid']}")
-            if tags.get("discogs_release_id"):
-                tag_args.insert(-1, f"--set-tag=DISCOGS_RELEASE_ID={tags['discogs_release_id']}")
-            subprocess.run(tag_args, check=False, stderr=subprocess.DEVNULL)
-            if cover_file:
-                subprocess.run(
-                    ["metaflac", f"--import-picture-from={cover_file}", str(out)],
-                    check=False, stderr=subprocess.DEVNULL,
-                )
-            created.append({
-                "filename":         track_name,
-                "duration_seconds": end_ - start_,
-                "size_mb":          round(out.stat().st_size / 1e6, 1),
-            })
+            created.append(entry)
     finally:
         playlist.unlink(missing_ok=True)
 
+    _persist_split_plan(req, relpath)
+    finish_job(req.job_id)
+    return {"ok": True, "music_relpath": relpath, "tracks": created}
+
+
+def _wipe_prior_music_dir(prior_relpath: Optional[str], new_relpath: str) -> None:
+    """If artist/album tags have changed since the last split, the music_relpath
+    moved — remove the OLD output dir so we don't leave orphaned tracks under
+    the previous Artist/Album path. No-op when relpath is unchanged."""
+    if not prior_relpath or prior_relpath == new_relpath:
+        return
+    prior_dir = MUSIC_DIR / prior_relpath
+    if prior_dir.is_dir():
+        for old in prior_dir.glob("*.flac"):
+            try: old.unlink()
+            except Exception: pass
+        try: prior_dir.rmdir()
+        except Exception: pass
+        try:
+            if prior_dir.parent != MUSIC_DIR and not any(prior_dir.parent.iterdir()):
+                prior_dir.parent.rmdir()
+        except Exception:
+            pass
+
+
+def _kept_duration_total(tracks: list, total: float) -> float:
+    """Total seconds of audio that will actually land in `music/` (skip
+    tracks excluded). Drives the constant-rate progress bar across the
+    full split — without this the bar would jump per track."""
+    cur = 0.0
+    kept = 0.0
+    for i, t in enumerate(tracks, start=1):
+        s = cur
+        e = total if i == len(tracks) else min(total, s + max(0.0, t.duration_seconds))
+        cur = e
+        if e > s and not t.skip:
+            kept += e - s
+    return kept
+
+
+async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
+                      music_dir: Path, playlist: Path,
+                      start_: float, end_: float, apply_gain: bool, gain_db: float,
+                      sample_fmt: Optional[str], tags: dict, cover_file: Optional[Path],
+                      slice_range: tuple[float, float]) -> dict:
+    """Encode one track FLAC into music/, write tags, embed cover. Raises
+    HTTPException on ffmpeg failure (the outer handler unlinks the playlist
+    via the existing try/finally before propagation)."""
+    track_name = f"{str(out_idx).zfill(pad)} - {safe_path_component(t.title) or 'Track'}.flac"
+    out = music_dir / track_name
+    af = []
+    if apply_gain:
+        af.append(f"volume={gain_db:.4f}dB")
+    if sample_fmt:
+        af.append(f"aformat=sample_fmts={sample_fmt}")
+    # The concat demuxer presents the full album as one virtual input
+    # stream so -ss/-to act in album time, including across side boundaries
+    # — same behaviour as the old concat.flac input but no on-disk artifact.
+    cmd = ["ffmpeg", "-y", "-loglevel", "error",
+           "-f", "concat", "-safe", "0",
+           "-ss", f"{start_:.3f}", "-to", f"{end_:.3f}",
+           "-i", str(playlist)]
+    if af:
+        cmd += ["-af", ",".join(af)]
+    cmd += ["-c:a", "flac", "-compression_level", "5",
+            "-map_metadata", "-1", str(out)]
+    track_dur = end_ - start_
+    rc, stderr = await asyncio.to_thread(
+        run_ffmpeg_with_progress, cmd, track_dur, req.job_id,
+        slice_range, f"track {out_idx}/{out_total}",
+    )
+    if rc != 0:
+        err = (stderr or b"").decode(errors="replace")[:300]
+        finish_job(req.job_id, error=err)
+        raise HTTPException(500, f"ffmpeg failed on track {i}: {err}")
+    _write_track_tags(out, t.title, out_idx, out_total, tags, cover_file)
+    return {
+        "filename":         track_name,
+        "duration_seconds": end_ - start_,
+        "size_mb":          round(out.stat().st_size / 1e6, 1),
+    }
+
+
+def _write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
+                      tags: dict, cover_file: Optional[Path]) -> None:
+    """Replace the FLAC's tag set with the manifest's tags + per-track
+    title/track-number, then embed cover.jpg if present. Single metaflac
+    invocation for the tags; the picture import has to be its own call."""
+    tag_args = ["metaflac", "--remove-all-tags",
+                f"--set-tag=ARTIST={tags.get('artist', '')}",
+                f"--set-tag=ALBUM={tags.get('album', '')}",
+                f"--set-tag=DATE={tags.get('year', '')}",
+                f"--set-tag=GENRE={tags.get('genre', '')}",
+                f"--set-tag=LABEL={tags.get('label', '')}",
+                f"--set-tag=CATALOGNUMBER={tags.get('catalog_number', '')}",
+                f"--set-tag=RELEASECOUNTRY={tags.get('country', '')}",
+                f"--set-tag=TITLE={title}",
+                f"--set-tag=TRACKNUMBER={out_idx}",
+                f"--set-tag=TRACKTOTAL={out_total}"]
+    if tags.get("musicbrainz_albumid"):
+        tag_args.append(f"--set-tag=MUSICBRAINZ_ALBUMID={tags['musicbrainz_albumid']}")
+    if tags.get("discogs_release_id"):
+        tag_args.append(f"--set-tag=DISCOGS_RELEASE_ID={tags['discogs_release_id']}")
+    tag_args.append(str(out))
+    subprocess.run(tag_args, check=False, stderr=subprocess.DEVNULL)
+    if cover_file:
+        subprocess.run(
+            ["metaflac", f"--import-picture-from={cover_file}", str(out)],
+            check=False, stderr=subprocess.DEVNULL,
+        )
+
+
+def _persist_split_plan(req, relpath: str) -> None:
+    """Write the resolved plan + the new music_relpath back into album.json
+    so the wave-editor can re-load and re-edit later."""
     plan = {
         "tracks": [
             {"title": t.title,
@@ -564,9 +603,6 @@ async def split_album(req: SplitRequest):
     manifest["plan"] = plan
     manifest["music_relpath"] = relpath
     albums_fs.write_manifest(req.album_id, manifest)
-
-    finish_job(req.job_id)
-    return {"ok": True, "music_relpath": relpath, "tracks": created}
 
 
 @router.get("/api/album/{album_id}/tracks")

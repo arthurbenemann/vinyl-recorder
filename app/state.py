@@ -18,6 +18,13 @@ RAW_DIR = OUTPUT_DIR / "raw"
 IN_PROGRESS_DIR = OUTPUT_DIR / "in-progress"
 MUSIC_DIR = Path(os.getenv("MUSIC_OUTPUT_DIR", str(OUTPUT_DIR / "music")))
 LOG_DIR = OUTPUT_DIR / ".logs"
+# IMPORTANT: This mkdir runs at IMPORT time — the first time anything imports
+# `state` (or anything that imports it transitively, which is most of the
+# app), the layout under OUTPUT_DIR is created on the spot. Tests must
+# therefore set `OUTPUT_DIR` to a tmp path BEFORE the first import; see
+# tests/conftest.py which does exactly that via os.environ.setdefault. If
+# you're running unit tests outside pytest, set OUTPUT_DIR yourself or
+# you'll mkdir the developer's real recordings directory.
 for _d in (RAW_DIR, IN_PROGRESS_DIR, MUSIC_DIR, LOG_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 

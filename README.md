@@ -29,6 +29,21 @@ auto-fill metadata + embed cover art from the Cover Art Archive.
 - The Jellyfin output directory can be relocated via the
   `MUSIC_OUTPUT_DIR` environment variable (e.g. to a network share)
 
+## Network / trust model
+
+This app is designed for a **trusted, single-user home LAN**. There is no
+authentication on either the recorder UI or the Pi capture service, the WS
++ HTTP endpoints accept requests from any origin (`Access-Control-Allow-
+Origin: *`), and the Pi's `/gain` and `/stream` endpoints will respond to
+anyone on the network — that's the explicit cost of being able to point
+any browser at it without ceremony.
+
+If you intend to expose this beyond a private LAN — through a reverse
+proxy, a Tailscale tailnet, or any Internet-reachable hop — put it behind
+your own auth layer (basic-auth in nginx/caddy, an SSO front-end like
+oauth2-proxy, or Tailscale's identity-aware ACLs). The recorder makes no
+attempt to be hardened against hostile clients.
+
 ## Run it
 
 Requires Docker or Podman with `compose` support.
