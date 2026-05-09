@@ -29,20 +29,21 @@ auto-fill metadata + embed cover art from the Cover Art Archive.
 - The Jellyfin output directory can be relocated via the
   `MUSIC_OUTPUT_DIR` environment variable (e.g. to a network share)
 
-## Network / trust model
+## Screenshots
 
-This app is designed for a **trusted, single-user home LAN**. There is no
-authentication on either the recorder UI or the Pi capture service, the WS
-+ HTTP endpoints accept requests from any origin (`Access-Control-Allow-
-Origin: *`), and the Pi's `/gain` and `/stream` endpoints will respond to
-anyone on the network — that's the explicit cost of being able to point
-any browser at it without ceremony.
+![Library view — raw sides, in-progress albums, finished music](images/library.png)
+*Library: raw side recordings on top, in-progress albums under tagging in
+the middle, the finished Jellyfin tree on the bottom — collapsible so the
+stage you're working on stays in view.*
 
-If you intend to expose this beyond a private LAN — through a reverse
-proxy, a Tailscale tailnet, or any Internet-reachable hop — put it behind
-your own auth layer (basic-auth in nginx/caddy, an SSO front-end like
-oauth2-proxy, or Tailscale's identity-aware ACLs). The recorder makes no
-attempt to be hardened against hostile clients.
+![Combine modal — bulk-select raw sides into one album](images/album-combine.png)
+*Combining: bulk-select raw side recordings into a single album, then tag
+once instead of per-side.*
+
+![Wave editor — split a combined LP into per-track FLACs](images/split-editor.png)
+*Wave editor: auto-detected silences seed track splits; nudge the markers
+and label each track before exporting per-track FLACs into the Jellyfin
+tree.*
 
 ## Run it
 
@@ -119,6 +120,12 @@ In the recorder UI, set `DEFAULT_STREAM_URL=http://pi-recorder:8000/stream`
 in `docker-compose.yml` (already the default) and the gain slider auto-appears
 in the sidebar after `connect`. Non-Pi streams (e.g. SomaFM) work the same
 way — the slider stays hidden when `/info` isn't reachable.
+
+## Network / trust model
+
+This app is designed for a **trusted, single-user home LAN** and ships with
+no authentication. If you expose it beyond a private network, put it
+behind your own auth layer (reverse-proxy basic-auth, SSO, etc.).
 
 ## Contributing
 

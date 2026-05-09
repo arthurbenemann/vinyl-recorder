@@ -1,0 +1,280 @@
+name: Screenshots
+
+# Refreshes images/*.png whenever a PR (or push to main) touches the UI or
+# the screenshot tooling. The regenerated PNGs are committed back to the
+# source branch so the README's screenshot section never drifts from the
+# UI it documents — and so reviewers see the new screenshots inline on the
+# PR diff. Fork PRs can't push back; for those we upload the regenerated
+# images as an artifact + leave a comment, and the commit-back happens on
+# the maintainer's follow-up push.
+
+on:
+  pull_request:
+    paths:
+      - "app/static/**"
+      - "app/main.py"
+      - "app/routes/**"
+      - "app/templates/**"
+      - "tools/screenshots.py"
+      - "tools/seed_demo_data.py"
+      - "docker-compose*.yml"
+      - "test-streams/**"
+      - ".github/workflows/screenshots.yml"
+  push:
+    branches: [main]
+    paths:
+      - "app/static/**"
+      - "app/main.py"
+      - "app/routes/**"
+      - "app/templates/**"
+      - "tools/screenshots.py"
+      - "tools/seed_demo_data.py"
+      - "docker-compose*.yml"
+      - "test-streams/**"
+      - ".github/workflows/screenshots.yml"
+  workflow_dispatch:
+
+# Cancel an in-flight run when a newer push lands on the same ref. A stale
+# screenshot run is wasted compute — the next one will overwrite its
+# output anyway.
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+# Default the workflow to read-only; the `regenerate` job opts into
+# `contents: write` for the commit-back step. Mirrors ci.yml's posture.
+permissions:
+  contents: read
+
+jobs:
+  regenerate:
+    name: Regenerate UI screenshots
+    runs-on: ubuntu-latest
+    # Job-level write permission so the commit-back step can push refreshed
+    # PNGs to the source branch. Skipped automatically for fork PRs (see
+    # the conditional on the commit step) — GITHUB_TOKEN can't write to a
+    # fork's branch regardless.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # For PRs from the same repo, check out the PR head so the
+          # commit-back lands on the source branch (default `merge` ref is
+          # detached and can't be pushed). For push events / dispatch this
+          # falls back to the default ref. Fork PRs still produce a
+          # detached state for `head_ref`, but we skip the push for those.
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          # If a fork PR, head.ref points at the fork — fetch from the
+          # right place so the checkout is the actual PR head.
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          # Need full history so the commit-back doesn't accidentally
+          # rewrite the branch (shallow + push gets rejected as
+          # non-fast-forward against the remote tip).
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Cache Playwright browsers
+        # Mirrors ci.yml's e2e job: chromium + Linux deps are ~150 MB and
+        # cache across runs so `playwright install` is near-no-op on warm
+        # runners. Key on this workflow file's hash so a deliberate browser
+        # version bump invalidates.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('.github/workflows/screenshots.yml') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright + Python deps
+        # `playwright` drives the screenshot capture; `Pillow` powers the
+        # perceptual-diff gate (tools/compare_screenshots.py). Adding both
+        # to the install line keeps the workflow self-contained — neither
+        # is a runtime app dep.
+        run: |
+          pip install playwright Pillow
+          playwright install --with-deps chromium
+
+      - name: Build stack with layer cache
+        # Same bake-action pattern as ci.yml's e2e job — pulls/pushes
+        # layer cache to GHA Cache (separate scope to avoid stomping
+        # ci.yml's). The screenshots job uses the dev+test overlay so the
+        # recorder builds from the PR's checkout (not the published
+        # image) and the synthetic test-streams source comes up alongside.
+        uses: docker/bake-action@v6
+        with:
+          files: |
+            docker-compose.yml
+            docker-compose.dev.yml
+            docker-compose.test.yml
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=screenshots
+            *.cache-to=type=gha,scope=screenshots,mode=max
+
+      - name: Bring up the stack
+        # `--wait` blocks until each service's healthcheck flips to
+        # healthy — same readiness contract the e2e fixture uses, so by
+        # the time this returns FastAPI is serving /health and the
+        # synthetic stream is reachable from the recorder.
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.dev.yml \
+            -f docker-compose.test.yml \
+            up -d --wait
+
+      - name: Wait for /health
+        # Belt-and-braces: --wait already gates on the Dockerfile's
+        # HEALTHCHECK, but if a future change drops that we still want
+        # the screenshot job to fail loudly with a clear error rather
+        # than racing the FastAPI lifespan.
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null; then
+              echo "recorder healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "recorder /health never responded"
+          exit 1
+
+      - name: Seed demo data
+        # Copy tools/ into the running container then exec the seed script
+        # there — the runtime Dockerfile only ships /app, so tools/ isn't
+        # baked in. Running inside the container guarantees the same Python
+        # runtime + modules the app uses, and /output is bind-mounted to
+        # ./output on the host so the live app picks the seeded files up
+        # via its normal directory scans. The script accepts --output-dir
+        # per the contract with the parallel worker writing tools/.
+        run: |
+          docker cp tools/. vinyl-recorder:/app/tools/
+          docker exec vinyl-recorder \
+            python /app/tools/seed_demo_data.py --output-dir /output
+
+      - name: Capture screenshots
+        # The script drives a headless chromium against the live recorder
+        # and writes images/library.png, images/album-combine.png,
+        # images/split-editor.png. Selector mismatches (UI changed,
+        # script not updated) bubble up as a non-zero exit and fail the
+        # workflow — that's the whole point of this job.
+        run: |
+          python tools/screenshots.py \
+            --url http://127.0.0.1:8080 \
+            --output-dir ./images
+
+      - name: Detect visible changes
+        id: diff
+        # Perceptual diff against HEAD instead of byte-equality. PNG
+        # encoder timing + chromium sub-pixel rendering produce small
+        # byte differences even when the visible UI is identical, which
+        # would otherwise spam the PR with no-op refresh commits. The
+        # script writes `changed=true|false` to stdout per the threshold;
+        # piping that into $GITHUB_OUTPUT carries the verdict to the
+        # commit-back step's `if:` condition.
+        run: |
+          python tools/compare_screenshots.py --directory images >> "$GITHUB_OUTPUT"
+
+      - name: Upload screenshots artifact
+        # Always upload — even when the commit-back path runs, the
+        # artifact is the only way for fork-PR reviewers to see the
+        # regenerated PNGs before merge. Visible from the PR's Checks
+        # tab.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ github.run_number }}
+          path: images/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Commit refreshed screenshots
+        # Same-repo PRs + push events get a commit back to the source
+        # branch. Fork PRs can't (GITHUB_TOKEN has no write on the
+        # fork), and workflow_dispatch on a fork would be similar — gate
+        # on the head repo matching this repo. The `[skip-changelog]`
+        # marker keeps these auto-commits out of the generated changelog
+        # (git-cliff filters on commit message conventions, see
+        # CONTRIBUTING.md).
+        if: |
+          steps.diff.outputs.changed == 'true' &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add images/
+          git commit -m "chore(screenshots): refresh UI screenshots [skip-changelog]"
+          git push
+
+      - name: Comment on fork PR
+        # Fork PRs can't be pushed to from this workflow. Leave a note so
+        # contributors aren't confused when the screenshots they see in
+        # the artifact don't appear in the PR diff. The commit-back will
+        # happen automatically on the maintainer's follow-up push (or
+        # via a manual workflow_dispatch after merge).
+        if: |
+          steps.diff.outputs.changed == 'true' &&
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body =
+              `Screenshots regenerated — they'll refresh after merge.\n\n` +
+              `Fork PRs can't be pushed to from this workflow, so the ` +
+              `regenerated PNGs aren't committed back here. They're ` +
+              `available as the \`screenshots-${{ github.run_number }}\` ` +
+              `artifact on [this run](${runUrl}); a maintainer can apply ` +
+              `them on merge.`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Dump container state on failure
+        # Mirrors ci.yml's e2e job. If `tools/screenshots.py` exits
+        # non-zero (selector not found because UI changed, page never
+        # loaded, etc.) the most useful diagnostic is the recorder's
+        # logs at the moment of capture — surface them inline so the
+        # failing run is debuggable without re-running locally.
+        if: failure()
+        run: |
+          echo "=== docker compose ps ==="
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.dev.yml \
+            -f docker-compose.test.yml \
+            ps -a || true
+          echo "=== docker compose logs ==="
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.dev.yml \
+            -f docker-compose.test.yml \
+            logs --no-color || true
+          echo "=== docker ps -a ==="
+          docker ps -a || true
+
+      - name: Tear down stack
+        # Always run so a failed screenshot capture doesn't leave the
+        # stack + bind-mounted ./output around on the runner (it's
+        # ephemeral, but `down -v` also removes the named volumes a
+        # future re-run would otherwise inherit).
+        if: always()
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f docker-compose.dev.yml \
+            -f docker-compose.test.yml \
+            down -v || true
