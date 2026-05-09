@@ -1,8 +1,40 @@
+# Anything that doesn't contribute to the image. Keep this aggressive —
+# the version stage runs `git describe` against `.git`, so .git stays in
+# the build context, but every other directory should be excluded so the
+# context tar stays small and a stray `.env` can't sneak into a layer.
+
+# Project-managed
 output/
 __pycache__/
 *.pyc
+*.pyo
+.coverage
+coverage.xml
+.pytest_cache/
+
+# IDE / editor cruft
 .claude/
-node_modules/
-.venv/
 .idea/
 .vscode/
+.DS_Store
+.venv/
+node_modules/
+
+# Tests + dev infra (image runtime never reads them)
+tests/
+test-streams/
+.github/
+docker-compose.dev.yml
+docker-compose.test.yml
+docker-compose.override.yml
+
+# Docs / project meta
+*.md
+LICENSE
+cliff.toml
+Makefile
+
+# Secrets — never let a developer's .env land in a layer.
+.env
+.env.*
+!.env.example
