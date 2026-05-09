@@ -1076,17 +1076,12 @@ function _albumRowHtml(a, opts) {
 }
 
 function _renderAlbumSection(opts) {
-  // opts: { all, sectionId, countId, tbodyId, label, emptyMsg, checkClass,
+  // opts: { all, countId, tbodyId, label, emptyMsg, checkClass,
   //         toggleRow, updateBulkBar, selected }
   const filtered = sortFiles(opts.all.filter(rowMatches));
   const total = opts.all.length;
   const shown = filtered.length;
   const filterActive = !!libFilterText.trim();
-  // Hide the section entirely only when there are zero albums to begin with.
-  // While filtering, keep the section visible so the user sees the "0 of N"
-  // count rather than the section vanishing under them.
-  const section = document.getElementById(opts.sectionId);
-  if (section) section.hidden = total === 0;
   const countEl = document.getElementById(opts.countId);
   if (countEl) {
     countEl.textContent = filterActive
@@ -1109,7 +1104,6 @@ function _renderAlbumSection(opts) {
 function refreshAlbumsRender() {
   _renderAlbumSection({
     all:           _albumsBySplit(false),
-    sectionId:     'in-progress-section',
     countId:       'in-progress-count',
     tbodyId:       'albums-tbody',
     label:         'album',
@@ -1121,7 +1115,6 @@ function refreshAlbumsRender() {
   });
   _renderAlbumSection({
     all:           _albumsBySplit(true),
-    sectionId:     'music-section',
     countId:       'music-count',
     tbodyId:       'music-tbody',
     label:         'album',
