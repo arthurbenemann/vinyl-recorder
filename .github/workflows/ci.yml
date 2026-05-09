@@ -5,6 +5,18 @@ on:
     branches: [main]
   pull_request:
 
+# Cancel an in-flight run when a newer push lands on the same ref. Saves a
+# couple of minutes on the typical PR-update flow without losing main's
+# trailing run (different `github.ref`).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Default the workflow to read-only. Individual jobs that need more (none
+# of them currently) opt in explicitly.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint Python
@@ -34,15 +46,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install test deps
         # Pinned to the same shape the runtime image installs (FastAPI +
         # uvicorn) plus pytest tooling. httpx is what TestClient uses
         # internally; pytest-cov publishes a coverage report at the end.
-        run: pip install pytest pytest-cov fastapi "uvicorn[standard]" httpx
+        run: pip install pytest pytest-cov pytest-xdist pytest-timeout fastapi "uvicorn[standard]" httpx pydantic
 
       - name: Run unit + API tests with coverage
-        run: pytest --cov=app --cov-report=term-missing --cov-report=xml
+        # `--cov-fail-under` is the floor; bump it whenever a PR meaningfully
+        # raises real coverage. Set deliberately below the current baseline so
+        # day-to-day PRs that touch the same line counts don't fail.
+        run: pytest --cov=app --cov-report=term-missing --cov-report=xml --cov-fail-under=70 -n auto
 
       - name: Upload coverage artifact
         if: always()

@@ -49,7 +49,8 @@ RUN apk add --no-cache \
         ffmpeg flac \
         libstdc++ \
         boost-program_options boost-filesystem boost-regex \
-        libsndfile gd libid3tag libmad
+        libsndfile gd libid3tag libmad \
+        tini
 
 COPY --from=aw-builder /build/audiowaveform/audiowaveform /usr/local/bin/audiowaveform
 RUN audiowaveform --version
@@ -70,4 +71,8 @@ EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
     CMD python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2).status==200 else 1)" || exit 1
 
+# tini as PID 1 forwards SIGTERM/SIGINT cleanly to Python and reaps any
+# stray ffmpeg children that exit while Python is busy. Without it,
+# Python-as-PID-1 leaves zombies until it gets around to wait()ing them.
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["python3", "main.py"]
