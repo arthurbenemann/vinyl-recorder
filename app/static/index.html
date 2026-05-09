@@ -13,7 +13,6 @@
 <div class="header">
   <div class="logo">Vinyl Recorder <sub>PCM → FLAC</sub></div>
   <div class="header-right">
-    <button class="header-link" id="pi-deploy-btn" onclick="openPiDeploy()" title="Install pi-recorder on a Raspberry Pi over SSH (one-time setup)">deploy to pi</button>
     <span id="disk-free">— GB free</span>
     <span class="version-tag" id="version-tag" hidden></span>
     <button type="button" class="status-indicator" id="status-indicator" onclick="toggleHealthPanel()" title="Stream health" aria-expanded="false" aria-controls="health-panel">
@@ -21,6 +20,12 @@
       <span id="stext">disconnected</span>
       <span class="health-chevron" id="health-chevron" hidden>▼</span>
     </button>
+    <div class="header-menu">
+      <button class="header-menu-btn" id="header-menu-btn" onclick="toggleHeaderMenu(event)" aria-haspopup="true" aria-expanded="false" title="More">⋮</button>
+      <div class="header-menu-pop" id="header-menu-pop" hidden role="menu">
+        <button class="header-menu-item" id="pi-deploy-btn" role="menuitem" onclick="openPiDeploy(); closeHeaderMenu()">deploy to pi…</button>
+      </div>
+    </div>
     <div class="health-panel" id="health-panel" hidden>
       <div class="health-row"><span class="health-label">level</span><span id="hp-level">—</span></div>
       <div class="health-row"><span class="health-label">bytes/sec</span><span id="hp-bps">—</span></div>

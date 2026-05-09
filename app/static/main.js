@@ -571,6 +571,53 @@ function applyHealthState(h) {
   }
 }
 
+// ── Header kebab menu ─────────────────────────────────────────────────────
+// Single dropdown anchored to the ⋮ trigger; click-outside or ESC closes
+// it, picking an item closes it too (the item handler calls closeHeaderMenu
+// inline). Held in a separate function pair so a future second item doesn't
+// have to re-derive the open/close logic.
+function toggleHeaderMenu(e) {
+  if (e) e.stopPropagation();
+  const pop = document.getElementById('header-menu-pop');
+  const btn = document.getElementById('header-menu-btn');
+  if (!pop || !btn) return;
+  if (pop.hidden) {
+    pop.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    document.addEventListener('click', _headerMenuOutsideClick);
+    document.addEventListener('keydown', _headerMenuEsc);
+  } else {
+    closeHeaderMenu();
+  }
+}
+function closeHeaderMenu() {
+  const pop = document.getElementById('header-menu-pop');
+  const btn = document.getElementById('header-menu-btn');
+  if (!pop || pop.hidden) return;
+  pop.hidden = true;
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+  document.removeEventListener('click', _headerMenuOutsideClick);
+  document.removeEventListener('keydown', _headerMenuEsc);
+}
+function _headerMenuOutsideClick(e) {
+  const pop = document.getElementById('header-menu-pop');
+  if (!pop || pop.hidden) return;
+  if (pop.contains(e.target)) return;
+  // The trigger button toggles via its own onclick; ignore the same click
+  // bubbling here so we don't immediately re-close the menu we just opened.
+  const btn = document.getElementById('header-menu-btn');
+  if (btn && btn.contains(e.target)) return;
+  closeHeaderMenu();
+}
+function _headerMenuEsc(e) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeHeaderMenu();
+    const btn = document.getElementById('header-menu-btn');
+    if (btn) try { btn.focus(); } catch (e) {}
+  }
+}
+
 function toggleHealthPanel() {
   if (!upstreamConnected) return;  // nothing to show until first health tick
   const panel = document.getElementById('health-panel');

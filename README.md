@@ -94,8 +94,9 @@ The Pi only needs Python 3 and `alsa-utils` (both already on a fresh
 Raspberry Pi OS install — no `pip install` step). You have two options:
 
 **One-click from the recorder UI** — easier for re-deploys when
-`pi/server.py` changes. Click **deploy to pi** in the top-right of the
-recorder, fill in host / username / password, hit deploy. The recorder
+`pi/server.py` changes. Open the **⋮** menu in the top-right of the
+recorder, pick **deploy to pi…**, fill in host / username / password,
+hit deploy. The recorder
 SSHes in, copies `pi/server.py` and `pi/pi-recorder.service` into place,
 runs `systemctl daemon-reload` + `enable --now`, and reports the
 service's `is-active` status. Same trust model as everything else in this
