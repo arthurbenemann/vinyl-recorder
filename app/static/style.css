@@ -502,6 +502,7 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .combine-wave-overlay { position: absolute; inset: 0; cursor: crosshair; }
 .combine-wave-readout { position: absolute; top: 4px; right: 6px; padding: 2px 6px; background: rgba(0,0,0,0.6); border-radius: 3px; font-size: 10px; color: var(--text); pointer-events: none; font-variant-numeric: tabular-nums; }
 .combine-wave-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(10,14,22,0.7); color: var(--muted); font-size: 11px; }
+.combine-wave-loading[hidden] { display: none; }
 .combine-wave-help { font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
 
 /* Bulk-action bar */
