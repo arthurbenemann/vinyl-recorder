@@ -187,3 +187,15 @@ class RenameRequest(BaseModel):
 
 class ConnectRequest(BaseModel):
     stream_url: str
+
+
+class PiDeployRequest(BaseModel):
+    """Push the bundled pi/server.py + pi-recorder.service to a Pi over SSH.
+
+    Replaces the manual scp / ssh flow in the README. Password is used for
+    SSH auth and (when needed) sudo on the remote — never persisted server-
+    side, never echoed back in the response."""
+    host: str
+    username: str = "pi"
+    password: str
+    port: int = 22

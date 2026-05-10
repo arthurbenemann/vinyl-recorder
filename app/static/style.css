@@ -26,6 +26,28 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 #disk-free.warn { color: var(--amber); }
 .version-tag { font-size: 10px; letter-spacing: 0.05em; color: var(--muted); padding: 2px 6px; border: 0.5px solid var(--border2); border-radius: 4px; font-variant-numeric: tabular-nums; }
 .version-tag.dev { color: var(--amber); border-color: rgba(186,117,23,0.35); }
+/* Header kebab menu — currently hosts only "deploy to pi…", a one-time
+   setup step that doesn't deserve a permanent toolbar slot. The menu
+   itself is anchored to the trigger so future entries pile up cleanly. */
+.header-menu { position: relative; display: inline-flex; }
+.header-menu-btn { background: transparent; border: 0; color: var(--muted); font-size: 18px; line-height: 1; padding: 2px 6px; cursor: pointer; border-radius: 4px; }
+.header-menu-btn:hover { color: var(--text); background: var(--surface2); }
+.header-menu-btn[aria-expanded="true"] { color: var(--text); background: var(--surface2); }
+.header-menu-pop {
+  position: absolute; right: 0; top: calc(100% + 6px);
+  background: var(--surface); border: 0.5px solid var(--border2); border-radius: 6px;
+  padding: 4px; min-width: 160px; z-index: 30;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.header-menu-pop[hidden] { display: none; }
+.header-menu-item {
+  background: transparent; border: 0; text-align: left;
+  color: var(--text); font-family: var(--mono); font-size: 12px;
+  padding: 6px 10px; border-radius: 4px; cursor: pointer; white-space: nowrap;
+}
+.header-menu-item:hover { background: var(--surface2); }
+.header-menu-item:disabled { opacity: 0.5; cursor: wait; }
 /* Stream-health button: an always-visible affordance in the header that
    reads as clickable from idle. Border + padding give it button shape; the
    chevron is dimmed until it's actionable (i.e. once connected). */
@@ -472,6 +494,20 @@ textarea:focus-visible,
 .tracks-sub .ttitle { color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tracks-sub .tdur { font-variant-numeric: tabular-nums; }
 .tracks-sub .tsize { font-variant-numeric: tabular-nums; min-width: 60px; text-align: right; }
+
+/* Pi deployment modal — single-column form + scrolling log readout. */
+.pi-deploy-grid { display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 12px; }
+.pi-deploy-log {
+  margin-top: 14px; background: var(--surface); border: 0.5px solid var(--border);
+  border-radius: 6px; padding: 10px 12px; font-family: var(--mono); font-size: 11px;
+  line-height: 1.7; color: var(--muted); max-height: 240px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-word;
+}
+.pi-deploy-log[hidden] { display: none; }
+.pi-deploy-log .ok  { color: var(--green); }
+.pi-deploy-log .err { color: var(--accent); }
+.pi-deploy-log .info { color: var(--blue); }
+.pi-deploy-status code { background: var(--surface2); border-radius: 3px; padding: 0 4px; }
 
 /* Wave editor — toolbar */
 /* Editor header right cluster: the auto-saved indicator + close button.

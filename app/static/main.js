@@ -597,6 +597,53 @@ function applyHealthState(h) {
   }
 }
 
+// ── Header kebab menu ─────────────────────────────────────────────────────
+// Single dropdown anchored to the ⋮ trigger; click-outside or ESC closes
+// it, picking an item closes it too (the item handler calls closeHeaderMenu
+// inline). Held in a separate function pair so a future second item doesn't
+// have to re-derive the open/close logic.
+function toggleHeaderMenu(e) {
+  if (e) e.stopPropagation();
+  const pop = document.getElementById('header-menu-pop');
+  const btn = document.getElementById('header-menu-btn');
+  if (!pop || !btn) return;
+  if (pop.hidden) {
+    pop.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+    document.addEventListener('click', _headerMenuOutsideClick);
+    document.addEventListener('keydown', _headerMenuEsc);
+  } else {
+    closeHeaderMenu();
+  }
+}
+function closeHeaderMenu() {
+  const pop = document.getElementById('header-menu-pop');
+  const btn = document.getElementById('header-menu-btn');
+  if (!pop || pop.hidden) return;
+  pop.hidden = true;
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+  document.removeEventListener('click', _headerMenuOutsideClick);
+  document.removeEventListener('keydown', _headerMenuEsc);
+}
+function _headerMenuOutsideClick(e) {
+  const pop = document.getElementById('header-menu-pop');
+  if (!pop || pop.hidden) return;
+  if (pop.contains(e.target)) return;
+  // The trigger button toggles via its own onclick; ignore the same click
+  // bubbling here so we don't immediately re-close the menu we just opened.
+  const btn = document.getElementById('header-menu-btn');
+  if (btn && btn.contains(e.target)) return;
+  closeHeaderMenu();
+}
+function _headerMenuEsc(e) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeHeaderMenu();
+    const btn = document.getElementById('header-menu-btn');
+    if (btn) try { btn.focus(); } catch (e) {}
+  }
+}
+
 function toggleHealthPanel() {
   if (!upstreamConnected) return;  // nothing to show until first health tick
   const panel = document.getElementById('health-panel');
@@ -812,7 +859,10 @@ function updateBulkBar() {
   const checkAll = document.getElementById('check-all');
   if (checkAll) checkAll.checked = visible > 0 && visSelected === visible;
   const combineBtn = document.getElementById('combine-btn');
-  if (combineBtn) combineBtn.disabled = selected.size < 1;
+  if (combineBtn) {
+    combineBtn.disabled = selected.size < 1;
+    combineBtn.textContent = selected.size === 1 ? 'tag as album' : 'combine into album';
+  }
 }
 
 function toggleRow(fname, checked) {
@@ -929,7 +979,6 @@ function refreshLibRender() {
       // cell — including padding and whitespace to the right of short
       // titles — is a click target.
       const previewBtn = `<button class="icon-btn preview-btn ${playing}" data-fname="${fn}" data-kind="lib" title="Preview" aria-label="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>`;
-      const tagBtn = _actionBtn('openTag', f.filename, {label: 'Tag album', glyph: '✎'});
       const dlLink = _downloadLink(`/api/download/${encodeURIComponent(f.filename)}`, 'Download');
       const delBtn = _actionBtn('deleteFile', f.filename, {label: 'Delete', glyph: '✕', danger: true});
       // Inline rename pencil: same handler the dblclick uses. Filename
@@ -952,7 +1001,7 @@ function refreshLibRender() {
         <td style="color:var(--muted)">${fmtDuration(f.duration_seconds)}</td>
         <td style="color:var(--muted)">${f.size_mb} MB</td>
         <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="N-bit / M kHz">${fmtSourceFormat(f)}</td>
-        <td style="white-space:nowrap;text-align:right">${previewBtn}${tagBtn}${dlLink}${delBtn}</td>
+        <td style="white-space:nowrap;text-align:right">${previewBtn}${dlLink}${delBtn}</td>
       </tr>`;
   }).join('');
   _setTbodyIfChanged(tbody, _libRowsHtml);
@@ -1202,8 +1251,8 @@ function _albumRowHtml(a, opts) {
   const demoteHandler = a.split ? 'demoteAlbumKeepMusic' : 'demoteAlbumDrop';
   const demoteLabel = a.split ? 'Demote to Raw (music/ files preserved)' : 'Demote to Raw';
   const tagBtn = _actionBtn('openTagAlbum', a.album_id, {label: 'Edit tags', glyph: '✎'});
-  const splitBtn = _actionBtn('openWaveEditor', a.album_id, {label: splitTitle, glyph: '⌇'});
-  const demBtn = _actionBtn(demoteHandler, a.album_id, {label: demoteLabel, glyph: '↩'});
+  const splitBtn = _actionBtn('openWaveEditor', a.album_id, {label: splitTitle, glyph: '✂'});
+  const demBtn = _actionBtn(demoteHandler, a.album_id, {label: demoteLabel, glyph: '⤺'});
   const delBtn = _actionBtn('deleteAlbum', a.album_id, {label: 'Delete album', glyph: '✕', danger: true});
   return `
   <tr data-album-id="${fn}">
@@ -1537,9 +1586,9 @@ function openTag(fname) {
   const f = filesByName[fname];
   if (!f) return;
   // openTagAlbum / openCombine pre-set tagPanelTarget for non-default modes.
-  // For a direct openTag call (raw row's ✎, recording-finished WS event),
-  // fall through to single-side promote and clear any stale album_id /
-  // filenames target left from a previous panel.
+  // For a direct openTag call (recording-finished WS event, inline rename
+  // fallthrough), fall through to single-side promote and clear any stale
+  // album_id / filenames target left from a previous panel.
   if (!tagPanelTarget || tagPanelTarget.filename !== undefined) {
     tagPanelTarget = { filename: fname };
   }
@@ -1551,7 +1600,7 @@ function openTag(fname) {
   document.getElementById('tag-modal-title').textContent =
     isCombine ? 'Combine into album' : 'Tag album';
   document.getElementById('tag-apply-btn').textContent =
-    isCombine ? 'combine into album' : 'apply tags';
+    isCombine ? 'combine' : 'apply tags';
   document.getElementById('combine-sides-section').hidden = !isCombine;
   if (isCombine) {
     const n = tagPanelTarget.filenames.length;
@@ -2197,6 +2246,127 @@ function _wireSectionCollapse(id) {
   });
 }
 ['raw-section', 'in-progress-section', 'music-section'].forEach(_wireSectionCollapse);
+
+// ── Pi deploy modal ───────────────────────────────────────────────────────
+// Pushes pi/server.py + pi-recorder.service to a Raspberry Pi over SSH.
+// Mirrors the manual scp/ssh ceremony documented in README.md "Install on
+// the Pi". Host + username persist in localStorage so a repeat push
+// (server.py update) only needs the password.
+const PI_DEPLOY_HOST_KEY = 'piDeploy.host';
+const PI_DEPLOY_USER_KEY = 'piDeploy.user';
+let _piDeployFocusReturn = null;
+
+function openPiDeploy() {
+  _piDeployFocusReturn = document.activeElement;
+  const m = document.getElementById('pi-deploy-modal');
+  if (!m) return;
+  // Restore last-used host/user; pull a sensible default for host from
+  // the configured stream URL when nothing's saved yet (e.g. on a fresh
+  // install the user typed http://pi-recorder:8000/stream into
+  // DEFAULT_STREAM_URL — that hostname is the deploy target too).
+  let savedHost = '';
+  try { savedHost = localStorage.getItem(PI_DEPLOY_HOST_KEY) || ''; } catch(e) {}
+  if (!savedHost) {
+    try {
+      const u = new URL(document.getElementById('stream-url').value);
+      // Skip the default SomaFM example — only suggest hostnames that
+      // could plausibly be a Pi (the `/info` endpoint is the canonical
+      // signal but probing it from here is overkill for a placeholder).
+      if (u.hostname && !/somafm\.com$/i.test(u.hostname)) savedHost = u.hostname;
+    } catch (e) {}
+  }
+  document.getElementById('pi-host').value = savedHost;
+  let savedUser = 'pi';
+  try { savedUser = localStorage.getItem(PI_DEPLOY_USER_KEY) || 'pi'; } catch(e) {}
+  document.getElementById('pi-user').value = savedUser;
+  document.getElementById('pi-pass').value = '';
+  // Clear prior log so a re-open after a failed deploy starts fresh.
+  const logEl = document.getElementById('pi-deploy-log');
+  logEl.innerHTML = '';
+  logEl.hidden = true;
+  m.hidden = false;
+  document.addEventListener('keydown', piDeployEscHandler);
+  // Focus the first empty field so a returning user doesn't have to
+  // tab through the saved ones.
+  const firstEmpty = ['pi-host', 'pi-user', 'pi-pass']
+    .map(id => document.getElementById(id))
+    .find(el => !el.value);
+  (firstEmpty || document.getElementById('pi-pass')).focus();
+}
+
+function closePiDeploy() {
+  document.getElementById('pi-deploy-modal').hidden = true;
+  document.removeEventListener('keydown', piDeployEscHandler);
+  // Wipe the password field on close so it never lingers in DOM if the
+  // user reopens the modal later.
+  const pw = document.getElementById('pi-pass');
+  if (pw) pw.value = '';
+  if (_piDeployFocusReturn && typeof _piDeployFocusReturn.focus === 'function') {
+    try { _piDeployFocusReturn.focus(); } catch (e) {}
+  }
+  _piDeployFocusReturn = null;
+}
+const piDeployEscHandler = makeModalEscHandler(closePiDeploy);
+
+function _piDeployLogLine(text, kind) {
+  const logEl = document.getElementById('pi-deploy-log');
+  if (!logEl) return;
+  logEl.hidden = false;
+  const div = document.createElement('div');
+  if (kind) div.className = kind;
+  div.textContent = text;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function runPiDeploy() {
+  const host = document.getElementById('pi-host').value.trim();
+  const username = document.getElementById('pi-user').value.trim();
+  const password = document.getElementById('pi-pass').value;
+  if (!host) { toast('✗ host is required', 'err'); return; }
+  if (!username) { toast('✗ username is required', 'err'); return; }
+  if (!password) { toast('✗ password is required', 'err'); return; }
+  // Persist non-secret fields so a re-deploy only needs the password.
+  try {
+    localStorage.setItem(PI_DEPLOY_HOST_KEY, host);
+    localStorage.setItem(PI_DEPLOY_USER_KEY, username);
+  } catch (e) {}
+
+  const goBtn = document.getElementById('pi-deploy-go');
+  const headerBtn = document.getElementById('pi-deploy-btn');
+  goBtn.disabled = true; goBtn.textContent = 'deploying…';
+  if (headerBtn) headerBtn.disabled = true;
+  const logEl = document.getElementById('pi-deploy-log');
+  logEl.innerHTML = '';
+  logEl.hidden = false;
+  _piDeployLogLine(`▶ deploying to ${username}@${host}…`, 'info');
+
+  try {
+    const r = await fetch('/api/pi/deploy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ host, username, password }),
+    });
+    let payload = null;
+    try { payload = await r.json(); } catch(e) {}
+    if (!r.ok) {
+      const detail = (payload && payload.detail) || ('HTTP ' + r.status);
+      _piDeployLogLine('✗ ' + detail, 'err');
+      toast('✗ pi deploy failed: ' + detail, 'err');
+      return;
+    }
+    const lines = (payload && payload.log) || [];
+    for (const line of lines) _piDeployLogLine(line);
+    _piDeployLogLine('✓ pi-recorder is up. you can now point the stream URL at this host.', 'ok');
+    toast('✓ pi deployed to ' + host, 'ok');
+  } catch (e) {
+    _piDeployLogLine('✗ ' + (e.message || e), 'err');
+    toast('✗ pi deploy failed: ' + (e.message || e), 'err');
+  } finally {
+    goBtn.disabled = false; goBtn.textContent = 'deploy';
+    if (headerBtn) headerBtn.disabled = false;
+  }
+}
 
 applyConfig();
 ensureAudioGraph();

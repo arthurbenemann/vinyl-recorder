@@ -88,6 +88,40 @@ most things belong somewhere, even if just under Changes). Example:
 `main` are skipped automatically — open a docs PR if you need one in
 the changelog.
 
+## Pi capture service — manual deploy
+
+The recorder's **deploy to pi…** menu item handles the common case. Use
+the manual recipe below for a custom SSH port, an air-gapped Pi, or any
+other reason the in-app flow doesn't fit. These are exactly the steps
+the in-app deploy button automates.
+
+```bash
+# from this repo on your dev machine
+scp pi/server.py pi/pi-recorder.service pi@pi-recorder:/tmp/
+
+# on the Pi
+ssh pi@pi-recorder
+sudo mkdir -p /opt/pi-recorder
+sudo mv /tmp/server.py /opt/pi-recorder/
+sudo mv /tmp/pi-recorder.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now pi-recorder
+systemctl status pi-recorder
+```
+
+### Verify
+
+For a regular install, just **connect** in the recorder UI — VU meters
+will move and the gain slider will appear if `/info` is reachable. Use
+the curl probes below when something looks wrong:
+
+```bash
+curl http://pi-recorder:8000/info | jq         # gain + wiring state
+ffprobe http://pi-recorder:8000/stream         # pcm_s24le / 96000 Hz / stereo
+curl -X POST -H 'Content-Type: application/json' \
+     -d '{"db": 12}' http://pi-recorder:8000/gain
+```
+
 ## Releasing
 
 From a clean `main`, either bump the last tag:

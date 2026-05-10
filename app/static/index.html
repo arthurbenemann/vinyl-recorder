@@ -20,6 +20,12 @@
       <span id="stext">disconnected</span>
       <span class="health-chevron" id="health-chevron" hidden>▼</span>
     </button>
+    <div class="header-menu">
+      <button class="header-menu-btn" id="header-menu-btn" onclick="toggleHeaderMenu(event)" aria-haspopup="true" aria-expanded="false" title="More">⋮</button>
+      <div class="header-menu-pop" id="header-menu-pop" hidden role="menu">
+        <button class="header-menu-item" id="pi-deploy-btn" role="menuitem" onclick="openPiDeploy(); closeHeaderMenu()">deploy to pi…</button>
+      </div>
+    </div>
     <div class="health-panel" id="health-panel" hidden>
       <div class="health-row"><span class="health-label">level</span><span id="hp-level">—</span></div>
       <div class="health-row"><span class="health-label">bytes/sec</span><span id="hp-bps">—</span></div>
@@ -451,6 +457,37 @@
       </div>
 
     </div>
+  </div>
+</div>
+
+<!-- Pi deployment modal — pushes pi/server.py + pi-recorder.service to a
+     Raspberry Pi over SSH and enables the systemd unit. -->
+<div class="modal-backdrop" id="pi-deploy-modal" hidden role="dialog" aria-modal="true" aria-labelledby="pi-deploy-title" onclick="if(event.target===this)closePiDeploy()">
+  <div class="modal" style="width:560px">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="pi-deploy-title">Deploy pi-recorder</div>
+        <div class="modal-sub">Pushes pi/server.py + the systemd unit over SSH and enables the service.</div>
+      </div>
+      <button class="btn-small" onclick="closePiDeploy()">close</button>
+    </div>
+
+    <div class="pi-deploy-grid">
+      <div class="field"><label>Host / IP</label><input id="pi-host" placeholder="pi-recorder.local or 192.168.1.42" autocomplete="off"></div>
+      <div class="field"><label>Username</label><input id="pi-user" value="pi" autocomplete="off"></div>
+      <div class="field"><label>Password</label><input id="pi-pass" type="password" autocomplete="new-password"></div>
+    </div>
+
+    <div class="search-status" id="pi-deploy-status">
+      Authenticates over SSH; the password is also forwarded to <code>sudo -S</code> for the install steps. Nothing is stored.
+    </div>
+
+    <div class="action-row" style="margin-top:14px">
+      <button class="btn primary" id="pi-deploy-go" onclick="runPiDeploy()">deploy</button>
+      <button class="btn" onclick="closePiDeploy()">cancel</button>
+    </div>
+
+    <div class="pi-deploy-log" id="pi-deploy-log" hidden></div>
   </div>
 </div>
 
