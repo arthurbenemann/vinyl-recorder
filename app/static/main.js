@@ -730,6 +730,7 @@ function onLibSearchInput(v) {
   localStorage.setItem('lib.filterText', v);
   refreshLibRender();
   refreshAlbumsRender();
+  _announceLibCount();
 }
 
 function clearLibFilter() {
@@ -737,6 +738,24 @@ function clearLibFilter() {
   localStorage.removeItem('lib.filterText');
   refreshLibRender();
   refreshAlbumsRender();
+  _announceLibCount();
+}
+
+// Push a polite "N results for …" message into the library search status
+// live region so screen-reader users get audible feedback when the filter
+// changes. Re-counts across the three sections (raw / in-progress / music)
+// so the announcement reflects the visible row total. Empty when no filter
+// is active — the live region's `aria-atomic="true"` then drops the prior
+// count from the AT buffer instead of repeating it.
+function _announceLibCount() {
+  const el = document.getElementById('lib-search-status');
+  if (!el) return;
+  const q = libFilterText.trim();
+  if (!q) { el.textContent = ''; return; }
+  let n = 0;
+  for (const f of Object.values(filesByName)) if (rowMatches(f)) n += 1;
+  for (const a of Object.values(albumsByName)) if (rowMatches(a)) n += 1;
+  el.textContent = `${n} ${n === 1 ? 'result' : 'results'} for "${q}"`;
 }
 
 const SORT_KEYS = {
@@ -823,35 +842,83 @@ function htmlEscape(s) {
 // `data-` attributes (HTML escaping is enough; never gets re-parsed as JS)
 // closes that whole class of bug.
 function _actionBtn(handler, fname, opts = {}) {
-  const {label = '', cls = 'icon-btn', danger = false, kind = ''} = opts;
+  const {label = '', ariaLabel = '', cls = 'icon-btn', danger = false, kind = ''} = opts;
   const cl = danger ? `${cls} danger` : cls;
   const k = kind ? ` data-kind="${htmlEscape(kind)}"` : '';
   // `title` shows on hover; `aria-label` is what screen readers announce for
-  // these icon-only buttons (the glyph alone is meaningless to AT).
-  const a11y = label ? ` title="${htmlEscape(label)}" aria-label="${htmlEscape(label)}"` : '';
-  return `<button class="${cl}" data-fname="${htmlEscape(fname)}"${k}${a11y} onclick="${handler}(this.dataset.fname${kind ? ', this.dataset.kind' : ''})">${opts.glyph || ''}</button>`;
+  // these icon-only buttons (the glyph alone is meaningless to AT). The
+  // hover-title can stay short ("Delete"); `ariaLabel` carries the row
+  // context ("Delete <album>") so AT announcements are meaningful out of
+  // sequence.
+  const titleAttr = label ? ` title="${htmlEscape(label)}"` : '';
+  const a11yLabel = ariaLabel || label;
+  const ariaAttr = a11yLabel ? ` aria-label="${htmlEscape(a11yLabel)}"` : '';
+  return `<button class="${cl}" data-fname="${htmlEscape(fname)}"${k}${titleAttr}${ariaAttr} onclick="${handler}(this.dataset.fname${kind ? ', this.dataset.kind' : ''})">${opts.glyph || ''}</button>`;
 }
 
-function _downloadLink(href, label = 'Download') {
+function _downloadLink(href, label = 'Download', ariaLabel = '') {
   const lbl = htmlEscape(label);
-  return `<a class="icon-btn" href="${href}" download title="${lbl}" aria-label="${lbl}">↓</a>`;
+  const aLbl = htmlEscape(ariaLabel || label);
+  return `<a class="icon-btn" href="${href}" download title="${lbl}" aria-label="${aLbl}">↓</a>`;
 }
 
 // Build a keydown handler that closes a modal on Escape. If focus is in a
 // text input, the first Escape just blurs the input — guards against losing
 // half-typed metadata. A second Escape (or any Escape with focus elsewhere)
 // closes the modal. Mirrors the wave editor's own ESC handling.
-function makeModalEscHandler(closeFn) {
+//
+// The handler also installs a focus-trap: when a modal is open, Tab cycles
+// inside the modal so keyboard / AT users can't accidentally land back on
+// the body and lose context. The first/last focusable elements wrap to each
+// other; everything else delegates to the browser's default Tab behaviour.
+function makeModalEscHandler(closeFn, modalId) {
   return function (e) {
-    if (e.key !== 'Escape') return;
-    const tag = (e.target.tagName || '').toUpperCase();
-    if (tag === 'INPUT' || tag === 'TEXTAREA') {
-      e.target.blur();
+    if (e.key === 'Escape') {
+      const tag = (e.target.tagName || '').toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA') {
+        e.target.blur();
+        return;
+      }
+      e.preventDefault();
+      closeFn();
       return;
     }
-    e.preventDefault();
-    closeFn();
+    if (e.key === 'Tab' && modalId) {
+      const m = document.getElementById(modalId);
+      if (m && !m.hidden) trapModalFocus(m, e);
+    }
   };
+}
+
+// Cycle Tab inside the given modal element. Call on Tab keydown when the
+// modal is open. The browser's own Tab walking is fine within the modal —
+// we only intervene at the wrap-around edges so Shift-Tab from the first
+// focusable lands on the last, and Tab from the last lands on the first.
+function trapModalFocus(modalEl, e) {
+  if (e.key !== 'Tab') return;
+  const focusables = modalEl.querySelectorAll(
+    'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  );
+  if (!focusables.length) return;
+  // Only consider visible focusables — `hidden` attribute and display:none
+  // would otherwise produce a no-op cycle when a section like
+  // #combine-sides-section is collapsed.
+  const visible = [];
+  for (const el of focusables) {
+    if (el.hidden) continue;
+    if (el.offsetParent === null && getComputedStyle(el).position !== 'fixed') continue;
+    visible.push(el);
+  }
+  if (!visible.length) return;
+  const first = visible[0];
+  const last  = visible[visible.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
 }
 
 function updateBulkBar() {
@@ -986,16 +1053,26 @@ function refreshLibRender() {
       // unconditional. The handler lives on the whole <td> so the entire
       // cell — including padding and whitespace to the right of short
       // titles — is a click target.
-      const previewBtn = `<button class="icon-btn preview-btn ${playing}" data-fname="${fn}" data-kind="lib" title="Preview" aria-label="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>`;
-      const dlLink = _downloadLink(`/api/download/${encodeURIComponent(f.filename)}`, 'Download');
-      const delBtn = _actionBtn('deleteFile', f.filename, {label: 'Delete', glyph: '✕', danger: true});
+      // Context for AT announcements — "Preview Album — Artist" is far more
+      // useful out of context than the bare glyph. Falls back to the filename
+      // when no album/artist tags exist (raw rows are typically untagged).
+      const albumLabel = f.album || f.filename.replace(/\.flac$/, '');
+      const artistLabel = f.artist || '';
+      const ctx = artistLabel ? `${albumLabel} — ${artistLabel}` : albumLabel;
+      const previewBtn = `<button class="icon-btn preview-btn ${playing}" data-fname="${fn}" data-kind="lib" title="Preview" aria-label="${htmlEscape('Preview ' + ctx)}" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>`;
+      const dlLink = _downloadLink(`/api/download/${encodeURIComponent(f.filename)}`, 'Download', 'Download ' + ctx);
+      const delBtn = _actionBtn('deleteFile', f.filename, {label: 'Delete', ariaLabel: 'Delete ' + ctx, glyph: '✕', danger: true});
       // Inline rename pencil: same handler the dblclick uses. Filename
       // travels via data-fname (HTML escaped) — see _actionBtn for the
       // XSS rationale on never inlining values into the JS string.
-      const renameGlyph = `<button class="rename-glyph" data-fname="${fn}" title="Rename" aria-label="Rename" onclick="event.stopPropagation();startInlineRename(this.dataset.fname, this.previousElementSibling)">✎</button>`;
+      const renameGlyph = `<button class="rename-glyph" data-fname="${fn}" title="Rename" aria-label="${htmlEscape('Rename ' + ctx)}" onclick="event.stopPropagation();startInlineRename(this.dataset.fname, this.previousElementSibling)">✎</button>`;
+      // Per-row select checkbox: the bare checkbox has no label, so AT
+      // hears only "checkbox unchecked". Adding the album to the aria-label
+      // keeps the bulk-action row navigable when there are many rows.
+      const checkboxAria = htmlEscape('Select ' + ctx + ' for bulk action');
       return `
       <tr class="row-untagged">
-        <td class="col-check" data-col="check"><input type="checkbox" class="row-check" data-fname="${fn}" ${isSel}
+        <td class="col-check" data-col="check"><input type="checkbox" class="row-check" data-fname="${fn}" ${isSel} aria-label="${checkboxAria}"
             onclick="toggleRow(this.dataset.fname, this.checked)"></td>
         <td data-col="album" style="font-weight:500" ondblclick="startInlineRename(this.dataset.fname, this.querySelector('.row-title-text'))" data-fname="${fn}" title="Double-click to rename">
           <div class="row-title">
@@ -1258,13 +1335,22 @@ function _albumRowHtml(a, opts) {
   // warns that music/ stays put.
   const demoteHandler = a.split ? 'demoteAlbumKeepMusic' : 'demoteAlbumDrop';
   const demoteLabel = a.split ? 'Demote to Raw (music/ files preserved)' : 'Demote to Raw';
-  const tagBtn = _actionBtn('openTagAlbum', a.album_id, {label: 'Edit tags', glyph: '✎'});
-  const splitBtn = _actionBtn('openWaveEditor', a.album_id, {label: splitTitle, glyph: '✂'});
-  const demBtn = _actionBtn(demoteHandler, a.album_id, {label: demoteLabel, glyph: '⤺'});
-  const delBtn = _actionBtn('deleteAlbum', a.album_id, {label: 'Delete album', glyph: '✕', danger: true});
+  // Context for screen readers — every action mentions the album so the
+  // announcement makes sense without first navigating to the row's title.
+  const albumLabel = a.album || '(untitled album)';
+  const artistLabel = a.artist || '';
+  const ctx = artistLabel ? `${albumLabel} — ${artistLabel}` : albumLabel;
+  const demoteAria = a.split
+    ? `Move ${ctx} sides back to raw — music files preserved`
+    : `Move ${ctx} sides back to raw`;
+  const tagBtn = _actionBtn('openTagAlbum', a.album_id, {label: 'Edit tags', ariaLabel: 'Edit tags for ' + ctx, glyph: '✎'});
+  const splitBtn = _actionBtn('openWaveEditor', a.album_id, {label: splitTitle, ariaLabel: splitTitle + ' for ' + ctx, glyph: '✂'});
+  const demBtn = _actionBtn(demoteHandler, a.album_id, {label: demoteLabel, ariaLabel: demoteAria, glyph: '⤺'});
+  const delBtn = _actionBtn('deleteAlbum', a.album_id, {label: 'Delete album', ariaLabel: 'Delete album ' + ctx, glyph: '✕', danger: true});
+  const checkboxAria = htmlEscape('Select ' + ctx + ' for bulk action');
   return `
   <tr data-album-id="${fn}">
-    <td class="col-check" data-col="check"><input type="checkbox" class="${opts.checkClass}" data-fname="${fn}" ${isSel}
+    <td class="col-check" data-col="check"><input type="checkbox" class="${opts.checkClass}" data-fname="${fn}" ${isSel} aria-label="${checkboxAria}"
         onclick="${opts.toggleRow}(this.dataset.fname, this.checked)"></td>
     <td data-col="album" style="font-weight:500">
       <div class="row-title">
@@ -1490,6 +1576,9 @@ function renderCombineSides() {
     // a parallel state machine. preview-btn keeps the badge in sync.
     const playing = previewIs(fn, 'lib') ? 'playing' : '';
     const playGlyph = previewIs(fn, 'lib') ? '⏸' : '▶';
+    const previewAria = htmlEscape('Preview side ' + (i + 1) + ' — ' + label);
+    const upAria = htmlEscape('Move side ' + (i + 1) + ' (' + label + ') up');
+    const downAria = htmlEscape('Move side ' + (i + 1) + ' (' + label + ') down');
     return `
       <div class="side-row" draggable="true" data-i="${i}"
            ondragstart="combineDragStart(event, ${i})"
@@ -1499,12 +1588,12 @@ function renderCombineSides() {
            ondragend="combineDragEnd(event)">
         <div class="drag-handle" title="Drag to reorder">≡</div>
         <div class="num">${i + 1}.</div>
-        <button class="play-side preview-btn ${playing}" data-fname="${htmlEscape(fn)}" data-kind="lib" title="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>
+        <button class="play-side preview-btn ${playing}" data-fname="${htmlEscape(fn)}" data-kind="lib" title="Preview" aria-label="${previewAria}" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>
         <div class="name" title="${htmlEscape(fn)}">${htmlEscape(label)}</div>
         <div class="meta">${htmlEscape(recorded)} · ${f.size_mb || '—'} MB</div>
         <div class="arrows">
-          <button class="arrow-btn" onclick="moveSide(${i}, -1)" ${isFirst ? 'disabled' : ''} title="Move up" aria-label="Move up">▲</button>
-          <button class="arrow-btn" onclick="moveSide(${i},  1)" ${isLast  ? 'disabled' : ''} title="Move down" aria-label="Move down">▼</button>
+          <button class="arrow-btn" onclick="moveSide(${i}, -1)" ${isFirst ? 'disabled' : ''} title="Move up" aria-label="${upAria}">▲</button>
+          <button class="arrow-btn" onclick="moveSide(${i},  1)" ${isLast  ? 'disabled' : ''} title="Move down" aria-label="${downAria}">▼</button>
         </div>
       </div>`;
   }).join('');
@@ -1759,7 +1848,7 @@ function _flashChangedFields(before) {
     setTimeout(() => el.classList.remove('field-applied'), FLASH_MS);
   }
 }
-const tagEscHandler = makeModalEscHandler(closeTag);
+const tagEscHandler = makeModalEscHandler(closeTag, 'tag-modal');
 
 function parseQuery(q) {
   // Split on " - " or just take the first half as artist; user can override fields directly.
@@ -2283,6 +2372,24 @@ function _wireSectionCollapse(id) {
 }
 ['raw-section', 'in-progress-section', 'music-section'].forEach(_wireSectionCollapse);
 
+// Global keyboard shortcut: `R` toggles record/stop. Suppressed while the
+// user is typing in any form field (input/textarea/select/contenteditable)
+// or while a modal is open — modals install their own scoped key handlers
+// and would otherwise see two interpretations of the same keystroke. The
+// record button's title + aria-label advertise the shortcut.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'r' && e.key !== 'R') return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t && t.matches && t.matches('input, textarea, select, [contenteditable="true"]')) return;
+  // Modals scope their own shortcuts (Escape to close, Tab to cycle); skip
+  // R to avoid stepping on text input inside them.
+  const openModal = document.querySelector('.modal-backdrop:not([hidden])');
+  if (openModal) return;
+  e.preventDefault();
+  if (typeof toggleRec === 'function') toggleRec();
+});
+
 // ── Pi deploy modal ───────────────────────────────────────────────────────
 // Pushes pi/server.py + pi-recorder.service to a Raspberry Pi over SSH.
 // Mirrors the manual scp/ssh ceremony documented in README.md "Install on
@@ -2342,7 +2449,7 @@ function closePiDeploy() {
   }
   _piDeployFocusReturn = null;
 }
-const piDeployEscHandler = makeModalEscHandler(closePiDeploy);
+const piDeployEscHandler = makeModalEscHandler(closePiDeploy, 'pi-deploy-modal');
 
 function _piDeployLogLine(text, kind) {
   const logEl = document.getElementById('pi-deploy-log');
