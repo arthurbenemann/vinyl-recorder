@@ -1415,6 +1415,17 @@ function combineDragEnd(e) {
 let tagPanelMbid = null;        // mbid of currently-picked candidate (drives cover embed on apply)
 let tagPanelDiscogsId = null;   // Discogs release id — persisted so the wave editor can auto-load tracks later
 let tagPanelCandidates = [];
+// Tracks the auto-populated search query so re-opens don't clobber user edits.
+let tagPanelAutoQuery = '';
+// Snapshot of left-column values when the modal opened — `formDirty` is true
+// when any current value diverges, which drives the unsaved badge + pulse.
+let tagPanelInitialFields = null;
+let tagPanelDirty = false;
+// IDs of left-column inputs we flash on candidate-pick + watch for dirty edits.
+const TAG_LEFT_FIELD_IDS = [
+  't-album', 't-artist', 't-year', 't-genre',
+  't-label', 't-catno', 't-country', 't-format', 't-tracks',
+];
 
 function setLeft(fields) {
   document.getElementById('t-album').value   = fields.album   ?? '';
@@ -1476,12 +1487,29 @@ function openTag(fname) {
   });
   setCover(null);
   // Pre-fill the search query from existing tags so a single click runs the search.
+  // Only overwrite the search field when it's empty or still holds whatever we
+  // last auto-filled — anything the user typed manually wins.
   const q = [f.artist, f.album].filter(Boolean).join(' ');
-  document.getElementById('t-search-q').value = q;
+  const searchEl = document.getElementById('t-search-q');
+  const current = searchEl.value;
+  const userTyped = current && current !== tagPanelAutoQuery;
+  if (!userTyped) {
+    searchEl.value = q;
+    tagPanelAutoQuery = q;
+  }
   document.getElementById('t-candidates').innerHTML =
     '<div class="empty-results">Hit search to look up this album on MusicBrainz.</div>';
   document.getElementById('t-search-status').textContent = '';
   document.getElementById('tag-modal').dataset.fname = fname;
+  // Snapshot the freshly-loaded form so we can detect divergence for the
+  // dirty badge / pulse on the apply button. Reset dirty flag + any leftover
+  // flash classes from a previous invocation.
+  tagPanelInitialFields = _readTagFields();
+  tagPanelDirty = false;
+  _setTagDirtyUI(false);
+  for (const id of TAG_LEFT_FIELD_IDS) {
+    document.getElementById(id)?.classList.remove('field-applied');
+  }
   // Remember whatever was focused so closeTag can restore focus to it —
   // keyboard / screen-reader users should land back on the button that
   // opened the modal, not at the top of the document.
@@ -1492,6 +1520,19 @@ function openTag(fname) {
   // the next Tab keeps the user inside it.
   const firstInput = document.querySelector('#tag-modal input, #tag-modal button, #tag-modal select');
   if (firstInput) firstInput.focus();
+  // If we have a usable search query (artist+album already known), kick off
+  // the MB search automatically so the candidate list is populated by the
+  // time the user looks at it. Defer one tick so focus management above has
+  // settled. Skip when the field is empty (e.g. combine of untagged sides).
+  if (searchEl.value.trim()) {
+    setTimeout(() => {
+      // Bail if the modal closed in the meantime, or the user already
+      // started typing something different (treat that as their intent).
+      if (document.getElementById('tag-modal').hidden) return;
+      if (searchEl.value !== tagPanelAutoQuery) return;
+      runSearch();
+    }, 60);
+  }
 }
 
 let _tagFocusReturn = null;
@@ -1504,10 +1545,81 @@ function closeTag() {
   if (preview.fname) stopPreview();
   tagPanelTarget = null;
   combineOrder = [];
+  // Reset dirty state so the unsaved badge / pulse don't bleed into the
+  // next invocation.
+  tagPanelInitialFields = null;
+  tagPanelDirty = false;
+  _setTagDirtyUI(false);
   if (_tagFocusReturn && typeof _tagFocusReturn.focus === 'function') {
     try { _tagFocusReturn.focus(); } catch (e) { /* element gone */ }
   }
   _tagFocusReturn = null;
+}
+
+// Read the current left-column form values into a flat dict so we can compare
+// against the snapshot taken when the modal opened.
+function _readTagFields() {
+  const out = {};
+  for (const id of TAG_LEFT_FIELD_IDS) {
+    out[id] = document.getElementById(id)?.value ?? '';
+  }
+  return out;
+}
+
+// Toggle the unsaved badge + apply-button pulse to match `dirty`. Forces a
+// reflow when re-adding `pulse-once` so the keyframe animation actually
+// restarts on each clean→dirty transition (not just the very first one).
+function _setTagDirtyUI(dirty) {
+  const btn = document.getElementById('tag-apply-btn');
+  const badge = document.getElementById('tag-unsaved-badge');
+  if (btn) {
+    btn.classList.remove('pulse-once');
+    if (dirty) {
+      void btn.offsetWidth;
+      btn.classList.add('pulse-once');
+    }
+  }
+  if (badge) badge.hidden = !dirty;
+}
+
+// Recompute the dirty flag against the snapshot. Called from input listeners
+// and after pickCandidate / pickCollectionCandidate write into the form.
+function _recomputeTagDirty() {
+  if (!tagPanelInitialFields) return;
+  const cur = _readTagFields();
+  const dirty = TAG_LEFT_FIELD_IDS.some(id => cur[id] !== tagPanelInitialFields[id]);
+  if (dirty !== tagPanelDirty) {
+    tagPanelDirty = dirty;
+    _setTagDirtyUI(dirty);
+  }
+}
+
+// Wire up live dirty-tracking on the left-column inputs once at boot.
+// `_recomputeTagDirty` is a no-op until tagPanelInitialFields is set, so
+// these listeners are safe even when the modal is closed.
+document.addEventListener('DOMContentLoaded', () => {
+  for (const id of TAG_LEFT_FIELD_IDS) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', _recomputeTagDirty);
+  }
+});
+
+// Briefly highlight any left-column input whose value differs from `before`.
+// Driven by a CSS transition on .field-applied so the border eases back out
+// once the class is removed.
+function _flashChangedFields(before) {
+  const FLASH_MS = 600;
+  for (const id of TAG_LEFT_FIELD_IDS) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    if (el.value === (before?.[id] ?? '')) continue;
+    el.classList.remove('field-applied');
+    // Force reflow so re-adding the class restarts the transition even when
+    // two candidates are clicked back-to-back.
+    void el.offsetWidth;
+    el.classList.add('field-applied');
+    setTimeout(() => el.classList.remove('field-applied'), FLASH_MS);
+  }
 }
 const tagEscHandler = makeModalEscHandler(closeTag);
 
@@ -1638,11 +1750,14 @@ async function pickCollectionCandidate(releaseId) {
     // panel-level mbid so apply doesn't try to embed a stale cover.
     tagPanelMbid = null;
     tagPanelDiscogsId = releaseId;
+    const before = _readTagFields();
     setLeft({
       album: d.title, artist: d.artist, year: d.year, genre: d.genre,
       label: d.label, catalog_number: d.catalog_number, country: d.country,
       format: d.format, tracks: d.tracks,
     });
+    _flashChangedFields(before);
+    _recomputeTagDirty();
     if (d.cover_url) setCover(d.cover_url);
     const links = d.discogs_url
       ? `<a class="ext-link" href="${d.discogs_url}" target="_blank" rel="noopener">↗ Discogs</a>`
@@ -1682,11 +1797,14 @@ async function pickCandidate(i) {
     const d = await r.json();
     tagPanelMbid = d.mbid;
     tagPanelDiscogsId = d.discogs_id || null;
+    const before = _readTagFields();
     setLeft({
       album: d.title, artist: d.artist, year: d.year, genre: d.genre,
       label: d.label, catalog_number: d.catalog_number, country: d.country,
       format: d.format, tracks: d.tracks,
     });
+    _flashChangedFields(before);
+    _recomputeTagDirty();
     setCover(d.cover_url);
     const mbHref = `https://musicbrainz.org/release/${d.mbid}`;
     const links = [

@@ -354,6 +354,31 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .search-status { font-size: 10px; color: var(--muted); margin-top: 4px; }
 @media (max-width: 980px) { .tag-grid { grid-template-columns: 1fr; } .candidates { max-height: 280px; } }
 
+/* Tag panel — applied feedback. .field-applied is toggled briefly on inputs
+   whose value just changed via a candidate pick, so users notice the form
+   updated. The transition makes the blue border ease back out on removal. */
+.field input.field-applied, .field textarea.field-applied {
+  border-color: var(--blue);
+  background: rgba(55,138,221,0.08);
+  transition: border-color 0.6s ease, background 0.6s ease;
+}
+/* Unsaved-changes badge sits next to the apply button and only appears when
+   the form differs from the values we loaded into the modal. */
+.unsaved-badge {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--blue);
+  background: rgba(55,138,221,0.12); border: 0.5px solid rgba(55,138,221,0.4);
+  border-radius: 4px; padding: 3px 7px;
+}
+.unsaved-badge[hidden] { display: none; }
+/* One-shot pulse on the apply button when the form first becomes dirty. */
+@keyframes tagApplyPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(55,138,221,0.55); }
+  70%  { box-shadow: 0 0 0 8px rgba(55,138,221,0); }
+  100% { box-shadow: 0 0 0 0 rgba(55,138,221,0); }
+}
+.btn.primary.pulse-once { animation: tagApplyPulse 0.9s ease-out 1; }
+
 /* Albums — track count link + tracks expand row */
 .track-count-link { color: var(--blue); cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
 .tracks-sub { background: var(--surface); }
