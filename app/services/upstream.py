@@ -15,12 +15,23 @@ in lieu of a per-client `<audio>` analyser.
 import json
 import logging
 import queue
-import struct
 import subprocess
 import threading
 import traceback
+import warnings
 from collections import deque
 from typing import Callable, Optional
+
+# `audioop` is a stdlib C module that decodes PCM samples in one call —
+# orders of magnitude faster than per-sample Python on the VU hot path
+# (called every ~16 ms). It's deprecated in 3.12 (silenced here) and
+# slated for removal in 3.13; the project targets 3.12 (see Dockerfile)
+# so the replacement story (`audioop-lts` or numpy) only matters when we
+# bump the runtime.
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", category=DeprecationWarning,
+                            message=r".*audioop.*")
+    import audioop
 
 
 _log = logging.getLogger(__name__)
@@ -499,49 +510,41 @@ class UpstreamSession:
             self._on_event(evt)
 
     def _update_peaks(self, chunk: bytes, bps: int, channels: int) -> None:
-        """Compute peak L/R from one frame of interleaved PCM. Uses
-        `struct.unpack` to bulk-decode all samples in one C-level call —
-        much faster than the per-sample byte arithmetic the loop used to
-        do, and stays stdlib-only (no numpy dependency)."""
+        """Compute peak L/R from one frame of interleaved PCM. Delegates the
+        per-sample work to `audioop`'s C-level `tomono` (deinterleave one
+        channel) + `max` (absolute-max of all samples), so the only Python
+        cost per frame is two function calls + a divide. Replaces a
+        per-sample padding+sign-extend loop that dominated the VU thread
+        on Pi-class CPUs at 96 kHz / 24-bit / stereo."""
         channels_to_scan = 1 if channels < 2 else 2
         n_pairs = len(chunk) // (bps * channels)
         if n_pairs <= 0:
             peak_l = peak_r = 0.0
-        elif bps == 2:
-            full_scale = 0x7FFF
-            samples = struct.unpack(f"<{n_pairs * channels}h", chunk[:n_pairs * channels * 2])
-            if channels_to_scan == 2:
-                max_l = max(abs(s) for s in samples[0::channels])
-                max_r = max(abs(s) for s in samples[1::channels])
+        elif bps in (2, 3):
+            full_scale = 0x7FFF if bps == 2 else 0x7FFFFF
+            data = chunk[:n_pairs * channels * bps]
+            if channels == 1:
+                m = audioop.max(data, bps)
+                max_l = max_r = m
+            elif channels == 2:
+                # tomono(buf, width, lfactor, rfactor) returns one channel
+                # as a contiguous mono buffer; (1, 0) keeps L, (0, 1) keeps R.
+                max_l = audioop.max(audioop.tomono(data, bps, 1, 0), bps)
+                if channels_to_scan == 2:
+                    max_r = audioop.max(audioop.tomono(data, bps, 0, 1), bps)
+                else:
+                    max_r = max_l
             else:
-                max_l = max_r = max(abs(s) for s in samples[::channels])
+                # >2 channels: scale all to a single mono mix for the L
+                # value, fall back to mirroring on R. Should not happen with
+                # the current capture path (always mono or stereo) but keeps
+                # the contract intact.
+                m = audioop.max(data, bps)
+                max_l = max_r = m
             peak_l = max_l / full_scale
             peak_r = max_r / full_scale
-        else:  # bps == 3 — s24le, 3 bytes per sample, no native struct fmt
-            # Pad each 3-byte sample up to 4 bytes (sign-extended) so we can
-            # batch-unpack as int32 in one struct call. ~10-20× faster than
-            # the per-sample bit-twiddle loop on a Pi-class CPU.
-            full_scale = 0x7FFFFF
-            n_samples = n_pairs * channels
-            data = chunk[:n_samples * 3]
-            buf = bytearray(n_samples * 4)
-            for i in range(n_samples):
-                src = i * 3
-                dst = i * 4
-                b0, b1, b2 = data[src], data[src+1], data[src+2]
-                buf[dst]     = b0
-                buf[dst+1]   = b1
-                buf[dst+2]   = b2
-                # Sign-extend: top bit of b2 → fill 0xFF
-                buf[dst+3]   = 0xFF if (b2 & 0x80) else 0x00
-            samples = struct.unpack(f"<{n_samples}i", bytes(buf))
-            if channels_to_scan == 2:
-                max_l = max(abs(s) for s in samples[0::channels])
-                max_r = max(abs(s) for s in samples[1::channels])
-            else:
-                max_l = max_r = max(abs(s) for s in samples[::channels])
-            peak_l = max_l / full_scale
-            peak_r = max_r / full_scale
+        else:
+            peak_l = peak_r = 0.0
 
         with self._lock:
             self.peak_l = peak_l
