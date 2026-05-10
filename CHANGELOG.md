@@ -1,3 +1,25 @@
+## v0.9.0 — 2026-05-10
+
+### Features
+- Combine per-row play + wave-editor sides reorder with cut remap (#106)
+- **library:** Clearer format/sample-rate labels and untruncated dates (#114)
+- **splits:** Persistent saved indicator and tighter track rows under 1080px (#115)
+- **tagging:** Auto-search MusicBrainz on open and surface applied state (#112)
+- **library:** Differentiate stages with subtle borders and surface rename affordance (#113)
+- **pi:** In-app "deploy to pi" button replaces manual scp/ssh ceremony (#109)
+- **library:** A11y pass on actions and headers; collapsed log; failure pills (#117)
+- **mobile:** Card layout for library tables under 720px (#116)
+- **pi:** Bootstrap python3 + alsa-utils via apt during deploy (#122)
+- **ui:** Add vinyl favicon and logo icon (#123)
+
+### Bug Fixes
+- **ui:** Align library table headers with locked column widths (#107)
+- **library:** Tighten row-action icons and one-side combine label (#110)
+
+### Performance
+- Audioop on VU hot path, mtime cache for metaflac probes (#119)
+- Demand-driven upstream lifecycle, batch amixer in /info (#121)
+
 ## v0.8.1 — 2026-05-09
 
 ### Features
