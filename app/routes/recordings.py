@@ -26,6 +26,30 @@ from state import (
 router = APIRouter()
 
 
+def _graceful_close(proc, timeout: float = 2.0) -> None:
+    """Best-effort graceful teardown of a Popen child: close stdin so the
+    child sees EOF (lets ffmpeg flush its trailers), terminate, wait up
+    to `timeout`, and only kill if wait timed out / failed. Each step is
+    individually exception-safe so a half-dead proc (already closed pipe,
+    already exited) never raises out."""
+    try:
+        if proc.stdin:
+            proc.stdin.close()
+    except Exception:
+        pass
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=timeout)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
 @router.get("/api/stream-proxy")
 async def stream_proxy():
     """Browser-compatible playback feed for unmuted tabs.
@@ -166,16 +190,13 @@ def _reaper_loop() -> None:
     while True:
         proc = _reap_q.get()
         if proc.poll() is None:
-            try: proc.terminate()
-            except Exception: pass
-            try: proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                try: proc.kill()
-                except Exception: pass
+            _graceful_close(proc, timeout=2.0)
+            # `_graceful_close` does not wait after kill; do one more wait
+            # here so a kill-9'd child gets reaped instead of lingering as
+            # a zombie until process exit.
+            if proc.poll() is None:
                 try: proc.wait(timeout=2)
                 except Exception: pass
-            except Exception:
-                pass
 
 
 threading.Thread(target=_reaper_loop, daemon=True, name="proxy-reaper").start()
