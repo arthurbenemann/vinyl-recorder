@@ -90,8 +90,9 @@ HTTP service that:
 
 ### Install on the Pi
 
-The Pi only needs Python 3 and `alsa-utils` (both already on a fresh
-Raspberry Pi OS install — no `pip install` step).
+The Pi only needs network access and SSH — the deploy installs `python3`
++ `alsa-utils` itself via `apt`, so a stripped-down Pi OS Lite image
+works as well as the default Pi OS.
 
 Open the **⋮** menu in the recorder header → **deploy to pi…**, fill in
 host / username / password, hit deploy. Host + username persist in

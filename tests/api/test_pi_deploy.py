@@ -120,9 +120,62 @@ def test_deploy_happy_path_uploads_and_runs_install(tmp_path, monkeypatch):
     blob = "\n".join(captured)
     assert "connecting to pi@pi.local:22" in blob
     assert "uploading" in blob
+    assert "apt-get install" in blob
     assert "installed and enabled" in blob
     assert "service is active" in blob
     assert "deployment complete" in blob
+
+
+def test_deploy_install_script_includes_apt_bootstrap(tmp_path, monkeypatch):
+    """The install script piped to `sudo -S sh -s` over the SSH channel
+    must include `apt-get install ... python3 alsa-utils` so the deploy
+    works on a stripped-down Pi OS Lite image, not just the default
+    Raspberry Pi OS that ships them pre-installed."""
+    _fake_pi_source(tmp_path, monkeypatch)
+    from services import pi_deploy
+
+    # Capture writes to the install stdin so we can inspect what got
+    # piped to `sudo -S sh -s`. The first write is the password +\n; the
+    # second is the script body (see deploy() — two stdin.write calls
+    # straight after exec_command).
+    install_stdin_writes: list[str] = []
+    sftp = MagicMock()
+
+    install_chan = MagicMock(); install_chan.recv_exit_status.return_value = 0
+    install_stdout = MagicMock(); install_stdout.channel = install_chan
+    install_stdout.read.return_value = b""
+    install_stderr = MagicMock(); install_stderr.read.return_value = b""
+    install_stdin = MagicMock(); install_stdin.channel = MagicMock()
+    install_stdin.write.side_effect = lambda s: install_stdin_writes.append(s)
+
+    isactive_stdout = MagicMock(); isactive_stdout.read.return_value = b"active\n"
+    isactive_chan = MagicMock(); isactive_chan.recv_exit_status.return_value = 0
+    isactive_stdout.channel = isactive_chan
+
+    client = MagicMock()
+    client.open_sftp.return_value = sftp
+    client.exec_command.side_effect = [
+        (install_stdin, install_stdout, install_stderr),
+        (MagicMock(), isactive_stdout, MagicMock()),
+    ]
+    factory = MagicMock(return_value=client)
+
+    pi_deploy.deploy(host="pi.local", username="pi", password="x",
+                     _client_factory=factory)
+
+    # First write is the SSH password + newline; second is the script body.
+    assert len(install_stdin_writes) >= 2
+    script = install_stdin_writes[1]
+    assert "apt-get update" in script
+    assert "apt-get install" in script
+    assert "python3" in script and "alsa-utils" in script
+    # set -e is what gives us "abort on first failure" semantics — without
+    # it a missing package would still leave the systemd unit enabled and
+    # the user'd see ✓ for a half-installed deploy.
+    assert "set -e" in script
+    # noninteractive prevents apt from blocking on a config-prompt during
+    # an in-place upgrade of an existing package.
+    assert "DEBIAN_FRONTEND=noninteractive" in script
 
 
 def test_deploy_auth_failure_raises_friendly_error(tmp_path, monkeypatch):

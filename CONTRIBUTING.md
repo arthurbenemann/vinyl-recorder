@@ -101,6 +101,8 @@ scp pi/server.py pi/pi-recorder.service pi@pi-recorder:/tmp/
 
 # on the Pi
 ssh pi@pi-recorder
+sudo apt-get update
+sudo apt-get install -y python3 alsa-utils
 sudo mkdir -p /opt/pi-recorder
 sudo mv /tmp/server.py /opt/pi-recorder/
 sudo mv /tmp/pi-recorder.service /etc/systemd/system/

@@ -50,8 +50,18 @@ PI_SOURCE_DIR = _resolve_pi_source_dir()
 # and feed it via stdin to `sh -s --` instead. Keeping it as a
 # bash-on-stdin invocation also makes it trivial to add NEW steps later
 # without re-quoting.
+#
+# `apt-get install` of python3 + alsa-utils is idempotent — both ship on
+# a fresh Raspberry Pi OS install, so the apt step is a near-no-op there
+# (a few seconds for the index update). Including it unconditionally lets
+# the deploy bootstrap from a stripped-down Pi OS Lite image (or any
+# Debian-derivative) without the user having to remember a manual prep
+# step. DEBIAN_FRONTEND + -qq keep the log compact and the run hands-free.
 _INSTALL_SCRIPT = """\
 set -e
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq python3 alsa-utils
 mkdir -p /opt/pi-recorder
 mv /tmp/server.py /opt/pi-recorder/server.py
 mv /tmp/pi-recorder.service /etc/systemd/system/pi-recorder.service
@@ -186,7 +196,7 @@ def deploy(
         # Raspberry Pi OS configures NOPASSWD for the `pi` user (sudo
         # ignores extra stdin in that case), so this works either way.
         cmd = "sudo -S -p '' sh -s"
-        emit("running install (mkdir / mv / systemctl daemon-reload / enable)…")
+        emit("running install (apt-get install python3 alsa-utils / mkdir / mv / systemctl)…")
         try:
             stdin, stdout, stderr = client.exec_command(
                 cmd, get_pty=False, timeout=command_timeout,
