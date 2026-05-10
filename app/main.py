@@ -89,7 +89,9 @@ async def _startup() -> None:
             # Configure-only — ffmpeg comes up the first time a holder
             # acquires (visible WS tab, recording, playback proxy). Idle
             # CPU stays at ~0% until somebody asks for audio.
-            upstream.connect(DEFAULT_STREAM_URL)
+            # Offloaded so the probe (urllib /info, then ffprobe fallback)
+            # doesn't block the loop during startup.
+            await asyncio.to_thread(upstream.connect, DEFAULT_STREAM_URL)
             bus.log(f"▶ Auto-configured upstream {DEFAULT_STREAM_URL}", "info")
         except Exception as e:
             bus.log(f"✗ Auto-connect failed: {e}", "err")
@@ -98,7 +100,9 @@ async def _startup() -> None:
 @app.on_event("shutdown")
 async def _shutdown() -> None:
     recordings.stop_watcher()
-    upstream.disconnect()
+    # disconnect() forces ffmpeg teardown (proc.terminate + wait up to 2 s);
+    # offload so the loop can keep servicing in-flight shutdown work.
+    await asyncio.to_thread(upstream.disconnect)
 
 
 @app.get("/")
@@ -168,7 +172,10 @@ async def connect(req: ConnectRequest):
         return upstream.state()
     bus.log(f"Connecting to {req.stream_url}…", "info")
     try:
-        fmt = upstream.connect(req.stream_url)
+        # Offload — connect() probes the format synchronously (urllib +
+        # possible ffprobe), and inline would freeze the loop while the
+        # probe runs.
+        fmt = await asyncio.to_thread(upstream.connect, req.stream_url)
     except Exception as e:
         bus.log(f"✗ Connect failed: {e}", "err")
         raise HTTPException(502, str(e))
@@ -188,7 +195,8 @@ async def disconnect():
         raise HTTPException(409, "stop recording before disconnecting")
     if not upstream.configured:
         return upstream.state()
-    upstream.disconnect()
+    # Offload — disconnect() blocks while terminating ffmpeg (up to 2 s).
+    await asyncio.to_thread(upstream.disconnect)
     bus.log("■ Disconnected", "info")
     return upstream.state()
 

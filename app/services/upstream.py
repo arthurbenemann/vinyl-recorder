@@ -697,6 +697,11 @@ class UpstreamSession:
             self._preroll_chunks.clear()
             self._preroll_total_bytes = 0
             self._last_health = {}
+            # Clear `_stopping` here (not just in _spawn) so a future spawn
+            # doesn't have to rely on the `proc is None` half of the predicate
+            # to escape its poll loop. Symmetric with the lifecycle: stopping
+            # belongs to the teardown that just finished.
+            self._stopping = False
             configured = self.configured
             url = self.url if configured else None
             fmt = dict(self.fmt) if configured else {}

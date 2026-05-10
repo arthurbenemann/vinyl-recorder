@@ -6,6 +6,8 @@ ffmpeg by monkeypatching `_spawn` / `_teardown` to flip flags rather than
 actually launching subprocesses — we're testing the state machine, not
 the subprocess management (which is exercised end-to-end).
 """
+import asyncio
+import threading
 import time
 import urllib.error
 
@@ -341,6 +343,136 @@ def test_connect_sets_configured_without_spawning_when_no_holders(monkeypatch):
     assert sess.live is False
     assert spawned == []
     assert fmt["sample_rate"] == 48000
+
+
+# ── asyncio-loop liveness while spawn is in flight ──────────────────────
+def test_acquire_offloaded_does_not_block_event_loop(monkeypatch):
+    """Regression: a synchronous `acquire()` from an asyncio coroutine
+    must not freeze the event loop while spawn does its slow probe +
+    subprocess startup. All async call sites wrap acquire with
+    `asyncio.to_thread`; this test pins that contract by checking that a
+    concurrent heartbeat keeps ticking while a 250 ms-simulated probe runs.
+
+    The earlier inline-sync version of the WS handler called
+    `upstream.acquire(...)` on the loop thread, which blocked /health,
+    /api/status, and every other WS for the duration of the probe. With
+    AUTO_CONNECT pointed at a host that doesn't serve /info (forcing the
+    slower ffprobe fallback), the lockup was visible to users — the
+    browser stopped receiving events and /health stopped responding.
+    """
+    sess, _, _, _ = _fake_session()
+    sess.configured = True
+    sess.url = "http://x"
+
+    spawn_started = threading.Event()
+    spawn_release = threading.Event()
+    real_spawn = sess._spawn
+
+    def slow_spawn():
+        spawn_started.set()
+        # Hold the spawn for ~250 ms so the heartbeat task has a chance to
+        # tick several times if (and only if) the loop isn't blocked.
+        spawn_release.wait(timeout=1.0)
+        real_spawn()
+
+    sess._spawn = slow_spawn  # type: ignore[method-assign]
+
+    async def main():
+        ticks: list[float] = []
+
+        async def heartbeat():
+            t0 = time.monotonic()
+            for _ in range(20):
+                ticks.append(time.monotonic() - t0)
+                await asyncio.sleep(0.02)
+
+        hb = asyncio.create_task(heartbeat())
+        # Mirror what the WS handler does — offload acquire so the loop
+        # stays responsive while the spawn (probe + Popen) runs.
+        acq = asyncio.create_task(
+            asyncio.to_thread(sess.acquire, "ws:offload"))
+        # Wait until the spawn is actively running, then release it after
+        # ~150 ms — long enough for the heartbeat to record several ticks.
+        await asyncio.to_thread(spawn_started.wait, 1.0)
+        await asyncio.sleep(0.15)
+        spawn_release.set()
+        token = await acq
+        await hb
+        return ticks, token
+
+    ticks, token = asyncio.run(main())
+    sess.release(token)
+
+    # Heartbeat should have ticked many times during the 150 ms of spawn
+    # — definitely more than 3 ticks at 20 ms each. If the loop were
+    # blocked on a sync acquire, ticks would clump after the spawn.
+    ticks_during_spawn = [t for t in ticks if 0.0 <= t <= 0.15]
+    assert len(ticks_during_spawn) >= 3, (
+        f"event loop appears blocked during spawn — only "
+        f"{len(ticks_during_spawn)} ticks in the first 150 ms; full ticks={ticks}")
+
+
+def test_concurrent_acquires_do_not_deadlock(monkeypatch):
+    """Multiple threads racing to acquire while a spawn is in flight must
+    all complete in bounded time — no deadlock on the lock or the spawn
+    poll loop.
+
+    Models the multi-tab open: a handful of WS connects arrive within
+    milliseconds of each other, each offloading `acquire` to its own
+    worker thread.
+    """
+    monkeypatch.setattr(up_mod, "_probe_format",
+                        lambda url: {"sample_rate": 48000, "channels": 2,
+                                     "bit_depth": 16, "codec": "pcm_s16le"})
+
+    # Use a fake session so we don't actually launch ffmpeg, but we DO
+    # exercise the real acquire path (no monkeypatched _spawn).
+    sess, _, _, _ = _fake_session()
+    sess.configured = True
+    sess.url = "http://x"
+
+    tokens: list = []
+    errors: list = []
+
+    def worker():
+        try:
+            t = sess.acquire("ws:thread")
+            tokens.append(t)
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    t0 = time.monotonic()
+    for t in threads: t.start()
+    for t in threads: t.join(timeout=5.0)
+    elapsed = time.monotonic() - t0
+
+    assert all(not t.is_alive() for t in threads), "thread deadlocked"
+    assert errors == [], f"unexpected errors: {errors}"
+    assert len(tokens) == 8
+    # Should be fast — no thread should sit on the spawn poll for seconds.
+    assert elapsed < 2.0, f"acquires took too long: {elapsed:.3f}s"
+
+    for t in tokens:
+        sess.release(t)
+
+
+def test_teardown_clears_stopping_flag():
+    """Regression: `_teardown` must reset `_stopping` to False after the
+    real cleanup completes. Otherwise a future `_spawn` would have to
+    rely on the `proc is None` half of its escape predicate to break out
+    of the poll loop — fragile, and any change that re-orders the locked
+    section in `_spawn` could turn this into a deadlock-ish busy spin."""
+    sess, _, _, _ = _fake_session()
+    sess.configured = True
+    sess.url = "http://x"
+    t = sess.acquire("only")
+    # Drive the real teardown path (force=True bypasses the holder check
+    # and runs the full sequence: terminate → wait → second locked block).
+    sess._teardown = type(sess)._teardown.__get__(sess)
+    sess._teardown(force=True)
+    assert sess._stopping is False
+    sess.release(t)
 
 
 def test_connect_spawns_immediately_if_holder_already_present(monkeypatch):

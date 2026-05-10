@@ -60,20 +60,32 @@ async def ws(ws: WebSocket):
     # tab just opened" as visible until told otherwise) and toggled by
     # the client's visibility messages. Always released in `finally` so a
     # crashed handler doesn't leak the hold.
-    hold = upstream.acquire(f"ws:{id(ws)}")
+    #
+    # `acquire` is offloaded to a worker thread because — on the 0→1
+    # holder transition — it spawns ffmpeg, which probes the upstream
+    # (urllib /info, then ffprobe fallback) and starts a subprocess.
+    # All of that is sync I/O measured in seconds; running it inline
+    # would freeze the asyncio loop, blocking /health, /api/status, and
+    # every other WS for the duration of the spawn — exactly the lockup
+    # users observed when pointing AUTO_CONNECT at a stream whose host
+    # doesn't serve /info (forcing the slow ffprobe path).
+    hold = await asyncio.to_thread(upstream.acquire, f"ws:{id(ws)}")
 
     def _hold_release():
         nonlocal hold
         if hold is not None:
+            # release() is cheap (drops a ref-count, may schedule a timer).
+            # Safe to call inline on the loop thread.
             try: upstream.release(hold)
             except Exception: pass
             hold = None
 
-    def _hold_acquire():
+    async def _hold_acquire():
         nonlocal hold
         if hold is None:
             try:
-                hold = upstream.acquire(f"ws:{id(ws)}")
+                hold = await asyncio.to_thread(
+                    upstream.acquire, f"ws:{id(ws)}")
             except Exception:
                 # Probe failure on (re)spawn — leave hold None and let the
                 # client retry on the next visibility flip. The ws keeps
@@ -125,7 +137,7 @@ async def ws(ws: WebSocket):
                     if hidden:
                         _hold_release()
                     else:
-                        _hold_acquire()
+                        await _hold_acquire()
 
         send_task = asyncio.create_task(_send_loop())
         recv_task = asyncio.create_task(_recv_loop())

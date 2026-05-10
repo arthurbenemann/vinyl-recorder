@@ -1,4 +1,5 @@
 """Recording sessions, library file ops, stream proxy + probe."""
+import asyncio
 import json
 import queue
 import signal
@@ -47,7 +48,10 @@ async def stream_proxy():
     # was idle, and fmt is only populated once a spawn has run at least
     # once. Failing here (probe failed, etc.) leaves the holder count
     # untouched (acquire already cleaned up its token on raise).
-    hold = upstream.acquire(f"stream-proxy:{uuid.uuid4().hex[:8]}")
+    # Offloaded to a worker thread because spawn does sync probe + ffmpeg
+    # subprocess startup (~1-2 s); inline would freeze the asyncio loop.
+    hold = await asyncio.to_thread(
+        upstream.acquire, f"stream-proxy:{uuid.uuid4().hex[:8]}")
     try:
         if not upstream.live:
             raise HTTPException(503, "upstream failed to start")
@@ -225,7 +229,9 @@ async def start_recording(req: RecordRequest):
     # whether or not any tab was visible), and guarantees the hold survives
     # the lifetime of this recording — closing the tab won't tear ffmpeg
     # down mid-FLAC. Released in `_finalize_session`.
-    rec_hold = upstream.acquire(f"record:{sid}")
+    # Offloaded to a worker thread (spawn does sync probe + subprocess
+    # startup); see stream-proxy comment above for the lockup details.
+    rec_hold = await asyncio.to_thread(upstream.acquire, f"record:{sid}")
     if not upstream.live:
         upstream.release(rec_hold)
         raise HTTPException(503, "upstream failed to start")
