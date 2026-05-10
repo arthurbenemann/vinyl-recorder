@@ -1,11 +1,18 @@
 """POST /api/pi/deploy — install pi/server.py + the systemd unit on a Pi
-over SSH. The browser collects hostname / username / password from a small
-modal in the toolbar; this route shells the deploy through paramiko and
-streams a list of progress lines back so the modal can render them."""
+over SSH.
+
+Streams progress to the browser as NDJSON: one JSON object per line, in
+the response body. The deploy modal renders each `{"type":"log",...}`
+frame as it arrives so the user sees apt fetching, sudo running, and the
+systemctl handshake in real time rather than only when the whole
+operation finishes (which can be ~15-30 s on a fresh Pi OS Lite image
+where apt actually has work to do)."""
 import asyncio
+import json
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 
 from services import pi_deploy
 from services.eventbus import bus
@@ -18,24 +25,71 @@ router = APIRouter()
 
 @router.post("/api/pi/deploy")
 async def deploy_pi(req: PiDeployRequest):
-    """Install / update the Pi capture service on `host`. Returns the
-    list of progress lines (also visible in the modal as they accumulate
-    on the server). The password is consumed locally and never echoed."""
+    """Stream deploy progress as NDJSON.
+
+    Each line in the body is one JSON object:
+        {"type": "log",   "line": "..."}    progress line, render in modal
+        {"type": "done"}                    deploy succeeded
+        {"type": "error", "detail": "..."}  deploy failed (clean message)
+
+    HTTP status is always 200 once we begin streaming — request validation
+    can still surface as a 422 from FastAPI before the response starts,
+    but deploy-time failures are reported in-band so the client can render
+    the partial log it already has."""
     bus.log(f"▶ Deploying pi-recorder to {req.username}@{req.host}:{req.port}…", "info")
-    try:
-        # paramiko is fully blocking — push to a thread so we don't stall
-        # the event loop for the full deploy duration (~5–15 s).
-        lines = await asyncio.to_thread(
-            pi_deploy.deploy,
-            req.host, req.username, req.password, req.port,
-        )
-    except pi_deploy.DeployError as e:
-        # Friendly user-facing error from the service layer.
-        bus.log(f"✗ Pi deploy failed: {e}", "err")
-        raise HTTPException(502, str(e))
-    except Exception as e:
-        log.exception("unexpected pi_deploy failure")
-        bus.log(f"✗ Pi deploy crashed: {e}", "err")
-        raise HTTPException(500, f"unexpected error: {e}")
-    bus.log(f"✓ Pi deploy ok — {req.host}", "ok")
-    return {"ok": True, "log": lines}
+
+    # Bridge the (synchronous, thread-bound) pi_deploy.deploy progress
+    # callback back to this request's event loop via an asyncio.Queue.
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def on_log(line: str) -> None:
+        # Called from the paramiko worker thread spawned by asyncio.to_thread.
+        # call_soon_threadsafe is the supported handoff between threads
+        # and the asyncio loop.
+        loop.call_soon_threadsafe(queue.put_nowait, ("log", line))
+
+    async def run_deploy() -> None:
+        try:
+            await asyncio.to_thread(
+                pi_deploy.deploy,
+                req.host, req.username, req.password, req.port,
+                on_log=on_log,
+            )
+            await queue.put(("done", None))
+        except pi_deploy.DeployError as e:
+            await queue.put(("error", str(e)))
+        except Exception as e:
+            log.exception("unexpected pi_deploy failure")
+            await queue.put(("error", f"unexpected error: {e}"))
+
+    task = asyncio.create_task(run_deploy())
+
+    async def stream():
+        # `media_type=application/x-ndjson` already nudges intermediaries
+        # to stop buffering; explicit `\n` after each JSON object means
+        # the consumer can split the body on newlines without a parser.
+        try:
+            while True:
+                kind, payload = await queue.get()
+                if kind == "log":
+                    yield json.dumps({"type": "log", "line": payload}) + "\n"
+                elif kind == "done":
+                    bus.log(f"✓ Pi deploy ok — {req.host}", "ok")
+                    yield json.dumps({"type": "done"}) + "\n"
+                    return
+                elif kind == "error":
+                    bus.log(f"✗ Pi deploy failed: {payload}", "err")
+                    yield json.dumps({"type": "error", "detail": payload}) + "\n"
+                    return
+        finally:
+            # Make sure run_deploy completes (it should already have, by
+            # the time we exit the loop above) so any unhandled
+            # exception inside it surfaces in the logs rather than
+            # being silently swallowed by the cancelled task.
+            try:
+                await task
+            except Exception:
+                pass
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
