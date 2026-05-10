@@ -11,7 +11,7 @@ import threading
 import time
 import urllib.error
 
-from services import upstream as up_mod
+from services import stream_probe, upstream as up_mod
 
 
 def _fake_session(events: list[dict] | None = None,
@@ -334,7 +334,7 @@ def test_connect_sets_configured_without_spawning_when_no_holders(monkeypatch):
     """connect() probes + flips configured but does NOT spawn ffmpeg
     until a holder appears. This is the AUTO_CONNECT semantics that lets
     a quiescent server idle to ~0% CPU."""
-    monkeypatch.setattr(up_mod, "_probe_format",
+    monkeypatch.setattr(stream_probe, "_probe_format",
                         lambda url: {"sample_rate": 48000, "channels": 2,
                                      "bit_depth": 16, "codec": "pcm_s16le"})
     sess, _, spawned, _ = _fake_session()
@@ -421,7 +421,7 @@ def test_concurrent_acquires_do_not_deadlock(monkeypatch):
     milliseconds of each other, each offloading `acquire` to its own
     worker thread.
     """
-    monkeypatch.setattr(up_mod, "_probe_format",
+    monkeypatch.setattr(stream_probe, "_probe_format",
                         lambda url: {"sample_rate": 48000, "channels": 2,
                                      "bit_depth": 16, "codec": "pcm_s16le"})
 
@@ -479,7 +479,7 @@ def test_connect_spawns_immediately_if_holder_already_present(monkeypatch):
     """If a tab connected first and acquired a hold while the URL was
     blank, the subsequent connect() must spawn right away — otherwise the
     user would see the URL set up but no audio flowing."""
-    monkeypatch.setattr(up_mod, "_probe_format",
+    monkeypatch.setattr(stream_probe, "_probe_format",
                         lambda url: {"sample_rate": 48000, "channels": 2,
                                      "bit_depth": 16, "codec": "pcm_s16le"})
     sess, _, spawned, _ = _fake_session()

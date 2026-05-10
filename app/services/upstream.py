@@ -1,17 +1,20 @@
-"""Single shared upstream session — ref-counted, multi-subscriber.
+"""Single shared upstream session: subscriber fan-out + VU/CLIP analysis.
+
+The lifecycle (holders, idle grace, spawn/teardown) lives in
+`services.upstream_lifecycle`; stream-format probing lives in
+`services.stream_probe`. Public symbols from those siblings are re-exported
+here so external callers can keep `from services.upstream import ...` as-is.
 
 See Architecture.md § Upstream session lifecycle for design rationale.
 """
-import json
 import logging
-import os
 import queue
-import subprocess
+import subprocess  # noqa: F401 (kept for tests that monkeypatch up_mod.subprocess)
 import threading
 import time
 import traceback
-import urllib.error
-import urllib.request
+import urllib.error  # noqa: F401 (kept for tests that monkeypatch up_mod.urllib)
+import urllib.request  # noqa: F401 (kept for tests that monkeypatch up_mod.urllib)
 import warnings
 from collections import deque
 from typing import Callable, Optional
@@ -27,112 +30,22 @@ with warnings.catch_warnings():
                             message=r".*audioop.*")
     import audioop
 
+# Re-exports — keep external imports (`from services.upstream import ...`)
+# working unchanged after the split. The flake8 noqa is because these are
+# imported solely to be re-exposed at module scope.
+from services.stream_probe import (  # noqa: F401
+    _probe_format, _probe_via_pi_info, probe_stream,
+)
+from services.upstream_lifecycle import (  # noqa: F401
+    UPSTREAM_IDLE_GRACE_SECONDS, UPSTREAM_MIN_UPTIME_SECONDS,
+    _env_float, _HoldToken,
+    acquire_hold, cancel_grace_locked, connect_session, disconnect_session,
+    on_grace_expired, release_hold, schedule_grace_teardown_locked,
+    spawn_ffmpeg, teardown_ffmpeg,
+)
+
 
 _log = logging.getLogger(__name__)
-
-
-# Idle lifecycle tuning. The grace gives a "next acquire arrives in a
-# moment" pattern (e.g. tab refresh dropping then re-establishing the WS)
-# room to skip the spawn entirely. The min-uptime guard prevents a flap
-# loop if a lone holder rapidly acquire/release/acquires (e.g. a browser
-# rapidly toggling visibility) — we never tear down before a grace-from-
-# spawn so a fresh ffmpeg gets a chance to do useful work.
-def _env_float(name: str, default: float) -> float:
-    raw = os.getenv(name, "").strip()
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        return default
-
-
-UPSTREAM_IDLE_GRACE_SECONDS = _env_float("UPSTREAM_IDLE_GRACE_SECONDS", 10.0)
-UPSTREAM_MIN_UPTIME_SECONDS = _env_float("UPSTREAM_MIN_UPTIME_SECONDS", 3.0)
-
-
-def probe_stream(url: str, timeout: float = 10.0) -> dict:
-    """Run ffprobe against `url` and return {sample_rate, channels, codec,
-    bit_depth}. Raises on failure with a user-facing message."""
-    r = subprocess.run(
-        ["ffprobe", "-v", "error", "-print_format", "json",
-         "-show_streams", "-i", url],
-        capture_output=True, text=True, timeout=timeout,
-    )
-    if r.returncode != 0:
-        raise RuntimeError((r.stderr or "ffprobe failed").strip()[:300])
-    info = json.loads(r.stdout or "{}")
-    streams = info.get("streams", [])
-    if not streams:
-        raise RuntimeError("no streams reported by ffprobe")
-    s = streams[0]
-    bd = s.get("bits_per_sample") or 0
-    return {
-        "sample_rate": int(s.get("sample_rate") or 44100),
-        "channels":    int(s.get("channels") or 2),
-        "bit_depth":   int(bd) if bd else 16,
-        "codec":       s.get("codec_name", ""),
-    }
-
-
-def _probe_via_pi_info(url: str, timeout: float = 2.0) -> dict:
-    """Probe a Pi-recorder-style upstream by hitting its `/info` endpoint.
-
-    Strips the path off `url` and asks for `<base>/info`; returns the
-    same fmt dict shape as `probe_stream`. Much cheaper than spawning
-    ffprobe (which itself opens a /stream connection on the Pi, kicking
-    any in-flight consumer for a second). Caller is responsible for
-    falling back to ffprobe on any failure here — we raise a plain
-    RuntimeError (or let urllib's own errors propagate) so the fallback
-    site can wrap with a single except.
-    """
-    # Build base = scheme://host[:port]. Drop path/query/fragment.
-    from urllib.parse import urlparse, urlunparse
-    parts = urlparse(url)
-    if not parts.scheme or not parts.netloc:
-        raise RuntimeError("not an http(s) URL")
-    base = urlunparse((parts.scheme, parts.netloc, "", "", "", ""))
-    info_url = base + "/info"
-    req = urllib.request.Request(info_url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        if getattr(resp, "status", 200) != 200:
-            raise RuntimeError(f"/info returned HTTP {resp.status}")
-        body = resp.read()
-    info = json.loads(body)
-    sample_rate = int(info["sample_rate"])
-    channels    = int(info["channels"])
-    bit_depth   = int(info["bit_depth"])
-    # The Pi serves raw PCM little-endian; map bit depth → pcm_s{NN}le for
-    # parity with what ffprobe would have returned (downstream consumers
-    # only inspect codec for logging, but stay consistent).
-    codec = "pcm_s24le" if bit_depth >= 24 else "pcm_s16le"
-    return {
-        "sample_rate": sample_rate,
-        "channels":    channels,
-        "bit_depth":   bit_depth,
-        "codec":       codec,
-    }
-
-
-def _probe_format(url: str) -> dict:
-    """Probe the upstream format. Tries the Pi's /info endpoint first (cheap,
-    ~20 ms over LAN, doesn't kick the active /stream consumer); falls back
-    to ffprobe on any failure — wrong host, missing endpoint, network error,
-    JSON parse, missing keys, anything. Logs which path produced the result
-    at debug level so a confused operator can grep for it."""
-    try:
-        fmt = _probe_via_pi_info(url)
-        _log.debug("probe via /info succeeded for %s", url)
-        return fmt
-    except (urllib.error.URLError, OSError, RuntimeError, ValueError,
-            KeyError, TypeError) as e:
-        _log.debug("probe via /info failed for %s: %s — falling back to ffprobe",
-                   url, e)
-    # Fallback path. Let ffprobe's own RuntimeError surface to the caller
-    # so the user-facing connect message stays informative.
-    fmt = probe_stream(url)
-    _log.debug("probe via ffprobe succeeded for %s", url)
-    return fmt
 
 
 # CLIP fires when a sample is within ~0.087 dBFS of full scale, matching the
@@ -225,20 +138,6 @@ class _Subscriber:
             except (BrokenPipeError, OSError, ValueError):
                 self.alive = False
                 return
-
-
-class _HoldToken:
-    """Opaque object returned by `acquire`; passed back to `release`.
-
-    Carrying the reason on the token (rather than just being an `object()`)
-    makes /api/status snapshots and debug dumps actually informative when
-    investigating "why is upstream still alive?" in production.
-    """
-    __slots__ = ("reason", "_released")
-
-    def __init__(self, reason: str):
-        self.reason = reason
-        self._released = False
 
 
 class UpstreamSession:
@@ -356,110 +255,17 @@ class UpstreamSession:
             }
 
     def connect(self, url: str) -> dict:
-        """Configure the upstream URL — probes the format and marks the
-        session as configured. Does NOT spawn ffmpeg unless there's already
-        a holder; ffmpeg comes up on the first acquire. Existing holders
-        get the new url honoured on the next spawn (after a teardown)."""
-        with self._lock:
-            if self.configured:
-                # Disallow racing reconnects with a different URL; a caller
-                # that wants to switch URLs must disconnect first. Matches
-                # the prior single-shot connect contract.
-                raise RuntimeError("already connected")
-        # Run probe outside the lock — probe_stream / urllib calls block.
-        fmt = _probe_format(url)
-        sample_format = "s24le" if fmt["bit_depth"] >= 24 else "s16le"
-        spawn_after_set = False
-        with self._lock:
-            self.url = url
-            self.fmt = fmt
-            self.sample_format = sample_format
-            # Connect resets latched clips (matches the old client behavior
-            # of clearClip() in connect() — fresh session, fresh slate).
-            self.clipped_l = self.clipped_r = False
-            self.configured = True
-            spawn_after_set = bool(self._holders) and not (
-                self.proc is not None and self.proc.poll() is None)
-        self._on_event({"type": "upstream", "configured": True,
-                        "connected": False, "live": False,
-                        "url": url, "format": fmt})
-        if spawn_after_set:
-            try:
-                self._spawn()
-            except Exception as e:
-                _log.error("spawn after connect failed: %s", e)
-        return fmt
+        return connect_session(self, url)
 
     def disconnect(self) -> None:
-        """Stop the upstream ffmpeg, drop all subscribers, clear
-        configured. Holders themselves are NOT cleared — callers manage
-        their own tokens. After disconnect, those tokens become inert
-        (releasing them is a no-op since there's nothing live to schedule)."""
-        with self._lock:
-            had_proc = self.proc is not None
-            self.configured = False
-            self._cancel_grace_locked()
-        if had_proc:
-            self._teardown(force=True)
-        else:
-            # Even with no live ffmpeg, surface the state flip so clients
-            # see configured drop to false.
-            with self._lock:
-                self.url = None
-                self.fmt = {}
-                self.sample_format = ""
-            self._on_event({"type": "upstream", "configured": False,
-                            "connected": False, "live": False})
+        disconnect_session(self)
 
     # ── holder ref-count ──────────────────────────────────────────────────
     def acquire(self, reason: str) -> _HoldToken:
-        """Bump the holder count. If this is the 0→1 transition AND we're
-        configured, spawn ffmpeg synchronously (~400 ms). If a grace timer
-        was scheduled, cancel it (no teardown needed — ffmpeg stays alive).
-
-        Returns an opaque token that must eventually be passed to release()."""
-        token = _HoldToken(reason)
-        with self._lock:
-            had_grace = self._grace_timer is not None
-            self._holders[token] = reason
-            self._cancel_grace_locked()
-            # `_stopping` is True from the brief window where _teardown
-            # has dropped the lock to terminate ffmpeg but hasn't yet
-            # cleared `self.proc`. Treat that as "not live" so we drive
-            # a fresh spawn instead of subscribing to a dying process.
-            live_for_acquire = (self.proc is not None
-                                and self.proc.poll() is None
-                                and not self._stopping)
-            need_spawn = (self.configured
-                          and not had_grace
-                          and not live_for_acquire)
-        if need_spawn:
-            try:
-                self._spawn()
-            except Exception:
-                # Spawn failure: drop the hold so a future retry can try
-                # again, and re-raise so the caller sees the error rather
-                # than discovering it later via subscribe() failing.
-                with self._lock:
-                    self._holders.pop(token, None)
-                    token._released = True
-                raise
-        return token
+        return acquire_hold(self, reason)
 
     def release(self, token: _HoldToken) -> None:
-        """Drop a holder. Idempotent. When the count hits zero AND ffmpeg
-        is live, schedule a grace teardown (deadline = max(now+grace,
-        spawn_time+min_uptime))."""
-        if token is None or token._released:
-            return
-        with self._lock:
-            if self._holders.pop(token, None) is None:
-                return
-            token._released = True
-            still_holders = bool(self._holders)
-            live = self.proc is not None and self.proc.poll() is None
-            if not still_holders and live:
-                self._schedule_grace_teardown_locked()
+        release_hold(self, token)
 
     # ── subscribe (live-only) ─────────────────────────────────────────────
     def subscribe(self, name: str, sink: Callable[[bytes], None],
@@ -512,184 +318,21 @@ class UpstreamSession:
                         "clipped_r": self.clipped_r,
                         "cleared":   True})
 
-    # ── lifecycle internals ───────────────────────────────────────────────
+    # ── lifecycle internals (delegated to services.upstream_lifecycle) ───
     def _spawn(self) -> None:
-        """Bring ffmpeg up. Re-probes the format (the design treats every
-        spawn as fresh — ~20 ms over LAN, removes the "stale fmt" failure
-        mode entirely, keeps the spawn path stateless). Resets all health
-        + preroll state so a warm reconnect looks like a fresh start."""
-        # Wait out any in-flight teardown so we don't spawn a second ffmpeg
-        # alongside the dying one. _teardown briefly drops the lock to
-        # terminate the child; the locked phase that follows clears
-        # `proc` and resets `_stopping`, after which we can safely spawn.
-        # Polling here is bounded by `proc.wait(timeout=2)` inside teardown
-        # plus a kill, so 5 s is comfortably above the worst case.
-        deadline = time.monotonic() + 5.0
-        while True:
-            with self._lock:
-                if not (self._stopping and self.proc is not None):
-                    break
-            if time.monotonic() > deadline:
-                raise RuntimeError("teardown did not finish within 5s")
-            time.sleep(0.005)
-        with self._lock:
-            if self.proc is not None and self.proc.poll() is None:
-                return
-            url = self.url
-            if not url or not self.configured:
-                raise RuntimeError("cannot spawn without a configured URL")
-        # Probe outside the lock — network call, must not block other ops.
-        fmt = _probe_format(url)
-        sample_format = "s24le" if fmt["bit_depth"] >= 24 else "s16le"
-        # The probe ran without the lock; if disconnect() raced in and
-        # cleared `configured`, abort rather than spawning a doomed
-        # subprocess against a stale URL. Holders that are still around
-        # will see live=false and either re-acquire (driving a fresh
-        # _spawn) or stay idle.
-        with self._lock:
-            if not self.configured or self.url != url:
-                return
-        cmd = [
-            "ffmpeg", "-loglevel", "error",
-            "-fflags", "nobuffer",
-            "-i", url,
-            "-f", sample_format,
-            "-ar", str(fmt["sample_rate"]),
-            "-ac", str(fmt["channels"]),
-            "-",
-        ]
-        with self._lock:
-            self.fmt = fmt
-            self.sample_format = sample_format
-            self._stopping = False
-            self.peak_l = self.peak_r = 0.0
-            # Reset the pre-roll ring so stale bytes from a previous spawn
-            # (potentially in a different format) never leak into a recording.
-            self._preroll_chunks.clear()
-            self._preroll_total_bytes = 0
-            bps = 3 if sample_format == "s24le" else 2
-            self._expected_bps = fmt["sample_rate"] * fmt["channels"] * bps
-            self._preroll_capacity_bytes = self._expected_bps * self._preroll_seconds
-            # Reset health metrics.
-            self._bytes_in_window = 0
-            self._window_start = time.monotonic()
-            self._last_frame_ts = 0.0  # 0.0 sentinel: no frame received yet
-            self._gap_count = 0
-            self._gap_window.clear()
-            if self._has_connected_before:
-                self._reconnect_count += 1
-            self._has_connected_before = True
-            self._last_health = {}
-            self.proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                bufsize=0,
-            )
-            self._spawn_time = time.monotonic()
-            t = threading.Thread(target=self._read_loop, name="upstream-reader",
-                                 daemon=True)
-            self._reader = t
-            t.start()
-            self._health_stop.clear()
-            ht = threading.Thread(target=self._health_loop,
-                                  name="upstream-health", daemon=True)
-            self._health_thread = ht
-            ht.start()
-        self._on_event({"type": "upstream", "configured": True,
-                        "connected": True, "live": True,
-                        "url": url, "format": fmt})
+        spawn_ffmpeg(self)
 
     def _schedule_grace_teardown_locked(self) -> None:
-        """Schedule _teardown to run after the grace expires (or after the
-        min-uptime guard, whichever is later). Caller must hold self._lock.
-
-        The timer fires off-lock so a racing acquire on another thread
-        isn't blocked behind our teardown."""
-        # Cancel any prior pending timer first; only one in flight at a time.
-        if self._grace_timer is not None:
-            try: self._grace_timer.cancel()
-            except Exception: pass
-            self._grace_timer = None
-        now = time.monotonic()
-        deadline = max(now + self._grace_seconds,
-                       self._spawn_time + self._min_uptime)
-        delay = max(0.0, deadline - now)
-        timer = threading.Timer(delay, self._on_grace_expired)
-        timer.daemon = True
-        self._grace_timer = timer
-        timer.start()
+        schedule_grace_teardown_locked(self)
 
     def _cancel_grace_locked(self) -> None:
-        if self._grace_timer is not None:
-            try: self._grace_timer.cancel()
-            except Exception: pass
-            self._grace_timer = None
+        cancel_grace_locked(self)
 
     def _on_grace_expired(self) -> None:
-        """Timer callback. May race against an acquire that just bumped the
-        holder count back to nonzero — we re-check under the lock and bail
-        out if so (the cancel might have been too late)."""
-        with self._lock:
-            self._grace_timer = None
-            if self._holders:
-                return  # raced — a holder slipped in after the timer fired
-            if not (self.proc is not None and self.proc.poll() is None):
-                return  # already torn down by some other path
-        self._teardown(force=False)
+        on_grace_expired(self)
 
     def _teardown(self, force: bool = False) -> None:
-        """Stop ffmpeg + drop all subscribers, leaving configured untouched.
-
-        `force=True` is for `disconnect()` (user wants it dead, holders
-        be damned). `force=False` is the grace path; we double-check that
-        there are still no holders before pulling the plug."""
-        with self._lock:
-            if not force and self._holders:
-                return
-            if self.proc is None:
-                # Nothing to tear down. Still emit the state event when
-                # forced so disconnect() observers see configured=false.
-                proc = None
-                subs: list[_Subscriber] = []
-            else:
-                self._stopping = True
-                proc = self.proc
-                subs = list(self._subscribers.values())
-        if proc is not None:
-            try: proc.terminate()
-            except Exception: pass
-            try: proc.wait(timeout=2)
-            except Exception:
-                try: proc.kill()
-                except Exception: pass
-            for s in subs:
-                s.close()
-            self._health_stop.set()
-        with self._lock:
-            self.proc = None
-            self._reader = None
-            self._subscribers.clear()
-            self.peak_l = self.peak_r = 0.0
-            self.clipped_l = self.clipped_r = False
-            self._preroll_chunks.clear()
-            self._preroll_total_bytes = 0
-            self._last_health = {}
-            # Clear `_stopping` here (not just in _spawn) so a future spawn
-            # doesn't have to rely on the `proc is None` half of the predicate
-            # to escape its poll loop. Symmetric with the lifecycle: stopping
-            # belongs to the teardown that just finished.
-            self._stopping = False
-            configured = self.configured
-            url = self.url if configured else None
-            fmt = dict(self.fmt) if configured else {}
-            if not configured:
-                self.url = None
-                self.fmt = {}
-                self.sample_format = ""
-        self._on_event({"type": "clip", "clipped_l": False,
-                        "clipped_r": False, "cleared": True})
-        self._on_event({"type": "upstream", "configured": configured,
-                        "connected": False, "live": False,
-                        "url": url, "format": fmt})
+        teardown_ffmpeg(self, force=force)
 
     # ── reader thread ─────────────────────────────────────────────────────
     def _read_loop(self) -> None:
