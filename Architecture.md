@@ -16,8 +16,8 @@ Single-user, no auth, runs in Docker. Three components:
                                └────────────────┘
                                        │
                                        ▼
-                                 /data on disk
-                       (raw/ in-progress/ raw-album/ music/)
+                                 /output on disk
+                          (raw/ in-progress/ music/)
 ```
 
 ## Components
@@ -39,7 +39,7 @@ Deployed via a systemd unit, not Docker.
 | Layer    | Path                  | Responsibility                                              |
 |----------|-----------------------|-------------------------------------------------------------|
 | Routes   | `app/routes/`         | HTTP endpoints; thin handlers                               |
-| Services | `app/services/`       | ffmpeg wrappers, upstream session, MB/Discogs, jobs, bus   |
+| Services | `app/services/`       | ffmpeg wrappers, upstream session, MB/Discogs, jobs, bus    |
 | State    | `app/state.py`        | Pydantic models, module-level singletons (`upstream`, etc.) |
 | Static   | `app/static/`         | The single-page UI (no bundler)                             |
 
@@ -48,30 +48,50 @@ Key services:
 - **`UpstreamSession`** (`services/upstream.py`) — owns one ffmpeg subprocess
   pulling from the Pi, dispatches each chunk to N subscribers via per-subscriber
   bounded queues. Slow subscribers drop chunks; the reader thread never blocks.
-- **`bus`** (`services/bus.py`) — pub/sub event broadcaster. Every connected
-  WebSocket replays the last "hello" snapshot and then receives new events.
+- **`eventbus`** (`services/eventbus.py`) — pub/sub event broadcaster. Every
+  connected WebSocket replays the last "hello" snapshot and then receives new
+  events.
 - **`ffmpeg` helpers** (`services/ffmpeg.py`) — encode/decode, `metaflac` tag
   read/write, file listing with cached tag parse, silence detection.
 - **`musicbrainz` / `discogs`** (`services/{musicbrainz,discogs}.py`) — public
   API clients via stdlib `urllib`. Discogs accepts an optional token; MB needs
   only a User-Agent.
+- **`albums_fs`** (`services/albums_fs.py`) — `in-progress/{album_id}/`
+  workspace layer: reads/writes `album.json` manifests, manages side files,
+  enforces the no-mutate-source-audio invariant.
+- **`peaks`** (`services/peaks.py`) — generates and parses
+  [audiowaveform](https://github.com/bbc/audiowaveform) peak data so the wave
+  editor can render long FLACs without shipping raw PCM to the browser.
+- **`jobs`** (`services/jobs.py`) — in-process registry for long-running ops
+  (combine, split, cover-art fetch); routes return a job id and the UI polls
+  status over the WebSocket.
+- **`pi_deploy`** (`services/pi_deploy.py`) — drives the in-app "deploy to Pi"
+  flow over SSH (uploads `pi/server.py`, installs the systemd unit).
 
 Routes:
 
-- `recordings.py` — `/api/record/{start,stop,pause,resume}`, `/api/recordings`,
-  `/api/download/<file>`, `/api/stream-proxy` (browser playback).
+- `recordings.py` — `/api/record/{start,stop/{sid},pause/{sid},resume/{sid}}`,
+  `/api/recordings` + rename/delete/bulk-delete, `/api/download/{file}`,
+  `/api/stream-proxy` (browser playback), `/api/log/{sid}`,
+  `/api/test-stream`.
 - `tagging.py` — `/api/search`, `/api/release/{mbid}`,
-  `/api/release/discogs/{id}`, `/api/apply`, `/api/collection/refresh`.
-- `albums.py` — combine selected recordings into one FLAC, then split via the
-  waveform editor.
+  `/api/release/discogs/{id}`, `/api/apply`, `/api/collection/refresh`,
+  `/api/cover/{mbid}`, `/api/file-cover/{album_id}`.
+- `albums.py` — `/api/albums`, `/api/combine`, `/api/promote`,
+  `/api/album/{id}/{demote,plan,sides/reorder,peaks/{idx},sides/{idx}/audio,tracks,track/{name}}`,
+  `/api/album/{detect-silences,measure,split}`.
+- `pi_deploy.py` — `/api/pi/deploy` (streams install logs back over the
+  WebSocket).
 - `ws.py` — `/ws` WebSocket. Event types: `hello`, `vu`, `clip`, `upstream`,
   `record`, `health`, `log`, `ping`.
 
 ### Frontend — `app/static/`
 
-`index.html` + `main.js` + `wave-editor.js` + `style.css`. Vanilla JS. The
-WebSocket carries live state (VU, recording timer, health, logs); user actions
-go through `fetch()` to the JSON API.
+`index.html` + `main.js` + `wave-editor.js` + `peaks.js` + `style.css` +
+`favicon.svg`. Vanilla JS, no bundler. The WebSocket carries live state (VU,
+recording timer, health, logs); user actions go through `fetch()` to the JSON
+API. `peaks.js` decodes the audiowaveform binary blob the server returns for
+the wave editor.
 
 ## Core data flows
 
@@ -145,15 +165,21 @@ artist/album against owned releases uses normalised token overlap (stdlib only).
 
 For multi-side LP rips:
 
-1. User selects N recordings → `/api/album/combine` concatenates them into one
-   FLAC in `in-progress/` (re-encoded so concat boundaries are clean).
-2. The combined file opens in `wave-editor.js`. Auto-detected silences seed
-   suggested cuts; the user adjusts and labels tracks.
+1. User selects N recordings → `/api/combine` moves them into a fresh
+   `in-progress/{album_id}/` folder and writes an `album.json` manifest
+   recording the side order. The source side FLACs are kept untouched; a
+   concatenated cache (`.cache/concat.flac`) is built on demand for the
+   wave editor.
+2. The album opens in `wave-editor.js`. The server returns audiowaveform
+   peak data via `/api/album/{id}/peaks/{side_idx}`; auto-detected silences
+   (`/api/album/detect-silences`) seed suggested cuts; the user adjusts and
+   labels tracks. The split plan is persisted into `album.json` via
+   `/api/album/{id}/plan`.
 3. `/api/album/split` writes one FLAC per track into
-   `music/{Artist}/{Album} (Year)/NN - Title.flac` (Jellyfin-shaped),
-   persists the full plan as a `<stem>.split.json` sidecar next to the source FLAC,
-   and moves the source from `in-progress/` into `raw-album/` so the editor
-   can still re-load + re-edit it later without duplicating audio.
+   `music/{Artist}/{Album} (Year)/NN - Title.flac` (Jellyfin-shaped) and
+   embeds tags + cover at that step. The original sides remain in
+   `in-progress/{album_id}/` so the album can be re-split later without
+   re-recording.
 
 ## WebSocket event reference
 
@@ -213,7 +239,7 @@ Disk-free is monitored; recording start is blocked under 2 GB free.
 - FastAPI runs request handlers on uvicorn's threadpool; long ops use
   `asyncio.to_thread`
 
-The `bus` is thread-safe; everything else uses an `RLock` around the
+The `eventbus` is thread-safe; everything else uses an `RLock` around the
 subscribers list and pre-roll ring.
 
 ## Configuration
@@ -226,10 +252,12 @@ Environment variables (read at startup, surfaced via `GET /api/config`):
 | `AUTO_CONNECT`               | `0`              | connect on page load                 |
 | `DEFAULT_GAIN_DB`            | unset            | initial `/gain` POST after connect   |
 | `DEFAULT_SPLIT_NORMALIZE`    | `0`              | EBU R128 on split                    |
-| `DEFAULT_SPLIT_PEAK_DB`      | `-1.0`           | target peak                          |
+| `DEFAULT_SPLIT_TARGET_PEAK_DB` | `-1.0`         | target peak when normalising         |
+| `DEFAULT_SPLIT_BIT_DEPTH`    | source bit depth | force 16/24-bit on split output      |
 | `PRE_ROLL_SECONDS`           | `5`              | ring buffer size; `0` disables       |
 | `DISCOGS_USERNAME`           | unset            | enables collection-aware tagging     |
 | `DISCOGS_TOKEN`              | unset            | optional; raises Discogs rate limits |
+| `MUSIC_OUTPUT_DIR`           | `/output/music`  | relocate Jellyfin tree (e.g. NAS)    |
 
 `DISCOGS_TOKEN` is never sent to the browser. `/api/config` reports
 `discogs_username` (boolean: configured?) so the UI can toggle the collection
@@ -237,9 +265,12 @@ section.
 
 ## Deployment
 
-`docker-compose.yml` runs the app. `docker-compose.test.yml` overlays a
-synthetic stream (`test-streams/`) so you can develop without a Pi. Pi service
-is deployed standalone via `pi/vinyl-recorder.service` (systemd).
+`docker-compose.yml` runs the published GHCR image. `docker-compose.dev.yml`
+overlays a local source build; `docker-compose.test.yml` overlays a synthetic
+stream (`test-streams/`) so you can develop without a Pi. Pi service is
+deployed standalone via `pi/pi-recorder.service` (systemd) — either through
+the in-app **deploy to pi…** flow (which calls `/api/pi/deploy`) or via the
+manual recipe in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Testing
 
