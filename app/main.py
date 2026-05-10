@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from routes import albums, recordings, tagging, ws as ws_route
+from routes import albums, pi_deploy, recordings, tagging, ws as ws_route
 from services.eventbus import bus
 from services.ffmpeg import LOW_SPACE_GB, disk_free_gb
 from services.jobs import get_job
@@ -245,6 +245,7 @@ async def job_status(job_id: str):
 app.include_router(recordings.router)
 app.include_router(albums.router)
 app.include_router(tagging.router)
+app.include_router(pi_deploy.router)
 app.include_router(ws_route.router)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
