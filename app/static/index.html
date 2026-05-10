@@ -20,6 +20,12 @@
       <span id="stext">disconnected</span>
       <span class="health-chevron" id="health-chevron" hidden>▼</span>
     </button>
+    <div class="header-menu">
+      <button class="header-menu-btn" id="header-menu-btn" onclick="toggleHeaderMenu(event)" aria-haspopup="true" aria-expanded="false" title="More">⋮</button>
+      <div class="header-menu-pop" id="header-menu-pop" hidden role="menu">
+        <button class="header-menu-item" id="pi-deploy-btn" role="menuitem" onclick="openPiDeploy(); closeHeaderMenu()">deploy to pi…</button>
+      </div>
+    </div>
     <div class="health-panel" id="health-panel" hidden>
       <div class="health-row"><span class="health-label">level</span><span id="hp-level">—</span></div>
       <div class="health-row"><span class="health-label">bytes/sec</span><span id="hp-bps">—</span></div>
@@ -36,7 +42,7 @@
 
   <!-- SIDEBAR: capture controls -->
   <div class="sidebar">
-    <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()" title="Collapse panel" aria-expanded="true">
+    <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()" title="Collapse panel" aria-label="Collapse sidebar" aria-expanded="true">
       <span class="sidebar-toggle-icon">‹</span>
     </button>
     <div class="sb-section">
@@ -89,10 +95,10 @@
         </select>
       </div>
       <div class="transport">
-        <button class="rec-btn" id="recbtn" onclick="toggleRec()" title="Record / Stop">
+        <button class="rec-btn" id="recbtn" onclick="toggleRec()" title="Record / Stop" aria-label="Record or stop">
           <div class="rec-btn-dot"></div>
         </button>
-        <button class="pause-btn" id="pausebtn" onclick="togglePause()" title="Pause / resume" hidden>‖</button>
+        <button class="pause-btn" id="pausebtn" onclick="togglePause()" title="Pause / resume" aria-label="Pause or resume" hidden>‖</button>
         <div class="timer-block">
           <div class="timer" id="timer">00:00:00</div>
           <div class="timer-hint" id="timer-hint">click ● to start recording</div>
@@ -104,8 +110,13 @@
     </div>
 
     <div class="sb-section">
-      <div class="label">Log</div>
-      <div class="log" id="log">Ready.</div>
+      <details id="log-details" class="log-details">
+        <summary class="log-summary">
+          <span class="label">Log</span>
+          <span class="log-tail" id="log-tail" title="Most recent log line">Ready.</span>
+        </summary>
+        <div class="log" id="log">Ready.</div>
+      </details>
     </div>
   </div>
 
@@ -142,13 +153,13 @@
           <thead>
             <tr>
               <th class="col-check"><input type="checkbox" id="check-all" onclick="toggleAll(this.checked)"></th>
-              <th class="sortable" data-sort="album"  onclick="setSort('album')">Album<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="artist" onclick="setSort('artist')">Artist<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="year"   onclick="setSort('year')">Year<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="date"   onclick="setSort('date')">Recorded<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="length" onclick="setSort('length')">Length<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="size"   onclick="setSort('size')">Size<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')" title="Source bit depth / kilo-samples-per-second">Fmt<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="album"  onclick="setSort('album')"  role="button" tabindex="0" aria-sort="none">Album<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="artist" onclick="setSort('artist')" role="button" tabindex="0" aria-sort="none">Artist<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="year"   onclick="setSort('year')"   role="button" tabindex="0" aria-sort="none">Year<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="date"   onclick="setSort('date')"   role="button" tabindex="0" aria-sort="none">Recorded<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="length" onclick="setSort('length')" role="button" tabindex="0" aria-sort="none">Length<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="size"   onclick="setSort('size')"   role="button" tabindex="0" aria-sort="none">Size<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')"    role="button" tabindex="0" aria-sort="none" title="Source bit depth / kilo-samples-per-second">Fmt<span class="sort-arrow"></span></th>
               <th></th>
             </tr>
           </thead>
@@ -177,13 +188,13 @@
           <thead>
             <tr>
               <th class="col-check"><input type="checkbox" id="albums-check-all" onclick="toggleAllAlbums(this.checked)"></th>
-              <th class="sortable" data-sort="album"  onclick="setSort('album')">Album<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="artist" onclick="setSort('artist')">Artist<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="year"   onclick="setSort('year')">Year<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="date"   onclick="setSort('date')">Recorded<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="length" onclick="setSort('length')">Length<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="size"   onclick="setSort('size')">Size<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')" title="Source bit depth / kilo-samples-per-second">Fmt<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="album"  onclick="setSort('album')"  role="button" tabindex="0" aria-sort="none">Album<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="artist" onclick="setSort('artist')" role="button" tabindex="0" aria-sort="none">Artist<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="year"   onclick="setSort('year')"   role="button" tabindex="0" aria-sort="none">Year<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="date"   onclick="setSort('date')"   role="button" tabindex="0" aria-sort="none">Recorded<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="length" onclick="setSort('length')" role="button" tabindex="0" aria-sort="none">Length<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="size"   onclick="setSort('size')"   role="button" tabindex="0" aria-sort="none">Size<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')"    role="button" tabindex="0" aria-sort="none" title="Source bit depth / kilo-samples-per-second">Fmt<span class="sort-arrow"></span></th>
               <th>Sides</th>
               <th></th>
             </tr>
@@ -211,13 +222,13 @@
           <thead>
             <tr>
               <th class="col-check"><input type="checkbox" id="music-check-all" onclick="toggleAllMusic(this.checked)"></th>
-              <th class="sortable" data-sort="album"  onclick="setSort('album')">Album<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="artist" onclick="setSort('artist')">Artist<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="year"   onclick="setSort('year')">Year<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="date"   onclick="setSort('date')">Recorded<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="length" onclick="setSort('length')">Length<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="size"   onclick="setSort('size')">Size<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')" title="Source bit depth / kilo-samples-per-second">Fmt<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="album"  onclick="setSort('album')"  role="button" tabindex="0" aria-sort="none">Album<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="artist" onclick="setSort('artist')" role="button" tabindex="0" aria-sort="none">Artist<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="year"   onclick="setSort('year')"   role="button" tabindex="0" aria-sort="none">Year<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="date"   onclick="setSort('date')"   role="button" tabindex="0" aria-sort="none">Recorded<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="length" onclick="setSort('length')" role="button" tabindex="0" aria-sort="none">Length<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="size"   onclick="setSort('size')"   role="button" tabindex="0" aria-sort="none">Size<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')"    role="button" tabindex="0" aria-sort="none" title="Source bit depth / kilo-samples-per-second">Fmt<span class="sort-arrow"></span></th>
               <th>Tracks</th>
               <th></th>
             </tr>
@@ -446,6 +457,37 @@
       </div>
 
     </div>
+  </div>
+</div>
+
+<!-- Pi deployment modal — pushes pi/server.py + pi-recorder.service to a
+     Raspberry Pi over SSH and enables the systemd unit. -->
+<div class="modal-backdrop" id="pi-deploy-modal" hidden role="dialog" aria-modal="true" aria-labelledby="pi-deploy-title" onclick="if(event.target===this)closePiDeploy()">
+  <div class="modal" style="width:560px">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="pi-deploy-title">Deploy pi-recorder</div>
+        <div class="modal-sub">Pushes pi/server.py + the systemd unit over SSH and enables the service.</div>
+      </div>
+      <button class="btn-small" onclick="closePiDeploy()">close</button>
+    </div>
+
+    <div class="pi-deploy-grid">
+      <div class="field"><label>Host / IP</label><input id="pi-host" placeholder="pi-recorder.local or 192.168.1.42" autocomplete="off"></div>
+      <div class="field"><label>Username</label><input id="pi-user" value="pi" autocomplete="off"></div>
+      <div class="field"><label>Password</label><input id="pi-pass" type="password" autocomplete="new-password"></div>
+    </div>
+
+    <div class="search-status" id="pi-deploy-status">
+      Authenticates over SSH; the password is also forwarded to <code>sudo -S</code> for the install steps. Nothing is stored.
+    </div>
+
+    <div class="action-row" style="margin-top:14px">
+      <button class="btn primary" id="pi-deploy-go" onclick="runPiDeploy()">deploy</button>
+      <button class="btn" onclick="closePiDeploy()">cancel</button>
+    </div>
+
+    <div class="pi-deploy-log" id="pi-deploy-log" hidden></div>
   </div>
 </div>
 
