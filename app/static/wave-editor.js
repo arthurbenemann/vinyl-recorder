@@ -131,10 +131,11 @@ async function _savePlanNow() {
     });
     const r = await _planSaveInFlight;
     if (r && r.ok && we.albumId === albumId) {
-      // Clear dirty BEFORE flashing — if the user edits again during the
-      // flash, the next debounce cycle finds dirty=true and saves again.
+      // Clear dirty BEFORE updating the indicator — if the user edits again
+      // during the render, the next debounce cycle finds dirty=true and
+      // saves again.
       we.dirty = false;
-      _flashSavedIndicator();
+      _markSavedNow();
     }
   } catch (e) {
     // Network blip — the next change will retry. Silent on purpose; a
@@ -145,24 +146,49 @@ async function _savePlanNow() {
   }
 }
 
-// Tiny visual confirmation that the debounced auto-save landed. The
-// indicator is hidden by default; we add `.flash` for ~1 s and let CSS
-// run the fade. Multiple rapid saves just re-trigger the same animation.
-let _savedFlashTimer = null;
-function _flashSavedIndicator() {
+// Persistent confirmation that the debounced auto-save landed. The
+// indicator stays hidden until the first successful save, then shows a
+// quiet "saved Xs ago" pill that ticks once every few seconds while the
+// modal is open. A previous version of this flashed for ~1 s and hid
+// again; if the user closed the modal between flashes they couldn't tell
+// whether their work persisted.
+let _savedAt = null;             // ms epoch of last successful save
+let _savedTickTimer = null;      // shared interval that re-renders the label
+
+function _renderSavedLabel() {
   const el = document.getElementById('we-saved');
   if (!el) return;
+  if (_savedAt == null) { el.hidden = true; return; }
+  const ageMs = Date.now() - _savedAt;
+  const ageS  = Math.max(0, Math.floor(ageMs / 1000));
+  let text;
+  if (ageS < 5)         text = 'saved just now';
+  else if (ageS < 10)   text = 'saved <10s ago';
+  else if (ageS < 60)   text = `saved ${ageS}s ago`;
+  else if (ageS < 3600) text = `saved ${Math.floor(ageS / 60)}m ago`;
+  else                  text = `saved ${Math.floor(ageS / 3600)}h ago`;
+  el.textContent = text;
   el.hidden = false;
-  // Force a reflow so re-adding the class restarts the CSS transition.
-  el.classList.remove('flash');
-  void el.offsetWidth;
-  el.classList.add('flash');
-  if (_savedFlashTimer) clearTimeout(_savedFlashTimer);
-  _savedFlashTimer = setTimeout(() => {
-    el.classList.remove('flash');
-    el.hidden = true;
-    _savedFlashTimer = null;
-  }, 1100);  // CSS transition is 1 s; add a small buffer.
+}
+
+function _markSavedNow() {
+  _savedAt = Date.now();
+  _renderSavedLabel();
+  // Single shared interval — start it the first time we have a save to
+  // display, and let _stopSavedTicker (called on modal close) clear it.
+  if (_savedTickTimer == null) {
+    _savedTickTimer = setInterval(_renderSavedLabel, 5000);
+  }
+}
+
+function _stopSavedTicker() {
+  if (_savedTickTimer != null) {
+    clearInterval(_savedTickTimer);
+    _savedTickTimer = null;
+  }
+  _savedAt = null;
+  const el = document.getElementById('we-saved');
+  if (el) { el.hidden = true; el.textContent = ''; }
 }
 
 // Public hook: called on modal close so the final state is flushed even
@@ -345,6 +371,9 @@ function openWaveEditor(fname) {
     dirty:       false,
   });
   resetMeasureUI();
+  // Reset the auto-save indicator. Each open starts hidden; the first
+  // successful debounced save flips it to "saved just now".
+  _stopSavedTicker();
   // Kick off peaks fetch in parallel with audio loading. When peaks land
   // we redraw the canvas + minimap and surface the approximate peak as
   // the album-stats readout — instant feedback while astats stays
@@ -453,6 +482,10 @@ function closeWaveEditor() {
   document.getElementById('we-modal').hidden = true;
   document.removeEventListener('keydown', weKeyDown);
   _hidePeaksOverlay();
+  // Stop the shared "saved Xs ago" interval and hide the pill so the next
+  // open starts fresh — no stale "saved 12m ago" carrying over from a
+  // different album.
+  _stopSavedTicker();
   // Flush any debounced plan-save in flight so a fast-close doesn't lose
   // the user's last edit. Runs in the background; the modal is already
   // hidden so the user isn't waiting on the network.
@@ -541,11 +574,11 @@ function _renderApproxStats() {
   const text = document.getElementById('we-stats-text');
   if (!text) return;
   if (we.approxPeakDb == null) {
-    text.textContent = 'click measure to compute peak + noise floor';
+    text.textContent = _sourceFormatPrefix() + 'click measure to compute peak + noise floor';
     return;
   }
-  text.textContent =
-    `peak ~${we.approxPeakDb.toFixed(1)} dB · click measure for noise floor`;
+  text.textContent = _sourceFormatPrefix()
+    + `peak ~${we.approxPeakDb.toFixed(1)} dB · click measure for noise floor`;
 }
 
 // ── Sides reorder ─────────────────────────────────────────────────────────
@@ -1687,10 +1720,10 @@ function invalidateMeasure() {
   we.measured = null;
   const text = document.getElementById('we-stats-text');
   if (text && we.approxPeakDb != null) {
-    text.textContent =
-      `peak ~${we.approxPeakDb.toFixed(1)} dB · cuts changed — re-measure`;
+    text.textContent = _sourceFormatPrefix()
+      + `peak ~${we.approxPeakDb.toFixed(1)} dB · cuts changed — re-measure`;
   } else if (text) {
-    text.textContent = 'cuts changed — re-measure';
+    text.textContent = _sourceFormatPrefix() + 'cuts changed — re-measure';
   }
 }
 
@@ -1732,10 +1765,25 @@ async function weMeasure() {
   }
 }
 
+// Album-stats prefix: `source: 24b / 96 ksps · ` if format is known, else ''.
+// TODO: per-side `source_format` isn't carried on the album payload yet, so
+// we surface only the topline (album-level) format derived from the first
+// side. Once `sides[].source_format` lands we can detect mixed rates here
+// and either show the highest or "mixed" when they differ.
+function _sourceFormatPrefix() {
+  if (!we.albumId) return '';
+  const a = (typeof albumsByName !== 'undefined') ? albumsByName[we.albumId] : null;
+  if (!a) return '';
+  const s = (typeof fmtSourceFormat === 'function') ? fmtSourceFormat(a) : '';
+  if (!s || s === '—') return '';
+  return `source: ${s} · `;
+}
+
 function formatMeasured(d) {
   const fmt = v => (v == null || isNaN(v)) ? '—' : v.toFixed(1);
   const bits = d.effective_bits == null ? '—' : d.effective_bits.toFixed(1);
-  return `peak ${fmt(d.peak_db)} dB · noise floor ${fmt(d.noise_floor_db)} dB`
+  return _sourceFormatPrefix()
+       + `peak ${fmt(d.peak_db)} dB · noise floor ${fmt(d.noise_floor_db)} dB`
        + ` · DR ${fmt(d.dynamic_range_db)} dB (≈ ${bits} effective bits)`;
 }
 
