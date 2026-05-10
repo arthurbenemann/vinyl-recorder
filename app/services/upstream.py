@@ -1,40 +1,6 @@
-"""Single shared upstream session.
+"""Single shared upstream session — ref-counted, multi-subscriber.
 
-Why this exists: the Pi-side capture service only accepts ONE `/stream`
-consumer at a time (new connection kicks the old). Without a server-side
-fan-out, recording, playback proxy, and VU each pull `/stream` independently
-and constantly evict each other. With this module there is a SINGLE ffmpeg
-pulling raw PCM from the upstream URL; recording, playback, and VU all
-subscribe to its byte stream, so the Pi only sees one consumer regardless
-of how many tabs / sessions are running.
-
-Also computes peak L/R every ~50 ms and tracks sticky CLIP latches per
-channel — these are the inputs the WebSocket broadcaster sends to clients
-in lieu of a per-client `<audio>` analyser.
-
-Lifecycle (configured vs live)
-------------------------------
-The session has two distinct booleans:
-
-    configured  — user has set up a stream URL.  Survives ffmpeg teardown.
-    live        — ffmpeg subprocess is currently alive (the old "connected").
-
-The Pi consumes power whenever ffmpeg pulls /stream (arecord runs as a
-side-effect on the Pi). To make idle CPU ~0% when nobody is watching,
-the ffmpeg subprocess is now demand-driven: holders ref-count the desire
-for a live stream. When the count drops to zero we tear ffmpeg down after
-a short grace period; when it rises again we respawn. `configured` stays
-true across these cycles so the UI keeps showing "connected" — the only
-lie that matters for the user is "is the session set up", not "is a
-subprocess running this exact millisecond".
-
-Holders are owned by:
-  - each WS client whose tab is visible
-  - each active recording session (kept alive across tab close)
-  - each active playback proxy response
-
-The existing `connected` API is preserved as a backwards-compat alias for
-`live` so code that hasn't migrated still works.
+See Architecture.md § Upstream session lifecycle for design rationale.
 """
 import json
 import logging
