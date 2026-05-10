@@ -10,8 +10,8 @@ The manifest schema (v2):
     {
       "schema_version": 2,
       "tags":           {artist, album, year, genre, label,
-                         catalog_number, country, musicbrainz_albumid,
-                         discogs_release_id},
+                         catalog_number, country, composer, conductor,
+                         musicbrainz_albumid, discogs_release_id},
       "sides":          [filename, ...]  # ORDER matters
       "cover":          "cover.jpg" | null,
       "plan":           {tracks, normalize, target_peak_db,
@@ -290,6 +290,8 @@ def _summarize_album(album_id: str, manifest: dict) -> dict:
         "label":            tags.get("label", ""),
         "catalog_number":   tags.get("catalog_number", ""),
         "country":          tags.get("country", ""),
+        "composer":         tags.get("composer", ""),
+        "conductor":        tags.get("conductor", ""),
         "musicbrainz_albumid": tags.get("musicbrainz_albumid", ""),
         "discogs_release_id":  tags.get("discogs_release_id"),
         "side_count":       len(sides),

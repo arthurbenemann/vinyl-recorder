@@ -72,10 +72,64 @@ def test_release_returns_canonical_shape(monkeypatch):
     assert body["discogs_url"] is None
 
 
+def test_release_includes_composer_and_conductor_from_mb(monkeypatch):
+    """Release-level artist-rels on MB surface as the conductor field; the
+    composer field stays empty until Discogs enrichment fills it in."""
+    from routes import tagging as tg
+
+    mb_release = {
+        "id":            _VALID_MBID,
+        "title":         "Symphony",
+        "date":          "1962",
+        "artist-credit": [{"name": "Berlin Phil"}],
+        "media":         [{"format": "Vinyl", "tracks": []}],
+        "relations": [
+            {"type": "conductor", "artist": {"name": "Herbert von Karajan"}},
+        ],
+    }
+    monkeypatch.setattr(tg, "release_full", lambda mbid: mb_release)
+    monkeypatch.setattr(tg, "extract_discogs_id", lambda mb: None)
+
+    body = _client().get(f"/api/release/{_VALID_MBID}").json()
+    assert body["conductor"] == "Herbert von Karajan"
+    # Composer comes from Discogs only — no Discogs link → empty string.
+    assert body["composer"] == ""
+
+
 # ── /api/release/discogs/{id} validation ─────────────────────────────────
 def test_release_discogs_zero_id_returns_400():
     r = _client().get("/api/release/discogs/0")
     assert r.status_code == 400
+
+
+def test_release_discogs_includes_composer_and_conductor(monkeypatch):
+    """Discogs extraartists drive both fields. Prefix-matching catches
+    "Composed By" credits, and bare "Conductor" maps directly."""
+    from routes import tagging as tg
+    from services import discogs as ds_mod
+
+    fake = {
+        "title":   "Concerto",
+        "year":    1965,
+        "artists": [{"name": "Soloist"}],
+        "labels":  [{"name": "DG", "catno": "ABC-1"}],
+        "country": "DE",
+        "formats": [{"name": "Vinyl", "descriptions": ["LP"]}],
+        "genres":  ["Classical"],
+        "styles":  [],
+        "tracklist": [],
+        "images":  [],
+        "uri":     "https://www.discogs.com/release/42",
+        "extraartists": [
+            {"role": "Composed By", "name": "Beethoven"},
+            {"role": "Conductor",   "name": "Karajan"},
+        ],
+    }
+    monkeypatch.setattr(ds_mod, "release", lambda rid: fake)
+
+    body = _client().get("/api/release/discogs/42").json()
+    assert body["composer"]  == "Beethoven"
+    assert body["conductor"] == "Karajan"
 
 
 # ── /api/cover/{mbid} ────────────────────────────────────────────────────

@@ -31,7 +31,8 @@ let tagPanelDirty = false;
 // IDs of left-column inputs we flash on candidate-pick + watch for dirty edits.
 const TAG_LEFT_FIELD_IDS = [
   't-album', 't-artist', 't-year', 't-genre',
-  't-label', 't-catno', 't-country', 't-format', 't-tracks',
+  't-label', 't-catno', 't-country', 't-format',
+  't-composer', 't-conductor', 't-tracks',
 ];
 
 // Tracks the kind of row currently bound to the tag panel — `{album_id}`
@@ -63,6 +64,8 @@ function setLeft(fields) {
   document.getElementById('t-catno').value   = fields.catalog_number ?? '';
   document.getElementById('t-country').value = fields.country ?? '';
   document.getElementById('t-format').value  = fields.format  ?? '';
+  document.getElementById('t-composer').value  = fields.composer  ?? '';
+  document.getElementById('t-conductor').value = fields.conductor ?? '';
   if (fields.tracks !== undefined) {
     const arr = Array.isArray(fields.tracks) ? fields.tracks
       : String(fields.tracks || '').split(' / ').filter(Boolean);
@@ -384,7 +387,8 @@ export async function pickCollectionCandidate(releaseId) {
     setLeft({
       album: d.title, artist: d.artist, year: d.year, genre: d.genre,
       label: d.label, catalog_number: d.catalog_number, country: d.country,
-      format: d.format, tracks: d.tracks,
+      format: d.format, composer: d.composer, conductor: d.conductor,
+      tracks: d.tracks,
     });
     _flashChangedFields(before);
     _recomputeTagDirty();
@@ -431,7 +435,8 @@ export async function pickCandidate(i) {
     setLeft({
       album: d.title, artist: d.artist, year: d.year, genre: d.genre,
       label: d.label, catalog_number: d.catalog_number, country: d.country,
-      format: d.format, tracks: d.tracks,
+      format: d.format, composer: d.composer, conductor: d.conductor,
+      tracks: d.tracks,
     });
     _flashChangedFields(before);
     _recomputeTagDirty();
@@ -461,6 +466,8 @@ export async function applyTagPanel() {
     label:          document.getElementById('t-label').value.trim(),
     catalog_number: document.getElementById('t-catno').value.trim(),
     country:        document.getElementById('t-country').value.trim(),
+    composer:  document.getElementById('t-composer').value.trim(),
+    conductor: document.getElementById('t-conductor').value.trim(),
     tracks,
   };
   if (!fields.artist || !fields.album) {
