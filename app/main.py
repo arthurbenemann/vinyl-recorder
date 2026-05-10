@@ -16,6 +16,9 @@ from routes import albums, pi_deploy, recordings, tagging, ws as ws_route
 from services.eventbus import bus
 from services.ffmpeg import LOW_SPACE_GB, disk_free_gb
 from services.jobs import get_job
+from services.upstream import (
+    UPSTREAM_IDLE_GRACE_SECONDS, UPSTREAM_MIN_UPTIME_SECONDS,
+)
 from state import (
     AUTO_CONNECT, ConnectRequest, DEFAULT_GAIN_DB, DEFAULT_SPLIT_BIT_DEPTH,
     DEFAULT_SPLIT_NORMALIZE, DEFAULT_SPLIT_TARGET_PEAK_DB, DEFAULT_STREAM_URL,
@@ -83,8 +86,13 @@ async def _startup() -> None:
     recordings.start_watcher()
     if AUTO_CONNECT:
         try:
-            upstream.connect(DEFAULT_STREAM_URL)
-            bus.log(f"▶ Auto-connected to {DEFAULT_STREAM_URL}", "info")
+            # Configure-only — ffmpeg comes up the first time a holder
+            # acquires (visible WS tab, recording, playback proxy). Idle
+            # CPU stays at ~0% until somebody asks for audio.
+            # Offloaded so the probe (urllib /info, then ffprobe fallback)
+            # doesn't block the loop during startup.
+            await asyncio.to_thread(upstream.connect, DEFAULT_STREAM_URL)
+            bus.log(f"▶ Auto-configured upstream {DEFAULT_STREAM_URL}", "info")
         except Exception as e:
             bus.log(f"✗ Auto-connect failed: {e}", "err")
 
@@ -92,7 +100,9 @@ async def _startup() -> None:
 @app.on_event("shutdown")
 async def _shutdown() -> None:
     recordings.stop_watcher()
-    upstream.disconnect()
+    # disconnect() forces ffmpeg teardown (proc.terminate + wait up to 2 s);
+    # offload so the loop can keep servicing in-flight shutdown work.
+    await asyncio.to_thread(upstream.disconnect)
 
 
 @app.get("/")
@@ -117,6 +127,8 @@ async def get_config():
         "default_split_target_peak_db": DEFAULT_SPLIT_TARGET_PEAK_DB,
         "default_split_bit_depth":      DEFAULT_SPLIT_BIT_DEPTH,
         "pre_roll_seconds":             PRE_ROLL_SECONDS,
+        "upstream_idle_grace_seconds":  UPSTREAM_IDLE_GRACE_SECONDS,
+        "upstream_min_uptime_seconds":  UPSTREAM_MIN_UPTIME_SECONDS,
         # Boolean flag only — never leak the actual username/token to the
         # frontend; the UI just needs to know whether to show the section.
         "discogs_collection_enabled":   bool(DISCOGS_USERNAME),
@@ -152,13 +164,18 @@ async def status():
 
 @app.post("/api/connect")
 async def connect(req: ConnectRequest):
-    """Start the shared upstream pull. State is global — any tab can press it."""
-    if upstream.connected:
+    """Configure the shared upstream pull. State is global — any tab can
+    press it. Configures + probes only; ffmpeg comes up on demand once a
+    holder (visible WS tab, recording, playback proxy) acquires."""
+    if upstream.configured:
         bus.log("connect: already connected", "info")
         return upstream.state()
     bus.log(f"Connecting to {req.stream_url}…", "info")
     try:
-        fmt = upstream.connect(req.stream_url)
+        # Offload — connect() probes the format synchronously (urllib +
+        # possible ffprobe), and inline would freeze the loop while the
+        # probe runs.
+        fmt = await asyncio.to_thread(upstream.connect, req.stream_url)
     except Exception as e:
         bus.log(f"✗ Connect failed: {e}", "err")
         raise HTTPException(502, str(e))
@@ -176,9 +193,10 @@ async def disconnect():
     if active:
         bus.log("✗ Disconnect refused — stop recording first", "err")
         raise HTTPException(409, "stop recording before disconnecting")
-    if not upstream.connected:
+    if not upstream.configured:
         return upstream.state()
-    upstream.disconnect()
+    # Offload — disconnect() blocks while terminating ffmpeg (up to 2 s).
+    await asyncio.to_thread(upstream.disconnect)
     bus.log("■ Disconnected", "info")
     return upstream.state()
 
@@ -202,7 +220,10 @@ async def metrics():
     lines = [
         "# HELP vinyl_upstream_connected 1 if the shared upstream ffmpeg is up.",
         "# TYPE vinyl_upstream_connected gauge",
-        f"vinyl_upstream_connected {1 if upstream.connected else 0}",
+        f"vinyl_upstream_connected {1 if upstream.live else 0}",
+        "# HELP vinyl_upstream_configured 1 if the shared upstream URL is set up (may be idle if no holders).",
+        "# TYPE vinyl_upstream_configured gauge",
+        f"vinyl_upstream_configured {1 if upstream.configured else 0}",
         "# HELP vinyl_upstream_bytes_per_sec Recent measured bytes/sec from the upstream reader.",
         "# TYPE vinyl_upstream_bytes_per_sec gauge",
         f"vinyl_upstream_bytes_per_sec {int(h.get('bytes_per_sec') or 0)}",

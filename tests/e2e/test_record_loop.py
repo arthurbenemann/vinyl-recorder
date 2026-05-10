@@ -62,11 +62,13 @@ def test_record_3s_from_loop(stack):
 
 
 def test_status_reflects_upstream_format(stack):
-    """Once connected, /api/status reports the upstream's detected format —
+    """Once configured, /api/status reports the upstream's detected format —
     sanity-check that 96 kHz / 24-bit / pcm_s24le round-trips through the
-    UpstreamSession state."""
+    UpstreamSession state. The format is set during the probe in
+    `connect()` and persists across spawn/teardown, so a `configured`
+    check is sufficient — no need to wait for ffmpeg to be live."""
     body = http_json(f"{RECORDER_URL}/api/status")
-    assert body["upstream"]["connected"] is True
+    assert body["upstream"]["configured"] is True
     fmt = body["upstream"]["format"]
     assert fmt["sample_rate"] == 96000
     assert fmt["channels"] == 2

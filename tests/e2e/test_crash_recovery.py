@@ -30,7 +30,7 @@ from .conftest import (
     compose,
     ffprobe,
     http_json,
-    wait_for_upstream_connected,
+    wait_for_upstream_configured,
 )
 
 pytestmark = pytest.mark.e2e
@@ -54,11 +54,13 @@ def _wait_for_session_reaped(sid: str, timeout: float = 30.0) -> dict:
 def test_kill_upstream_mid_recording_reaps_session(stack):
     raw = stack["raw"]
 
-    # Confirm we're starting from a healthy connected stack — the session
+    # Confirm we're starting from a healthy configured stack — the session
     # fixture set this up, but a previous test in this module could have
-    # left a stale session around.
+    # left a stale session around. `configured` is the right pre-state
+    # check under the demand-driven lifecycle; ffmpeg only goes live when
+    # a holder (recording, visible WS tab, playback proxy) acquires.
     pre = http_json(f"{RECORDER_URL}/api/status")
-    assert pre["upstream"]["connected"] is True
+    assert pre["upstream"]["configured"] is True
     assert pre["sessions"] == [], f"unexpected leftover sessions: {pre['sessions']}"
 
     pre_files = set(raw.glob("*.flac")) if raw.exists() else set()
@@ -142,5 +144,5 @@ def test_kill_upstream_mid_recording_reaps_session(stack):
                 body={"stream_url": STREAM_URL},
             )
         except Exception:
-            pass  # Best-effort; wait_for_upstream_connected will surface it.
-        wait_for_upstream_connected(timeout=30)
+            pass  # Best-effort; wait_for_upstream_configured will surface it.
+        wait_for_upstream_configured(timeout=30)

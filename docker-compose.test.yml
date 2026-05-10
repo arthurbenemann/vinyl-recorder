@@ -64,8 +64,9 @@ services:
     # No healthcheck override — inherits the Dockerfile's HEALTHCHECK (probes
     # /health). `compose up --wait` blocks until that flips to healthy, so
     # e2e tests can't race the FastAPI lifespan. The fixture still polls
-    # /api/status separately for upstream.connected — a stricter readiness
-    # signal that AUTO_CONNECT has actually completed.
+    # /api/status separately for upstream.configured — a stricter readiness
+    # signal that AUTO_CONNECT has actually completed (configures + probes;
+    # ffmpeg comes up on demand once a holder acquires).
 
 networks:
   vinyl-test:

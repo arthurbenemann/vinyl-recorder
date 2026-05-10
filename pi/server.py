@@ -63,7 +63,13 @@ def amixer_cget_first_value(name: str) -> int:
     return int(m.group(1)) if m else 0
 
 def amixer_cget_enum_label(name: str) -> str:
-    """Return the human-readable label for the current enumerated value."""
+    """Return the human-readable label for the current enumerated value.
+
+    Single-subprocess path: parses both the value (`: values=N`) and the
+    matching `; Item #N '...'` line out of one `amixer cget` invocation.
+    The earlier version called amixer twice — once here, once via
+    amixer_cget_first_value — doubling the cost of every /info request.
+    """
     try:
         out = subprocess.check_output(
             ["amixer", "-c", CARD, "cget", f"name={name}"],
@@ -71,9 +77,93 @@ def amixer_cget_enum_label(name: str) -> str:
         )
     except Exception:
         return ""
-    val = amixer_cget_first_value(name)
-    m = re.search(rf"; Item #{val} '([^']*)'", out)
-    return m.group(1) if m else str(val)
+    mv = re.search(r": values=([\-\d]+)", out)
+    if not mv:
+        return ""
+    val = int(mv.group(1))
+    mi = re.search(rf"; Item #{val} '([^']*)'", out)
+    return mi.group(1) if mi else str(val)
+
+
+def parse_amixer_contents(text: str) -> dict:
+    """Parse the output of `amixer -c CARD contents` into a control map.
+
+    Returns `{name: {"value": int, "label": str|None}}` for every control
+    in the dump. ENUMERATED controls get both fields populated; integer
+    controls get just `value` and `label=None`. Used by `/info` to read
+    five distinct mixer controls in one subprocess instead of five-to-ten.
+
+    The structure of `amixer contents` per control is:
+
+        numid=N,iface=MIXER,name='PGA Gain Left'
+          ; type=ENUMERATED,access=rw,values=2,items=105
+          ; Item #0 '-12.0dB'
+          ...
+          : values=24,24
+
+    Stereo controls report `values=24,24` (one per channel); we take the
+    first int. The `; Item #N '...'` lines list the full enum domain;
+    we cherry-pick the one matching the chosen value to derive the label.
+    """
+    out: dict[str, dict] = {}
+    cur_name: str | None = None
+    cur_items: dict[int, str] = {}
+    cur_value: int | None = None
+    name_re = re.compile(r"^numid=\d+,iface=\w+,name='([^']*)'")
+    item_re = re.compile(r"^\s*;\s*Item #(\d+)\s+'([^']*)'")
+    value_re = re.compile(r"^\s*:\s*values=([\-\d]+)")
+
+    def _flush() -> None:
+        nonlocal cur_name, cur_items, cur_value
+        if cur_name is None:
+            return
+        label: str | None
+        if cur_value is None:
+            label = None
+        elif cur_items:
+            label = cur_items.get(cur_value, str(cur_value))
+        else:
+            label = None
+        out[cur_name] = {"value": cur_value if cur_value is not None else 0,
+                         "label": label}
+        cur_name = None
+        cur_items = {}
+        cur_value = None
+
+    for line in text.splitlines():
+        m = name_re.match(line)
+        if m:
+            _flush()
+            cur_name = m.group(1)
+            continue
+        if cur_name is None:
+            continue
+        m = item_re.match(line)
+        if m:
+            cur_items[int(m.group(1))] = m.group(2)
+            continue
+        m = value_re.match(line)
+        if m:
+            cur_value = int(m.group(1))
+            continue
+    _flush()
+    return out
+
+
+def amixer_contents_all() -> dict:
+    """Run `amixer -c CARD contents` once and return the parsed control map.
+    Returns an empty dict on subprocess error (e.g. amixer not installed,
+    card missing) — `/info` then renders the same shape it did before with
+    empty / zero values, so a missing card doesn't crash the endpoint.
+    """
+    try:
+        out = subprocess.check_output(
+            ["amixer", "-c", CARD, "contents"],
+            text=True, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return {}
+    return parse_amixer_contents(out)
 
 def get_gain_db() -> float:
     """Average of L/R PGA gains, in dB."""
@@ -146,19 +236,38 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── routes ─────────────────────────────────────────────────────────────
     def _info(self):
+        # One amixer subprocess instead of the prior 8 (2 for get_gain_db
+        # plus 2 each for the three enum labels). /info is hit on every
+        # browser connect AND used by the server-side probe path, so
+        # collapsing the cost matters even though each amixer call is
+        # individually cheap. The /stream path doesn't change.
+        controls = amixer_contents_all()
+
+        def _label(name: str) -> str:
+            c = controls.get(name)
+            return (c.get("label") if c else "") or ""
+
+        def _value(name: str) -> int:
+            c = controls.get(name)
+            return int(c.get("value") if c else 0)
+
+        l = item_to_db(_value("PGA Gain Left"))
+        r = item_to_db(_value("PGA Gain Right"))
+        gain_db = (l + r) / 2.0
+
         self._json(200, {
             "card":         CARD,
             "device":       DEVICE,
             "sample_rate":  SAMPLE_RATE,
             "bit_depth":    BIT_DEPTH,
             "channels":     CHANNELS,
-            "gain_db":      round(get_gain_db(), 1),
+            "gain_db":      round(gain_db, 1),
             "gain_min_db":  GAIN_MIN_DB,
             "gain_max_db":  GAIN_MAX_DB,
             "gain_step_db": GAIN_STEP_DB,
-            "mic_bias":     amixer_cget_enum_label("ADC Mic Bias"),
-            "left_input":   amixer_cget_enum_label("ADC Left Input"),
-            "right_input":  amixer_cget_enum_label("ADC Right Input"),
+            "mic_bias":     _label("ADC Mic Bias"),
+            "left_input":   _label("ADC Left Input"),
+            "right_input":  _label("ADC Right Input"),
         })
 
     def _gain(self):

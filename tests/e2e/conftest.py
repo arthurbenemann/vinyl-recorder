@@ -62,21 +62,26 @@ def http_json(url: str, method: str = "GET", body: dict | None = None,
         return json.loads(r.read())
 
 
-def wait_for_upstream_connected(timeout: float = 45.0) -> dict:
-    """Poll /api/status until upstream.connected flips true. Returns the
-    final status payload, or raises if the deadline expires."""
+def wait_for_upstream_configured(timeout: float = 45.0) -> dict:
+    """Poll /api/status until upstream.configured flips true. Returns the
+    final status payload, or raises if the deadline expires.
+
+    Note: `configured` (URL set up + probe succeeded) is the readiness
+    signal under the demand-driven lifecycle; `connected` / `live`
+    (ffmpeg subprocess up) only flips true once a holder acquires —
+    e.g. a visible WS tab, an active recording, or a playback proxy."""
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:
         try:
             last = http_json(f"{RECORDER_URL}/api/status", timeout=3)
-            if last.get("upstream", {}).get("connected"):
+            if last.get("upstream", {}).get("configured"):
                 return last
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             pass
         time.sleep(0.5)
     raise RuntimeError(
-        f"upstream not connected within {timeout:.0f} s. last status: {last!r}"
+        f"upstream not configured within {timeout:.0f} s. last status: {last!r}"
     )
 
 
@@ -205,7 +210,7 @@ def stack():
 
     try:
         try:
-            wait_for_upstream_connected()
+            wait_for_upstream_configured()
         except RuntimeError as e:
             logs = compose("logs", "vinyl-recorder", "--tail", "50").stdout
             pytest.fail(f"{e}\nrecorder logs:\n{logs}")

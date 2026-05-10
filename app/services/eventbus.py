@@ -71,9 +71,16 @@ class EventBus:
         the socket; on reconnect the client gets a fresh `hello` snapshot
         and is in sync again.
         """
-        with self._subs_lock:
-            subs = list(self._subs)
         is_vu = event.get("type") == "vu"
+        with self._subs_lock:
+            # VU frames arrive at ~60 Hz from the reader thread regardless
+            # of how many clients are connected. With zero subscribers there
+            # is literally nothing to fan out to — skip the list copy and
+            # the empty for-loop entirely so the idle process spends no
+            # cycles dispatching events nobody will read.
+            if is_vu and not self._subs:
+                return
+            subs = list(self._subs)
         evicted: list[asyncio.Queue] = []
         for q in subs:
             try:

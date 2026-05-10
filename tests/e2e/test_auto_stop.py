@@ -31,7 +31,11 @@ def _wait_for_session_reaped(sid: str, timeout: float = 20.0) -> dict:
 def test_duration_limit_auto_stops(stack):
     raw = stack["raw"]
     pre = http_json(f"{RECORDER_URL}/api/status")
-    assert pre["upstream"]["connected"] is True
+    # Configured is the persistent readiness signal under the demand-driven
+    # upstream lifecycle. `connected` / `live` only flips true once a holder
+    # acquires (recording itself, visible WS tab, playback proxy) — and at
+    # this point in the test no such holder exists yet.
+    assert pre["upstream"]["configured"] is True
     assert pre["sessions"] == [], f"unexpected leftover sessions: {pre['sessions']}"
 
     started = http_json(
@@ -52,9 +56,14 @@ def test_duration_limit_auto_stops(stack):
     after = _wait_for_session_reaped(sid, timeout=20)
     assert after["recording"] is False
     assert after["sessions"] == []
-    # Upstream should remain connected — this isn't a crash, just a clean exit.
-    assert after["upstream"]["connected"] is True, \
-        "upstream disconnected after a clean auto-stop"
+    # Upstream should remain configured — this isn't a crash, just a clean
+    # exit. `live` may flip false anywhere in the post-recording window
+    # because the watcher releases the recording's holder on finalize and
+    # the grace timer (default 10 s) tears ffmpeg down once the last
+    # holder is gone. `configured` captures the user-facing intent that
+    # survives those teardowns.
+    assert after["upstream"]["configured"] is True, \
+        "upstream became unconfigured after a clean auto-stop"
 
     fpath = raw / fname
     assert fpath.exists(), f"FLAC missing at {fpath}"

@@ -1,4 +1,5 @@
 """Recording sessions, library file ops, stream proxy + probe."""
+import asyncio
 import json
 import queue
 import signal
@@ -34,12 +35,31 @@ async def stream_proxy():
     the browser. Multiple unmuted tabs each spawn their own re-encoder but
     read from the SAME upstream pull, so the Pi only ever sees one /stream
     consumer.
+
+    Acquires a lifecycle hold so an unmuted playback tab keeps ffmpeg up
+    even if no other holder cares; released in the response generator's
+    finally block so the upstream can drop back to idle when the last
+    listener disconnects.
     """
-    if not upstream.connected:
-        bus.log("✗ stream-proxy: upstream not connected", "err")
+    if not upstream.configured:
+        bus.log("✗ stream-proxy: upstream not configured", "err")
         raise HTTPException(409, "stream not connected")
-    fmt = upstream.fmt
-    sample_format = upstream.sample_format
+    # Acquire BEFORE touching fmt — acquire() is what spawns ffmpeg if it
+    # was idle, and fmt is only populated once a spawn has run at least
+    # once. Failing here (probe failed, etc.) leaves the holder count
+    # untouched (acquire already cleaned up its token on raise).
+    # Offloaded to a worker thread because spawn does sync probe + ffmpeg
+    # subprocess startup (~1-2 s); inline would freeze the asyncio loop.
+    hold = await asyncio.to_thread(
+        upstream.acquire, f"stream-proxy:{uuid.uuid4().hex[:8]}")
+    try:
+        if not upstream.live:
+            raise HTTPException(503, "upstream failed to start")
+        fmt = upstream.fmt
+        sample_format = upstream.sample_format
+    except BaseException:
+        upstream.release(hold)
+        raise
     # MP3 because it's a self-synchronising frame format with very small
     # frames (~26 ms at 44.1 kHz). Browsers can start playback after just a
     # handful of frames, which gets startup latency down to a few hundred
@@ -84,6 +104,7 @@ async def stream_proxy():
     except RuntimeError:
         proc.terminate()
         _reap(proc)
+        upstream.release(hold)
         bus.log("✗ stream-proxy: subscribe failed (upstream gone)", "err")
         raise HTTPException(409, "stream not connected")
 
@@ -96,6 +117,10 @@ async def stream_proxy():
                 yield chunk
         finally:
             _teardown_proxy(proc, sub_id)
+            # Release the upstream hold last — after the subscriber is
+            # already torn down — so the grace timer (if this was the
+            # last holder) starts from a clean state.
+            upstream.release(hold)
 
     return StreamingResponse(generate(), media_type="audio/mpeg")
 
@@ -196,9 +221,20 @@ async def start_recording(req: RecordRequest):
     err = disk_space_error(LOW_SPACE_GB, "recording")
     if err:
         raise HTTPException(507, err)
-    if not upstream.connected:
+    if not upstream.configured:
         raise HTTPException(409, "stream not connected — connect first")
     sid = str(uuid.uuid4())[:8]
+    # Acquire the lifecycle hold up front. This spawns ffmpeg if it was
+    # idle (record start is the canonical reason to bring upstream up,
+    # whether or not any tab was visible), and guarantees the hold survives
+    # the lifetime of this recording — closing the tab won't tear ffmpeg
+    # down mid-FLAC. Released in `_finalize_session`.
+    # Offloaded to a worker thread (spawn does sync probe + subprocess
+    # startup); see stream-proxy comment above for the lockup details.
+    rec_hold = await asyncio.to_thread(upstream.acquire, f"record:{sid}")
+    if not upstream.live:
+        upstream.release(rec_hold)
+        raise HTTPException(503, "upstream failed to start")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     artist = req.artist or "Unknown"
     album  = req.album  or ts
@@ -274,6 +310,7 @@ async def start_recording(req: RecordRequest):
         try: proc.kill()
         except Exception: pass
         log_fh.close()
+        upstream.release(rec_hold)
         raise HTTPException(409, "stream not connected")
 
     # Write the captured pre-roll first, then release the live gate. If the
@@ -307,6 +344,10 @@ async def start_recording(req: RecordRequest):
         # double-publish the stop event or KeyError on `del active[sid]`.
         "finalize_lock": threading.Lock(),
         "finalized": False,
+        # Lifecycle hold released by `_finalize_session`. Stored on the
+        # session dict so the user-stop handler, the per-session watcher,
+        # and the reaper all reach the same token via `active[sid]`.
+        "upstream_hold": rec_hold,
     }
     log_paths[sid] = str(log_path)
     log_lines[sid] = [f"▶ Started recording → {fname}"]
@@ -418,6 +459,13 @@ def _finalize_session(session_id: str, reason: str) -> dict:
         # `active.get(sid)` happens to fire AFTER our pop below).
         s["finalized"] = True
         s["finalize_result"] = result
+        # Release the lifecycle hold so the upstream session can drop to
+        # idle if no other holder (visible WS tab, playback proxy, another
+        # recording) keeps it alive. Idempotent on the token.
+        hold = s.get("upstream_hold")
+        if hold is not None:
+            try: upstream.release(hold)
+            except Exception: pass
         _record_recent_result(session_id, result)
         active.pop(session_id, None)
         return result
