@@ -71,15 +71,23 @@ function fmt(s) {
     .map(n => String(n).padStart(2,'0')).join(':');
 }
 
-// Library "Recorded" column. Compact for this year, year-bearing for older.
+// Library "Recorded" column. Time-of-day for today, "MMM D" for older
+// same-year rows (keeps the column narrow), year-bearing for prior years.
 // fmtDateFull is used for the cell tooltip so the full timestamp is always
 // one hover away.
 function fmtDate(unix) {
   if (!unix) return '—';
   const d = new Date(unix * 1000);
-  const sameYear = d.getFullYear() === new Date().getFullYear();
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+  if (sameDay) {
+    return d.toLocaleString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+  const sameYear = d.getFullYear() === now.getFullYear();
   return d.toLocaleString(undefined, sameYear
-    ? { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
+    ? { month: 'short', day: 'numeric' }
     : { year: 'numeric', month: 'short', day: 'numeric' });
 }
 function fmtDateFull(unix) {
@@ -87,14 +95,15 @@ function fmtDateFull(unix) {
   return new Date(unix * 1000).toLocaleString();
 }
 
-// Compact source-format readout for library/album tables: "24/96", "16/44.1".
+// Compact source-format readout for library/album tables: "24b / 96 ksps",
+// "16b / 44.1 ksps". `b` = bit depth, `ksps` = kilo-samples-per-second.
 // Returns "—" when the FLAC didn't expose readable format info.
 function fmtSourceFormat(f) {
   if (!f.bit_depth || !f.sample_rate_khz) return '—';
   const sr = Number.isInteger(f.sample_rate_khz)
     ? f.sample_rate_khz
     : f.sample_rate_khz.toFixed(1);
-  return `${f.bit_depth}/${sr}`;
+  return `${f.bit_depth}b / ${sr} ksps`;
 }
 
 // ── Log helper ────────────────────────────────────────────────────────────
@@ -909,7 +918,7 @@ function refreshLibRender() {
         <td style="color:var(--muted);white-space:nowrap" title="${htmlEscape(fmtDateFull(f.mtime))}">${htmlEscape(fmtDate(f.mtime))}</td>
         <td style="color:var(--muted)">${fmtDuration(f.duration_seconds)}</td>
         <td style="color:var(--muted)">${f.size_mb} MB</td>
-        <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="bit depth / sample rate (kHz)">${fmtSourceFormat(f)}</td>
+        <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="N-bit / M kHz">${fmtSourceFormat(f)}</td>
         <td style="white-space:nowrap;text-align:right">${previewBtn}${tagBtn}${dlLink}${delBtn}</td>
       </tr>`;
   }).join('');
@@ -1130,7 +1139,7 @@ function _albumRowHtml(a, opts) {
     <td style="color:var(--muted);white-space:nowrap" title="${htmlEscape(fmtDateFull(a.mtime))}">${htmlEscape(fmtDate(a.mtime))}</td>
     <td style="color:var(--muted)">${fmtDuration(a.duration_seconds)}</td>
     <td style="color:var(--muted)">${a.size_mb} MB</td>
-    <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="bit depth / sample rate (kHz)">${fmtSourceFormat(a)}</td>
+    <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="N-bit / M kHz">${fmtSourceFormat(a)}</td>
     <td style="color:var(--muted)">${countCell}</td>
     <td style="white-space:nowrap;text-align:right">${tagBtn}${splitBtn}${demBtn}${delBtn}</td>
   </tr>`;

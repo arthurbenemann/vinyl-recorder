@@ -268,7 +268,7 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .lib-table col.c-album    { width: auto; }
 .lib-table col.c-artist   { width: 22%; }
 .lib-table col.c-year     { width: 60px; }
-.lib-table col.c-recorded { width: 110px; }
+.lib-table col.c-recorded { width: 130px; }
 .lib-table col.c-length   { width: 80px; }
 .lib-table col.c-size     { width: 80px; }
 .lib-table col.c-fmt      { width: 70px; }

@@ -541,11 +541,11 @@ function _renderApproxStats() {
   const text = document.getElementById('we-stats-text');
   if (!text) return;
   if (we.approxPeakDb == null) {
-    text.textContent = 'click measure to compute peak + noise floor';
+    text.textContent = _sourceFormatPrefix() + 'click measure to compute peak + noise floor';
     return;
   }
-  text.textContent =
-    `peak ~${we.approxPeakDb.toFixed(1)} dB · click measure for noise floor`;
+  text.textContent = _sourceFormatPrefix()
+    + `peak ~${we.approxPeakDb.toFixed(1)} dB · click measure for noise floor`;
 }
 
 // ── Sides reorder ─────────────────────────────────────────────────────────
@@ -1687,10 +1687,10 @@ function invalidateMeasure() {
   we.measured = null;
   const text = document.getElementById('we-stats-text');
   if (text && we.approxPeakDb != null) {
-    text.textContent =
-      `peak ~${we.approxPeakDb.toFixed(1)} dB · cuts changed — re-measure`;
+    text.textContent = _sourceFormatPrefix()
+      + `peak ~${we.approxPeakDb.toFixed(1)} dB · cuts changed — re-measure`;
   } else if (text) {
-    text.textContent = 'cuts changed — re-measure';
+    text.textContent = _sourceFormatPrefix() + 'cuts changed — re-measure';
   }
 }
 
@@ -1732,10 +1732,25 @@ async function weMeasure() {
   }
 }
 
+// Album-stats prefix: `source: 24b / 96 ksps · ` if format is known, else ''.
+// TODO: per-side `source_format` isn't carried on the album payload yet, so
+// we surface only the topline (album-level) format derived from the first
+// side. Once `sides[].source_format` lands we can detect mixed rates here
+// and either show the highest or "mixed" when they differ.
+function _sourceFormatPrefix() {
+  if (!we.albumId) return '';
+  const a = (typeof albumsByName !== 'undefined') ? albumsByName[we.albumId] : null;
+  if (!a) return '';
+  const s = (typeof fmtSourceFormat === 'function') ? fmtSourceFormat(a) : '';
+  if (!s || s === '—') return '';
+  return `source: ${s} · `;
+}
+
 function formatMeasured(d) {
   const fmt = v => (v == null || isNaN(v)) ? '—' : v.toFixed(1);
   const bits = d.effective_bits == null ? '—' : d.effective_bits.toFixed(1);
-  return `peak ${fmt(d.peak_db)} dB · noise floor ${fmt(d.noise_floor_db)} dB`
+  return _sourceFormatPrefix()
+       + `peak ${fmt(d.peak_db)} dB · noise floor ${fmt(d.noise_floor_db)} dB`
        + ` · DR ${fmt(d.dynamic_range_db)} dB (≈ ${bits} effective bits)`;
 }
 
