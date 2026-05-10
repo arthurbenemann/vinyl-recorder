@@ -131,18 +131,38 @@ def find_side(filename: str) -> Optional[Path]:
     return p if p.exists() else None
 
 
+# Module-level mtime-keyed caches for the metaflac probes. `/api/albums`
+# and `/api/recordings` call these once per side / file per request — and
+# the underlying FLACs only change when a recording finishes or an album
+# is split, both rare relative to listing traffic. Keying on st_mtime_ns
+# (nanosecond resolution to dodge fs precision quirks) means stale entries
+# self-invalidate the moment metaflac would have re-read the file anyway.
+# No LRU cap: one entry per FLAC on disk, all small.
+_DURATION_CACHE: dict[Path, tuple[int, Optional[float]]] = {}
+_FORMAT_CACHE: dict[Path, tuple[int, dict]] = {}
+
+
 def flac_duration_seconds(path: Path) -> Optional[float]:
     """Return the playback duration of a FLAC in seconds, or None on failure."""
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+    except OSError:
+        return None
+    cached = _DURATION_CACHE.get(path)
+    if cached is not None and cached[0] == mtime_ns:
+        return cached[1]
+    duration: Optional[float] = None
     try:
         out = subprocess.check_output(
             ["metaflac", "--show-total-samples", "--show-sample-rate", str(path)],
             stderr=subprocess.DEVNULL, text=True,
         ).split()
         if len(out) >= 2 and int(out[1]) > 0:
-            return int(out[0]) / int(out[1])
+            duration = int(out[0]) / int(out[1])
     except Exception:
-        pass
-    return None
+        duration = None
+    _DURATION_CACHE[path] = (mtime_ns, duration)
+    return duration
 
 
 def flac_format(path: Path) -> dict:
@@ -151,19 +171,28 @@ def flac_format(path: Path) -> dict:
     split flow to skip aformat when the requested bit depth already matches
     the source."""
     try:
+        mtime_ns = path.stat().st_mtime_ns
+    except OSError:
+        return {}
+    cached = _FORMAT_CACHE.get(path)
+    if cached is not None and cached[0] == mtime_ns:
+        return cached[1]
+    fmt: dict = {}
+    try:
         out = subprocess.check_output(
             ["metaflac", "--show-bps", "--show-sample-rate", "--show-channels", str(path)],
             stderr=subprocess.DEVNULL, text=True,
         ).split()
         if len(out) >= 3:
-            return {
+            fmt = {
                 "bit_depth":       int(out[0]),
                 "sample_rate_khz": round(int(out[1]) / 1000.0, 1),
                 "channels":        int(out[2]),
             }
     except Exception:
-        pass
-    return {}
+        fmt = {}
+    _FORMAT_CACHE[path] = (mtime_ns, fmt)
+    return fmt
 
 
 def read_tags(path: Path) -> dict:
