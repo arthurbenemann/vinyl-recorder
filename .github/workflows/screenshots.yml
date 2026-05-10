@@ -1,12 +1,13 @@
 name: Screenshots
 
 # Refreshes images/*.png whenever a PR (or push to main) touches the UI or
-# the screenshot tooling. The regenerated PNGs are committed back to the
-# source branch so the README's screenshot section never drifts from the
-# UI it documents — and so reviewers see the new screenshots inline on the
-# PR diff. Fork PRs can't push back; for those we upload the regenerated
-# images as an artifact + leave a comment, and the commit-back happens on
-# the maintainer's follow-up push.
+# the screenshot tooling. PRs get the regenerated PNGs as a downloadable
+# artifact + a preview comment — we deliberately do NOT commit back to the
+# PR branch, because PNGs are binary and can't be 3-way merged: a
+# committed-back screenshot on every UI PR makes every PR conflict with
+# every other UI PR the moment one of them merges. The actual commit-back
+# to images/ runs on the post-merge `push` to main, which is the only
+# place that needs the in-tree PNGs to stay current with the README.
 
 on:
   pull_request:
@@ -51,25 +52,22 @@ jobs:
     name: Regenerate UI screenshots
     runs-on: ubuntu-latest
     # Job-level write permission so the commit-back step can push refreshed
-    # PNGs to the source branch. Skipped automatically for fork PRs (see
-    # the conditional on the commit step) — GITHUB_TOKEN can't write to a
-    # fork's branch regardless.
+    # PNGs to main on the post-merge push event. PR runs never push to a
+    # branch (see the conditional on the commit step) — they only upload
+    # an artifact and post a preview comment.
     permissions:
       contents: write
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
-          # For PRs from the same repo, check out the PR head so the
-          # commit-back lands on the source branch (default `merge` ref is
-          # detached and can't be pushed). For push events / dispatch this
-          # falls back to the default ref. Fork PRs still produce a
-          # detached state for `head_ref`, but we skip the push for those.
+          # On PRs, render the contributor's branch tip (matches what
+          # they see locally) rather than the synthetic merge ref. Same
+          # ref/repo for forks. On push/dispatch, falls back to the
+          # default ref so the post-merge commit-back lands on main.
           ref: ${{ github.event.pull_request.head.ref || github.ref }}
-          # If a fork PR, head.ref points at the fork — fetch from the
-          # right place so the checkout is the actual PR head.
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          # Need full history so the commit-back doesn't accidentally
+          # Full history so the post-merge commit-back to main can't
           # rewrite the branch (shallow + push gets rejected as
           # non-fast-forward against the remote tip).
           fetch-depth: 0
@@ -184,10 +182,9 @@ jobs:
           python tools/compare_screenshots.py --directory images >> "$GITHUB_OUTPUT"
 
       - name: Upload screenshots artifact
-        # Always upload — even when the commit-back path runs, the
-        # artifact is the only way for fork-PR reviewers to see the
-        # regenerated PNGs before merge. Visible from the PR's Checks
-        # tab.
+        # Always upload — the artifact is the only way for PR reviewers
+        # to see the regenerated PNGs before merge (we no longer commit
+        # back to PR branches). Visible from the PR's Checks tab.
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -197,17 +194,16 @@ jobs:
           retention-days: 30
 
       - name: Commit refreshed screenshots
-        # Same-repo PRs + push events get a commit back to the source
-        # branch. Fork PRs can't (GITHUB_TOKEN has no write on the
-        # fork), and workflow_dispatch on a fork would be similar — gate
-        # on the head repo matching this repo. The `[skip-changelog]`
-        # marker keeps these auto-commits out of the generated changelog
-        # (git-cliff filters on commit message conventions, see
-        # CONTRIBUTING.md).
+        # Only the post-merge push to main commits back. PR runs are
+        # deliberately excluded: committing PNGs (binary, unmergeable)
+        # to PR branches makes every UI PR conflict with every other
+        # UI PR on `images/*.png` the moment one of them merges. The
+        # `[skip-changelog]` marker keeps these auto-commits out of the
+        # generated changelog (git-cliff filters on commit message
+        # conventions, see CONTRIBUTING.md).
         if: |
           steps.diff.outputs.changed == 'true' &&
-          (github.event_name != 'pull_request' ||
-           github.event.pull_request.head.repo.full_name == github.repository)
+          github.event_name != 'pull_request'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -215,27 +211,24 @@ jobs:
           git commit -m "chore(screenshots): refresh UI screenshots [skip-changelog]"
           git push
 
-      - name: Comment on fork PR
-        # Fork PRs can't be pushed to from this workflow. Leave a note so
-        # contributors aren't confused when the screenshots they see in
-        # the artifact don't appear in the PR diff. The commit-back will
-        # happen automatically on the maintainer's follow-up push (or
-        # via a manual workflow_dispatch after merge).
+      - name: Comment on PR
+        # All PRs (same-repo and fork) get a preview comment when the
+        # screenshots changed — we don't commit back to PR branches
+        # because PNGs can't be 3-way merged and would block every other
+        # UI PR. The actual `images/` refresh in main happens via the
+        # post-merge push run.
         if: |
           steps.diff.outputs.changed == 'true' &&
-          github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name != github.repository
+          github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const body =
-              `Screenshots regenerated — they'll refresh after merge.\n\n` +
-              `Fork PRs can't be pushed to from this workflow, so the ` +
-              `regenerated PNGs aren't committed back here. They're ` +
-              `available as the \`screenshots-${{ github.run_number }}\` ` +
-              `artifact on [this run](${runUrl}); a maintainer can apply ` +
-              `them on merge.`;
+              `Screenshots regenerated — preview available as the ` +
+              `\`screenshots-${{ github.run_number }}\` artifact on ` +
+              `[this run](${runUrl}). The in-tree \`images/*.png\` ` +
+              `will refresh automatically when this PR merges to main.`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
