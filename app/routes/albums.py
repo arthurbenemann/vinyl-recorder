@@ -7,27 +7,30 @@ editor consumes per-side resources directly: `GET /peaks/<idx>` returns a
 single side's `.peaks.dat`, and `GET /sides/<idx>/audio` serves the side
 FLAC for `<audio>` playback. Multi-side analysis endpoints (measure,
 split) feed ffmpeg via a transient concat-demuxer playlist — the album-
-wide concat happens in-memory during decode, never persisted."""
+wide concat happens in-memory during decode, never persisted.
+
+The split flow's domain logic (music-dir computation, prior-output
+cleanup, per-track encode + tag, plan persistence) lives in
+`services.split_orchestrator`. This module stays an HTTP layer."""
 import asyncio
 import re
-import subprocess
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from services import albums_fs
+from services import albums_fs, split_orchestrator
 from services.ffmpeg import (
-    LOW_SPACE_GB, disk_space_error, flac_duration_seconds, parse_astats,
-    run_ffmpeg_with_progress, safe_path_component,
+    flac_duration_seconds, parse_astats, run_ffmpeg_with_progress,
+    safe_path_component,
 )
 from services.peaks import silence_runs_from_dat
 from services.jobs import finish_job, start_job
 from state import (
-    ALLOWED_SPLIT_SAMPLE_RATES, CombineRequest, MUSIC_DIR, MeasureRequest,
-    PlanUpdateRequest, PromoteRequest, ReorderSidesRequest,
-    SilenceDetectRequest, SplitRequest, active,
+    CombineRequest, MUSIC_DIR, MeasureRequest, PlanUpdateRequest,
+    PromoteRequest, ReorderSidesRequest, SilenceDetectRequest, SplitRequest,
+    active,
 )
 
 router = APIRouter()
@@ -42,22 +45,6 @@ def _require_album(album_id: str) -> dict:
     if not albums_fs.album_dir(album_id).is_dir():
         raise HTTPException(404, "album not found")
     return albums_fs.reconcile_sides(album_id)
-
-
-def _music_dir_for(tags: dict) -> tuple[Path, str]:
-    """Compute the Jellyfin-shaped output dir for an album's manifest tags.
-    Returns `(absolute_dir, relpath_under_MUSIC_DIR)`. Falls back to "Unknown
-    Artist" / "Unknown Album" when tags are missing; the year is omitted from
-    the album folder name when DATE is empty."""
-    artist = (tags.get("artist") or "").strip() or "Unknown Artist"
-    album_ = (tags.get("album")  or "").strip() or "Unknown Album"
-    year   = (tags.get("year")   or "").strip()
-    album_dirname = (
-        f"{safe_path_component(album_)} ({year})"
-        if year else safe_path_component(album_)
-    )
-    relpath = f"{safe_path_component(artist)}/{album_dirname}"
-    return MUSIC_DIR / relpath, relpath
 
 
 # ── Listing / lifecycle ──────────────────────────────────────────────────
@@ -386,248 +373,21 @@ async def split_album(req: SplitRequest):
     embed manifest tags + cover.jpg in each track, and persist the plan +
     `music_relpath` back into `album.json`. Idempotent on re-run — clears
     any prior music dir first (including the case where artist/album tags
-    changed and the music_relpath moved)."""
+    changed and the music_relpath moved).
+
+    Pure HTTP shim: validate the album exists, hand off to the
+    orchestrator, translate domain exceptions to HTTP."""
     manifest = _require_album(req.album_id)
-    if not req.tracks:
-        raise HTTPException(400, "no tracks given")
-    # Defence in depth — the UI's <select> only offers values from
-    # ALLOWED_SPLIT_SAMPLE_RATES, but a hand-crafted POST mustn't be able
-    # to slip an arbitrary -ar through to ffmpeg.
-    if req.sample_rate not in ALLOWED_SPLIT_SAMPLE_RATES:
-        raise HTTPException(
-            400,
-            f"unsupported sample_rate {req.sample_rate}; "
-            f"allowed: {sorted(ALLOWED_SPLIT_SAMPLE_RATES)}",
-        )
-
     try:
-        playlist, side_paths = albums_fs.album_concat_playlist(req.album_id)
-    except FileNotFoundError as e:
+        return await split_orchestrator.split_album(req, manifest)
+    except split_orchestrator.SplitNotFoundError as e:
         raise HTTPException(404, str(e))
-
-    src_bytes = sum(p.stat().st_size for p in side_paths)
-    err = disk_space_error(max(LOW_SPACE_GB, src_bytes / 1e9 + 0.5), "split")
-    if err:
-        playlist.unlink(missing_ok=True)
-        raise HTTPException(507, err)
-
-    total = sum((flac_duration_seconds(p) or 0.0) for p in side_paths)
-    if total <= 0:
-        playlist.unlink(missing_ok=True)
-        raise HTTPException(500, "could not read source duration")
-
-    src_fmt: dict = {}
-    try:
-        # Bit depth comes from the first side; the recorder produces a
-        # single-format upstream so all sides share it. Used for the
-        # `apply_aformat` optimization below — skip aformat when the user
-        # asked for the same bit depth already on disk.
-        out = subprocess.check_output(
-            ["metaflac", "--show-bps", "--show-sample-rate", str(side_paths[0])],
-            stderr=subprocess.DEVNULL, text=True,
-        ).split()
-        if len(out) >= 1:
-            src_fmt["bit_depth"] = int(out[0])
-    except Exception:
-        pass
-
-    src_bits = src_fmt.get("bit_depth")
-    gain_db = 0.0
-    if req.normalize and req.measured_peak_db is not None:
-        gain_db = req.target_peak_db - req.measured_peak_db
-    apply_gain = req.normalize and abs(gain_db) >= 0.01
-    apply_aformat = req.bit_depth in (16, 24) and req.bit_depth != src_bits
-    sample_fmt = {16: "s16", 24: "s32"}.get(req.bit_depth) if apply_aformat else None
-    # 0 = keep source rate (skip resample). When set, route adds `-ar
-    # <rate>` to the per-track encode and prepends a SoX-resampler aresample
-    # filter for high-quality conversion; alpine's ffmpeg (see Dockerfile)
-    # ships with libsoxr enabled.
-    target_rate = req.sample_rate if req.sample_rate else None
-
-    tags = manifest.get("tags") or {}
-    music_dir, relpath = _music_dir_for(tags)
-    prior_relpath = manifest.get("music_relpath")
-    _wipe_prior_music_dir(prior_relpath, relpath)
-    music_dir.mkdir(parents=True, exist_ok=True)
-    for old in music_dir.glob("*.flac"):
-        try: old.unlink()
-        except Exception: pass
-
-    cover_file = albums_fs.cover_path(req.album_id)
-    out_dur_total = _kept_duration_total(req.tracks, total) or 1.0
-    out_total = sum(1 for t in req.tracks if not t.skip)
-    pad = max(2, len(str(out_total)))
-    start_job(req.job_id, "split")
-
-    created: list[dict] = []
-    cursor = 0.0
-    out_idx = 0
-    progress_acc = 0.0
-
-    try:
-        for i, t in enumerate(req.tracks, start=1):
-            start_ = cursor
-            end_ = total if i == len(req.tracks) else min(total, start_ + max(0.0, t.duration_seconds))
-            cursor = end_
-            if end_ <= start_ or t.skip:
-                continue
-            out_idx += 1
-            track_dur = end_ - start_
-            slice_a = progress_acc / out_dur_total
-            slice_b = (progress_acc + track_dur) / out_dur_total
-            progress_acc += track_dur
-            entry = await _emit_track(
-                req=req, t=t, i=i, out_idx=out_idx, out_total=out_total,
-                pad=pad, music_dir=music_dir, playlist=playlist,
-                start_=start_, end_=end_, apply_gain=apply_gain,
-                gain_db=gain_db, sample_fmt=sample_fmt,
-                target_rate=target_rate, tags=tags,
-                cover_file=cover_file, slice_range=(slice_a, slice_b),
-            )
-            created.append(entry)
-    finally:
-        playlist.unlink(missing_ok=True)
-
-    _persist_split_plan(req, relpath)
-    finish_job(req.job_id)
-    return {"ok": True, "music_relpath": relpath, "tracks": created}
-
-
-def _wipe_prior_music_dir(prior_relpath: Optional[str], new_relpath: str) -> None:
-    """If artist/album tags have changed since the last split, the music_relpath
-    moved — remove the OLD output dir so we don't leave orphaned tracks under
-    the previous Artist/Album path. No-op when relpath is unchanged."""
-    if not prior_relpath or prior_relpath == new_relpath:
-        return
-    prior_dir = MUSIC_DIR / prior_relpath
-    if prior_dir.is_dir():
-        for old in prior_dir.glob("*.flac"):
-            try: old.unlink()
-            except Exception: pass
-        try: prior_dir.rmdir()
-        except Exception: pass
-        try:
-            if prior_dir.parent != MUSIC_DIR and not any(prior_dir.parent.iterdir()):
-                prior_dir.parent.rmdir()
-        except Exception:
-            pass
-
-
-def _kept_duration_total(tracks: list, total: float) -> float:
-    """Total seconds of audio that will actually land in `music/` (skip
-    tracks excluded). Drives the constant-rate progress bar across the
-    full split — without this the bar would jump per track."""
-    cur = 0.0
-    kept = 0.0
-    for i, t in enumerate(tracks, start=1):
-        s = cur
-        e = total if i == len(tracks) else min(total, s + max(0.0, t.duration_seconds))
-        cur = e
-        if e > s and not t.skip:
-            kept += e - s
-    return kept
-
-
-async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
-                      music_dir: Path, playlist: Path,
-                      start_: float, end_: float, apply_gain: bool, gain_db: float,
-                      sample_fmt: Optional[str], target_rate: Optional[int],
-                      tags: dict, cover_file: Optional[Path],
-                      slice_range: tuple[float, float]) -> dict:
-    """Encode one track FLAC into music/, write tags, embed cover. Raises
-    HTTPException on ffmpeg failure (the outer handler unlinks the playlist
-    via the existing try/finally before propagation)."""
-    track_name = f"{str(out_idx).zfill(pad)} - {safe_path_component(t.title) or 'Track'}.flac"
-    out = music_dir / track_name
-    af = []
-    if apply_gain:
-        af.append(f"volume={gain_db:.4f}dB")
-    if target_rate:
-        # SoX resampler at 28-bit precision — well above 24-bit FLAC headroom
-        # so quantisation from the resample is inaudible. Placed BEFORE
-        # aformat so the bit-depth conversion happens after the rate change.
-        af.append("aresample=resampler=soxr:precision=28")
-    if sample_fmt:
-        af.append(f"aformat=sample_fmts={sample_fmt}")
-    # The concat demuxer presents the full album as one virtual input
-    # stream so -ss/-to act in album time, including across side boundaries
-    # — same behaviour as the old concat.flac input but no on-disk artifact.
-    cmd = ["ffmpeg", "-y", "-loglevel", "error",
-           "-f", "concat", "-safe", "0",
-           "-ss", f"{start_:.3f}", "-to", f"{end_:.3f}",
-           "-i", str(playlist)]
-    if af:
-        cmd += ["-af", ",".join(af)]
-    if target_rate:
-        cmd += ["-ar", str(target_rate)]
-    cmd += ["-c:a", "flac", "-compression_level", "5",
-            "-map_metadata", "-1", str(out)]
-    track_dur = end_ - start_
-    rc, stderr = await asyncio.to_thread(
-        run_ffmpeg_with_progress, cmd, track_dur, req.job_id,
-        slice_range, f"track {out_idx}/{out_total}",
-    )
-    if rc != 0:
-        err = (stderr or b"").decode(errors="replace")[:300]
-        finish_job(req.job_id, error=err)
-        raise HTTPException(500, f"ffmpeg failed on track {i}: {err}")
-    _write_track_tags(out, t.title, out_idx, out_total, tags, cover_file)
-    return {
-        "filename":         track_name,
-        "duration_seconds": end_ - start_,
-        "size_mb":          round(out.stat().st_size / 1e6, 1),
-    }
-
-
-def _write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
-                      tags: dict, cover_file: Optional[Path]) -> None:
-    """Replace the FLAC's tag set with the manifest's tags + per-track
-    title/track-number, then embed cover.jpg if present. Single metaflac
-    invocation for the tags; the picture import has to be its own call."""
-    tag_args = ["metaflac", "--remove-all-tags",
-                f"--set-tag=ARTIST={tags.get('artist', '')}",
-                f"--set-tag=ALBUM={tags.get('album', '')}",
-                f"--set-tag=DATE={tags.get('year', '')}",
-                f"--set-tag=GENRE={tags.get('genre', '')}",
-                f"--set-tag=LABEL={tags.get('label', '')}",
-                f"--set-tag=CATALOGNUMBER={tags.get('catalog_number', '')}",
-                f"--set-tag=RELEASECOUNTRY={tags.get('country', '')}",
-                f"--set-tag=TITLE={title}",
-                f"--set-tag=TRACKNUMBER={out_idx}",
-                f"--set-tag=TRACKTOTAL={out_total}"]
-    if tags.get("musicbrainz_albumid"):
-        tag_args.append(f"--set-tag=MUSICBRAINZ_ALBUMID={tags['musicbrainz_albumid']}")
-    if tags.get("discogs_release_id"):
-        tag_args.append(f"--set-tag=DISCOGS_RELEASE_ID={tags['discogs_release_id']}")
-    tag_args.append(str(out))
-    subprocess.run(tag_args, check=False, stderr=subprocess.DEVNULL)
-    if cover_file:
-        subprocess.run(
-            ["metaflac", f"--import-picture-from={cover_file}", str(out)],
-            check=False, stderr=subprocess.DEVNULL,
-        )
-
-
-def _persist_split_plan(req, relpath: str) -> None:
-    """Write the resolved plan + the new music_relpath back into album.json
-    so the wave-editor can re-load and re-edit later."""
-    plan = {
-        "tracks": [
-            {"title": t.title,
-             "duration_seconds": t.duration_seconds,
-             "skip": t.skip}
-            for t in req.tracks
-        ],
-        "normalize":        req.normalize,
-        "target_peak_db":   req.target_peak_db,
-        "measured_peak_db": req.measured_peak_db,
-        "bit_depth":        req.bit_depth,
-        "sample_rate":      req.sample_rate,
-    }
-    manifest = albums_fs.read_manifest(req.album_id)
-    manifest["plan"] = plan
-    manifest["music_relpath"] = relpath
-    albums_fs.write_manifest(req.album_id, manifest)
+    except split_orchestrator.SplitValidationError as e:
+        raise HTTPException(400, str(e))
+    except split_orchestrator.SplitDiskSpaceError as e:
+        raise HTTPException(507, str(e))
+    except split_orchestrator.SplitProcessingError as e:
+        raise HTTPException(500, str(e))
 
 
 @router.get("/api/album/{album_id}/tracks")

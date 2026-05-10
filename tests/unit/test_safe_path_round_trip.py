@@ -79,10 +79,10 @@ def test_safe_path_component_falls_back_to_unknown_when_empty():
     ("foo|bar",               "wild?card*name",       ""),    # empty year
 ])
 def test_music_relpath_from_tags_mkdirs_cleanly(tmp_path, artist, album, year):
-    """The same `_music_dir_for(tags)` shape the split route uses, expressed
-    here in the test for layering reasons (the helper is in routes/albums.py
-    not services). Verifies that no character in the input survives to break
-    `Path.mkdir(parents=True)`."""
+    """The same `albums_fs.music_dir_for(tags)` shape the split route uses,
+    expressed here in the test for layering reasons (the helper lives in
+    services/albums_fs.py). Verifies that no character in the input
+    survives to break `Path.mkdir(parents=True)`."""
     a = safe_path_component(artist)
     b = safe_path_component(album)
     album_dir = f"{b} ({year})" if year else b

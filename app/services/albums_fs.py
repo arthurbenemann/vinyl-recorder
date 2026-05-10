@@ -31,7 +31,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from services.ffmpeg import flac_duration_seconds, flac_format
+from services.ffmpeg import flac_duration_seconds, flac_format, safe_path_component
 from state import IN_PROGRESS_DIR, MUSIC_DIR, RAW_DIR
 
 # Album dir basenames are restricted to lowercase hex / dashes / underscores
@@ -69,6 +69,22 @@ def album_dir(album_id: str) -> Path:
     if not is_valid_album_id(album_id):
         raise ValueError(f"invalid album id: {album_id!r}")
     return IN_PROGRESS_DIR / album_id
+
+
+def music_dir_for(tags: dict) -> tuple[Path, str]:
+    """Compute the Jellyfin-shaped output dir for an album's manifest tags.
+    Returns `(absolute_dir, relpath_under_MUSIC_DIR)`. Falls back to "Unknown
+    Artist" / "Unknown Album" when tags are missing; the year is omitted from
+    the album folder name when DATE is empty."""
+    artist = (tags.get("artist") or "").strip() or "Unknown Artist"
+    album_ = (tags.get("album")  or "").strip() or "Unknown Album"
+    year   = (tags.get("year")   or "").strip()
+    album_dirname = (
+        f"{safe_path_component(album_)} ({year})"
+        if year else safe_path_component(album_)
+    )
+    relpath = f"{safe_path_component(artist)}/{album_dirname}"
+    return MUSIC_DIR / relpath, relpath
 
 
 def manifest_path(album_id: str) -> Path:
