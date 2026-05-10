@@ -99,19 +99,11 @@ host / username / password, hit deploy. Host + username persist in
 SSH port is fixed at 22; for a custom port or a fully manual install,
 see [CONTRIBUTING.md](CONTRIBUTING.md#pi-capture-service--manual-deploy).
 
-### Verify
-
-```bash
-curl http://pi-recorder:8000/info | jq         # gain + wiring state
-ffprobe http://pi-recorder:8000/stream         # pcm_s24le / 96000 Hz / stereo
-curl -X POST -H 'Content-Type: application/json' \
-     -d '{"db": 12}' http://pi-recorder:8000/gain
-```
-
-In the recorder UI, set `DEFAULT_STREAM_URL=http://pi-recorder:8000/stream`
-in `docker-compose.yml` (already the default) and the gain slider auto-appears
-in the sidebar after `connect`. Non-Pi streams (e.g. SomaFM) work the same
-way — the slider stays hidden when `/info` isn't reachable.
+The default `DEFAULT_STREAM_URL` in `docker-compose.yml` already points
+at `http://pi-recorder:8000/stream`, so once the deploy reports active,
+hit **connect** in the recorder. The HiFiBerry gain slider auto-appears
+in the sidebar; non-Pi streams (e.g. SomaFM) work the same way — the
+slider stays hidden when `/info` isn't reachable.
 
 ## Network / trust model
 
