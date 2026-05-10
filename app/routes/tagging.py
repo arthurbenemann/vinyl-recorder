@@ -17,6 +17,15 @@ from state import (
 router = APIRouter()
 
 
+def _str(d: dict, key: str, default: str = "") -> str:
+    """`(d.get(key) or "").strip()` shortened. Falsy values (None, "",
+    missing key) collapse to `default`; truthy values are stringified
+    and stripped. Used throughout MB/Discogs response parsing where
+    upstream JSON often has nullable string fields."""
+    v = d.get(key)
+    return str(v).strip() if v else default
+
+
 @router.post("/api/search")
 async def search(req: SearchRequest):
     """Search MusicBrainz for release candidates, plus matches from the
@@ -113,11 +122,11 @@ async def release_detail_discogs(release_id: int):
             for sub in tr["sub_tracks"]:
                 _walk(sub)
             return
-        t = (tr.get("title") or "").strip()
+        t = _str(tr, "title")
         if not t:
             return
         tracks.append(t)
-        dur = (tr.get("duration") or "").strip()
+        dur = _str(tr, "duration")
         secs: Optional[float] = None
         if dur:
             try:
@@ -214,7 +223,7 @@ async def release_detail(mbid: str):
             d_tracks = [t for t in (d.get("tracklist") or []) if not t.get("type_") or t.get("type_") == "track"]
             for i, td in enumerate(track_details):
                 if td["duration_seconds"] is None and i < len(d_tracks):
-                    dur = (d_tracks[i].get("duration") or "").strip()
+                    dur = _str(d_tracks[i], "duration")
                     if dur:
                         try:
                             mm, ss = dur.split(":")
@@ -276,7 +285,7 @@ async def album_cover(album_id: str):
     if cover:
         return FileResponse(str(cover), media_type="image/jpeg")
     manifest = albums_fs.read_manifest(album_id)
-    mbid = ((manifest.get("tags") or {}).get("musicbrainz_albumid") or "").strip()
+    mbid = _str(manifest.get("tags") or {}, "musicbrainz_albumid")
     if mbid and re.fullmatch(r"[0-9a-f-]{36}", mbid):
         art = await asyncio.to_thread(caa_front, mbid)
         if art:

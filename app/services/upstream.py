@@ -177,6 +177,25 @@ CLIP_THRESHOLD = 0.99
 VU_FRAME_MS = 16  # ~60 Hz peak window
 
 
+def _drop_oldest_put(q: "queue.Queue", item) -> None:
+    """Bounded queue best-effort put. On `Full`, drop the oldest queued
+    item to make room for `item` and try once more — if that still fails
+    (another producer raced and refilled), give up rather than spin. The
+    reader thread never blocks here; a permanently-stalled subscriber
+    converges on dropping its freshest chunks within a second."""
+    try:
+        q.put_nowait(item)
+    except queue.Full:
+        try:
+            q.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            q.put_nowait(item)
+        except queue.Full:
+            pass
+
+
 class _Subscriber:
     """A single byte consumer attached to the upstream session.
 
@@ -207,15 +226,9 @@ class _Subscriber:
     def write(self, chunk: bytes) -> None:
         if not self.alive:
             return
-        try:
-            self._queue.put_nowait(chunk)
-        except queue.Full:
-            # Slow consumer — drop the oldest queued chunk to make room
-            # for a fresher one. The reader never blocks here.
-            try: self._queue.get_nowait()
-            except queue.Empty: pass
-            try: self._queue.put_nowait(chunk)
-            except queue.Full: pass
+        # Slow consumer — `_drop_oldest_put` ejects the oldest queued
+        # chunk to make room for a fresher one. The reader never blocks.
+        _drop_oldest_put(self._queue, chunk)
 
     def close(self) -> None:
         self.alive = False
@@ -225,12 +238,9 @@ class _Subscriber:
         if self._on_close:
             try: self._on_close()
             except Exception: pass
-        try: self._queue.put_nowait(None)
-        except queue.Full:
-            try: self._queue.get_nowait()
-            except queue.Empty: pass
-            try: self._queue.put_nowait(None)
-            except queue.Full: pass
+        # Sentinel must reach the worker even if the queue is currently
+        # full — `_drop_oldest_put` ejects an old chunk to make room.
+        _drop_oldest_put(self._queue, None)
 
     def _drain(self) -> None:
         while True:
