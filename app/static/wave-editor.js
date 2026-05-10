@@ -1040,6 +1040,15 @@ function _nearestCutIndex(t) {
 }
 
 function weKeyDown(e) {
+  // Tab cycles inside the open modal so AT / keyboard users can't lose
+  // context to the underlying library page. trapModalFocus is defined in
+  // main.js and shared with the tag/pi-deploy modals.
+  if (e.key === 'Tab' && typeof trapModalFocus === 'function') {
+    const m = document.getElementById('we-modal');
+    if (m && !m.hidden) trapModalFocus(m, e);
+    // Tab inside text inputs is otherwise unaffected; the trap only
+    // intervenes at wrap-around boundaries.
+  }
   const tag = (e.target.tagName || '').toUpperCase();
   if (tag === 'INPUT' || tag === 'TEXTAREA') {
     if (e.key === 'Escape') { e.target.blur(); }
@@ -1235,20 +1244,24 @@ function renderTracks() {
     const rowClass = ['wave-track'];
     if (skipped) rowClass.push('skip');
     if (unfit)   rowClass.push('unfit');
+    // Per-region context for AT — include the track number so the
+    // announcement makes sense out of order ("Play track 3" vs "Play").
+    const ctx = (we.titles[i] && we.titles[i].trim()) ? `${num}: ${we.titles[i]}` : `${num}`;
     return `
       <div class="${rowClass.join(' ')}">
         <span class="pn">${num}</span>
-        <button class="play-track ${playing}" onclick="wePlayTrack(${i})" title="Play this region" aria-label="Play this region" ${unfit ? 'disabled' : ''}>▶</button>
-        <input type="text" value="${htmlEscape(titleVal)}" ${titleAttrs}>
+        <button class="play-track ${playing}" onclick="wePlayTrack(${i})" title="Play this region" aria-label="${htmlEscape('Play track ' + ctx)}" ${unfit ? 'disabled' : ''}>▶</button>
+        <input type="text" value="${htmlEscape(titleVal)}" ${titleAttrs} aria-label="${htmlEscape('Title for track ' + num)}">
         <input type="text" class="start-input" value="${fmtMMSS(start)}" placeholder="m:ss.ss"
                ${isFirst || unfit ? 'disabled' : ''}
+               aria-label="${htmlEscape('Start time of track ' + num)}"
                onchange="weSetCutAt(${i}, parseMMSS(this.value))">
         <span class="range" title="${rangeTitle}">${rangeText}</span>
         <button class="skip-btn ${skipped ? 'on' : ''}"
                 title="${skipped ? 'Restore region as a track' : 'Skip — drop region from output and measurement'}"
-                aria-label="${skipped ? 'Restore region as a track' : 'Skip region'}"
+                aria-label="${htmlEscape((skipped ? 'Restore track ' : 'Skip track ') + ctx)}"
                 onclick="weToggleSkip(${i})" ${unfit ? 'disabled' : ''}>⊘</button>
-        <button class="del" title="Remove cut" aria-label="Remove cut" ${isFirst ? 'disabled' : ''}
+        <button class="del" title="Remove cut" aria-label="${htmlEscape('Remove cut before track ' + ctx)}" ${isFirst ? 'disabled' : ''}
                 onclick="weDeleteCut(${i - 1})">✕</button>
       </div>`;
   }).join('');
@@ -1819,14 +1832,19 @@ async function toggleTracks(fname) {
       const isPlaying = previewIs(key, 'track');
       const playClass = isPlaying ? 'playing' : '';
       const playGlyph = isPlaying ? '⏸' : '▶';
+      // Carry the track title into the per-button aria-label so screen
+      // readers announce something meaningful when navigated out of order.
+      const trackTitle = t.title || t.filename;
+      const previewAria = htmlEscape('Preview track ' + trackTitle);
+      const downloadAria = htmlEscape('Download track ' + trackTitle);
       return `
       <div class="track-row" title="${htmlEscape(t.filename)}">
         <span class="tnum">${t.track_number || '—'}</span>
         <span class="ttitle">${htmlEscape(t.title || t.filename)}</span>
         <span class="tdur">${fmtDuration(t.duration_seconds)}</span>
         <span class="tsize">${t.size_mb} MB</span>
-        <button class="icon-btn preview-btn ${playClass}" data-album-id="${htmlEscape(fname)}" data-track="${htmlEscape(t.filename)}" data-kind="track" title="Preview" aria-label="Preview" onclick="togglePreviewTrack(this.dataset.albumId, this.dataset.track)">${playGlyph}</button>
-        <a class="icon-btn" href="/api/album/${encodeURIComponent(fname)}/track/${encodeURIComponent(t.filename)}" download title="Download" aria-label="Download">↓</a>
+        <button class="icon-btn preview-btn ${playClass}" data-album-id="${htmlEscape(fname)}" data-track="${htmlEscape(t.filename)}" data-kind="track" title="Preview" aria-label="${previewAria}" onclick="togglePreviewTrack(this.dataset.albumId, this.dataset.track)">${playGlyph}</button>
+        <a class="icon-btn" href="/api/album/${encodeURIComponent(fname)}/track/${encodeURIComponent(t.filename)}" download title="Download" aria-label="${downloadAria}">↓</a>
       </div>`;
     }).join('')}</td>`;
     row.insertAdjacentElement('afterend', sub);

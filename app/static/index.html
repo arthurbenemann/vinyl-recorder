@@ -73,7 +73,7 @@
             <div class="vu-peak" id="peak-L" style="--vu-peak:0%"></div>
           </div>
           <span class="vu-db" id="db-L">−∞</span>
-          <button class="vu-clip" id="clip-L" hidden onclick="clearClip('L')" title="Click to clear — clipping detected on L">CLIP</button>
+          <button class="vu-clip" id="clip-L" hidden onclick="clearClip('L')" title="Click to clear — clipping detected on L" aria-live="polite" aria-label="Clipping detected on left channel — click to clear">CLIP</button>
         </div>
         <div class="vu-channel">
           <span class="vu-label">R</span>
@@ -82,7 +82,7 @@
             <div class="vu-peak" id="peak-R" style="--vu-peak:0%"></div>
           </div>
           <span class="vu-db" id="db-R">−∞</span>
-          <button class="vu-clip" id="clip-R" hidden onclick="clearClip('R')" title="Click to clear — clipping detected on R">CLIP</button>
+          <button class="vu-clip" id="clip-R" hidden onclick="clearClip('R')" title="Click to clear — clipping detected on R" aria-live="polite" aria-label="Clipping detected on right channel — click to clear">CLIP</button>
         </div>
       </div>
     </div>
@@ -99,7 +99,7 @@
         </select>
       </div>
       <div class="transport">
-        <button class="rec-btn" id="recbtn" onclick="toggleRec()" title="Record / Stop" aria-label="Record or stop">
+        <button class="rec-btn" id="recbtn" onclick="toggleRec()" title="Record / Stop (R)" aria-label="Record or stop (keyboard shortcut: R)" aria-keyshortcuts="R">
           <div class="rec-btn-dot"></div>
         </button>
         <button class="pause-btn" id="pausebtn" onclick="togglePause()" title="Pause / resume" aria-label="Pause or resume" hidden>‖</button>
@@ -132,6 +132,9 @@
              oninput="onLibSearchInput(this.value)" />
       <button class="btn-small" id="lib-filter-clear" onclick="clearLibFilter()" hidden>clear</button>
     </div>
+    <!-- Polite live region: announces "N results for …" to screen readers
+         whenever the library filter changes. Visually hidden via .sr-only. -->
+    <div id="lib-search-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
     <details class="lib-section" id="raw-section" open>
       <summary class="label" style="margin-bottom:12px">Raw — <span id="lib-count">loading…</span></summary>
@@ -331,7 +334,7 @@
 
     <div class="wave-wrap" id="we-wrap"
          onwheel="weWheel(event)">
-      <canvas class="wave-img" id="we-canvas" width="2400" height="140"></canvas>
+      <canvas class="wave-img" id="we-canvas" width="2400" height="140" tabindex="0" role="application" aria-label="Album waveform — use space to play/pause, arrow keys to nudge cuts, j/k to jump between cuts"></canvas>
       <div class="wave-overlay" id="we-overlay"
            onmousemove="weHoverMove(event)"
            onmouseleave="weHoverLeave()"
