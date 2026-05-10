@@ -500,8 +500,14 @@
 
 <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-<script src="/static/main.js"></script>
+<!-- peaks.js + wave-editor.js are still classic scripts that share script
+     scope; they must load before main.js so the `we` / weAudio bindings
+     they export to script-scope are defined. The inline bridge below
+     copies `we` onto `window` so main.js (an ES module — isolated from
+     script scope) can still drive `we.targetPeakDb` from /api/config. -->
 <script src="/static/peaks.js"></script>
 <script src="/static/wave-editor.js"></script>
+<script>window.we = we;</script>
+<script type="module" src="/static/main.js"></script>
 </body>
 </html>
