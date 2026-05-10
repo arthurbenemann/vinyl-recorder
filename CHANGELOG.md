@@ -1,3 +1,8 @@
+## v0.9.1 — 2026-05-10
+
+### Bug Fixes
+- **ui:** Widen actions column so the delete X stays in frame (#124)
+
 ## v0.9.0 — 2026-05-10
 
 ### Features
