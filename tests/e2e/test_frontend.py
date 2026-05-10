@@ -37,7 +37,10 @@ def test_page_loads_with_main_controls(stack, page):
     expect(page.locator("#connect-btn")).to_be_visible()
     expect(page.locator("#recbtn")).to_be_visible()
     expect(page.locator("#stream-url")).to_be_visible()
-    expect(page.locator("#log")).to_be_visible()
+    # The log surface is wrapped in a `<details>` (collapsed by default), so
+    # the inner `#log` div is `display:none` until the user expands it. The
+    # disclosure widget itself is what's visible on first load.
+    expect(page.locator("#log-details")).to_be_visible()
 
 
 def test_auto_connect_lights_status_and_vu(stack, page):

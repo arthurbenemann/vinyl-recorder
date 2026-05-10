@@ -264,6 +264,35 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .log .err { color: var(--accent); }
 .log .info { color: var(--blue); }
 
+/* Collapsible log panel — collapsed by default; the summary shows the most
+   recent line as a one-liner so the latest event is visible without
+   expanding. State persists via localStorage (vr.log.expanded). */
+.log-details { display: block; }
+.log-details > summary {
+  list-style: none; cursor: pointer; user-select: none;
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 2px; border-radius: 4px;
+}
+.log-details > summary::-webkit-details-marker { display: none; }
+.log-details > summary::before {
+  content: '▾'; display: inline-block; width: 1em; color: var(--muted);
+  transform: translateY(-1px); transition: transform 0.15s ease; flex-shrink: 0;
+}
+.log-details:not([open]) > summary::before { transform: rotate(-90deg) translateX(1px); }
+.log-details > summary .label { margin-bottom: 0; flex-shrink: 0; }
+.log-summary .log-tail {
+  flex: 1; min-width: 0;
+  font-size: 11px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.log-summary .log-tail.ok  { color: var(--green); }
+.log-summary .log-tail.err { color: var(--accent); }
+.log-summary .log-tail.info { color: var(--blue); }
+.log-details[open] > summary .log-tail { display: none; }
+.log-details[open] > .log { margin-top: 6px; }
+.log-details > summary:hover .label,
+.log-details > summary:hover::before { color: var(--text); }
+
 /* Meta form */
 .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .field { display: flex; flex-direction: column; gap: 5px; }
@@ -284,6 +313,25 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .btn.primary:hover { background: rgba(55,138,221,0.1); border-color: var(--blue); }
 .btn.danger { color: var(--accent); border-color: rgba(226,75,74,0.3); }
 .btn.danger:hover { background: rgba(226,75,74,0.1); }
+
+/* Keyboard focus rings — visible against the dark theme. We deliberately key
+   off `:focus-visible` (not `:focus`) so mouse clicks don't paint the ring on
+   every button click; only true keyboard / AT focus shows it. The existing
+   per-element :focus border tweaks (search input, .field input, etc.) remain
+   intact — outline is an *additional* layer that doesn't shift layout. */
+.btn:focus-visible,
+.btn-small:focus-visible,
+.icon-btn:focus-visible,
+.rec-btn:focus-visible,
+.pause-btn:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.sortable:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
 
 /* Library search/filter controls */
 .lib-search { flex: 1 1 220px; min-width: 0; max-width: 360px; background: var(--surface); border: 0.5px solid var(--border2); border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 7px 10px; outline: none; }
@@ -416,6 +464,29 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 
 /* Albums — track count link + tracks expand row */
 .track-count-link { color: var(--blue); cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
+
+/* Per-album failure pill — only painted when the editor recorded a failure
+   for the album in the current session. Click to dismiss; the title shows
+   the full error message (often truncated by the cell). Sits inline next
+   to the side / track count so the row scan-reads at a glance. */
+.fail-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.05em;
+  color: var(--accent);
+  background: rgba(226,75,74,0.10);
+  border: 0.5px solid rgba(226,75,74,0.5);
+  border-radius: 3px;
+  cursor: pointer;
+  vertical-align: middle;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
+}
+.fail-pill:hover {
+  background: rgba(226,75,74,0.18);
+  border-color: var(--accent);
+}
 .tracks-sub { background: var(--surface); }
 .tracks-sub td { padding: 6px 12px 6px 28px; font-size: 11px; color: var(--muted); border-bottom: 0.5px solid var(--border); }
 .tracks-sub .track-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
@@ -659,7 +730,8 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
   .header { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
   .meta-grid { grid-template-columns: 1fr; }
   .lib-table th, .lib-table td { padding: 8px 6px; font-size: 11px; }
-  .sidebar .log { display: none; }
+  .sidebar .log,
+  .sidebar .log-details { display: none; }
   .toast-container { top: 10px; right: 10px; left: 10px; max-width: none; }
   /* Hide the chevron on mobile — the rail style only applies ≥721px so a
      stored "collapsed" flag has no visual effect here, and the toggle would
