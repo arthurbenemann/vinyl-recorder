@@ -153,7 +153,7 @@
               <th class="sortable" data-sort="date"   onclick="setSort('date')"   role="button" tabindex="0" aria-sort="none">Recorded<span class="sort-arrow"></span></th>
               <th class="sortable" data-sort="length" onclick="setSort('length')" role="button" tabindex="0" aria-sort="none">Length<span class="sort-arrow"></span></th>
               <th class="sortable" data-sort="size"   onclick="setSort('size')"   role="button" tabindex="0" aria-sort="none">Size<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')"    role="button" tabindex="0" aria-sort="none" title="Source bit depth / sample rate (kHz)">Fmt<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')"    role="button" tabindex="0" aria-sort="none" title="Source bit depth / kilo-samples-per-second">Fmt<span class="sort-arrow"></span></th>
               <th></th>
             </tr>
           </thead>
@@ -188,7 +188,7 @@
               <th class="sortable" data-sort="date"   onclick="setSort('date')"   role="button" tabindex="0" aria-sort="none">Recorded<span class="sort-arrow"></span></th>
               <th class="sortable" data-sort="length" onclick="setSort('length')" role="button" tabindex="0" aria-sort="none">Length<span class="sort-arrow"></span></th>
               <th class="sortable" data-sort="size"   onclick="setSort('size')"   role="button" tabindex="0" aria-sort="none">Size<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')"    role="button" tabindex="0" aria-sort="none" title="Source bit depth / sample rate (kHz)">Fmt<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')"    role="button" tabindex="0" aria-sort="none" title="Source bit depth / kilo-samples-per-second">Fmt<span class="sort-arrow"></span></th>
               <th>Sides</th>
               <th></th>
             </tr>
@@ -222,7 +222,7 @@
               <th class="sortable" data-sort="date"   onclick="setSort('date')"   role="button" tabindex="0" aria-sort="none">Recorded<span class="sort-arrow"></span></th>
               <th class="sortable" data-sort="length" onclick="setSort('length')" role="button" tabindex="0" aria-sort="none">Length<span class="sort-arrow"></span></th>
               <th class="sortable" data-sort="size"   onclick="setSort('size')"   role="button" tabindex="0" aria-sort="none">Size<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')"    role="button" tabindex="0" aria-sort="none" title="Source bit depth / sample rate (kHz)">Fmt<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')"    role="button" tabindex="0" aria-sort="none" title="Source bit depth / kilo-samples-per-second">Fmt<span class="sort-arrow"></span></th>
               <th>Tracks</th>
               <th></th>
             </tr>
@@ -243,7 +243,7 @@
         <div class="modal-sub" id="we-filename">—</div>
       </div>
       <div class="we-header-right">
-        <span class="we-saved" id="we-saved" hidden>saved</span>
+        <span class="we-saved" id="we-saved" hidden></span>
         <button class="btn-small" onclick="closeWaveEditor()">close</button>
       </div>
     </div>
@@ -430,6 +430,7 @@
         <div class="field"><label>Tracks (one per line)</label><textarea id="t-tracks" rows="6"></textarea></div>
         <div class="action-row">
           <button class="btn primary" id="tag-apply-btn" onclick="applyTagPanel()">apply tags</button>
+          <span class="unsaved-badge" id="tag-unsaved-badge" hidden title="Form has unsaved changes">unsaved</span>
           <button class="btn" onclick="closeTag()">cancel</button>
         </div>
       </div>
