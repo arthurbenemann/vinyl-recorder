@@ -57,6 +57,12 @@ DISCOGS_TOKEN    = os.getenv("DISCOGS_TOKEN",    "").strip()
 DEFAULT_SPLIT_NORMALIZE = os.getenv("DEFAULT_SPLIT_NORMALIZE", "true").strip().lower() in ("1", "true", "yes", "on")
 DEFAULT_SPLIT_TARGET_PEAK_DB = float(os.getenv("DEFAULT_SPLIT_TARGET_PEAK_DB", "-1.0"))
 DEFAULT_SPLIT_BIT_DEPTH = int(os.getenv("DEFAULT_SPLIT_BIT_DEPTH", "0"))
+# Allowed output sample rates for the wave-editor split. 0 means "keep
+# source" — the route skips the resample step entirely. Anything else must
+# be one of the values offered in the UI; the route rejects out-of-set
+# values as a 400 (defence in depth — the <select> already constrains the
+# client side, but a hand-crafted POST mustn't slip arbitrary -ar through).
+ALLOWED_SPLIT_SAMPLE_RATES: tuple[int, ...] = (0, 44100, 48000, 88200, 96000)
 
 # Recording sessions, keyed by short uuid.
 active: dict = {}          # session_id -> {proc, meta, start_time, outfile, log_fh}
@@ -133,6 +139,10 @@ class SplitRequest(BaseModel):
     target_peak_db: float = -1.0      # only used when normalize=True
     measured_peak_db: Optional[float] = None  # peak from /api/album/measure; required for normalize
     bit_depth: int = 0                # 0 = keep source, 16, or 24
+    # 0 = keep source, otherwise resample to one of the allowed Hz values.
+    # The route validates the value against ALLOWED_SPLIT_SAMPLE_RATES so a
+    # malicious / malformed client can't slip arbitrary -ar values to ffmpeg.
+    sample_rate: int = 0
     job_id: Optional[str] = None      # progress reporting (see CombineRequest)
 
 
@@ -164,6 +174,7 @@ class PlanUpdateRequest(BaseModel):
     target_peak_db:   Optional[float]  = None
     measured_peak_db: Optional[float]  = None
     bit_depth:        Optional[int]    = None
+    sample_rate:      Optional[int]    = None
 
 
 class BulkDelete(BaseModel):
