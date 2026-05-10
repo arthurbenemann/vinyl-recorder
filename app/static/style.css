@@ -23,11 +23,22 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 .logo sub { font-family: var(--mono); font-size: 11px; color: var(--muted); font-style: normal; vertical-align: baseline; margin-left: 8px; }
 .header-right { display: flex; align-items: center; gap: 20px; font-size: 12px; color: var(--muted); }
 #disk-free.low { color: var(--accent); }
+#disk-free.warn { color: var(--amber); }
 .version-tag { font-size: 10px; letter-spacing: 0.05em; color: var(--muted); padding: 2px 6px; border: 0.5px solid var(--border2); border-radius: 4px; font-variant-numeric: tabular-nums; }
 .version-tag.dev { color: var(--amber); border-color: rgba(186,117,23,0.35); }
-.status-indicator { display: flex; align-items: center; gap: 6px; }
-.status-indicator.clickable { cursor: pointer; }
-.status-indicator.clickable:hover #stext { color: var(--text); }
+/* Stream-health button: an always-visible affordance in the header that
+   reads as clickable from idle. Border + padding give it button shape; the
+   chevron is dimmed until it's actionable (i.e. once connected). */
+.status-indicator {
+  display: flex; align-items: center; gap: 6px;
+  background: transparent; border: 0.5px solid var(--border2); border-radius: 6px;
+  color: var(--muted); font-family: var(--mono); font-size: 12px;
+  padding: 4px 8px; cursor: pointer; line-height: 1;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.status-indicator:hover { color: var(--text); background: var(--surface2); border-color: rgba(255,255,255,0.22); }
+.status-indicator:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.status-indicator[aria-expanded="true"] { background: var(--surface2); color: var(--text); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
 .dot.rec  { background: var(--accent); animation: blink 1s step-start infinite; }
 .dot.ok   { background: var(--green); }
@@ -52,9 +63,10 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
    styles are scoped to ≥721px so the existing mobile stacked layout is
    unaffected by a stored "collapsed" flag. */
 .sidebar-toggle {
-  position: absolute; top: 10px; right: 10px;
-  width: 22px; height: 22px; border-radius: 4px;
-  background: transparent; border: 0.5px solid var(--border2);
+  position: absolute; top: 50%; right: -11px;
+  transform: translateY(-50%);
+  width: 24px; height: 40px; border-radius: 12px;
+  background: var(--surface); border: 1px solid var(--border2);
   color: var(--muted); font-size: 14px; cursor: pointer; line-height: 1;
   display: flex; align-items: center; justify-content: center;
   transition: color 0.12s, background 0.12s;
@@ -66,8 +78,9 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 @media (min-width: 721px) {
   .main[data-collapsed] { grid-template-columns: 56px 1fr; }
   .main[data-collapsed] .sidebar-toggle-icon { transform: rotate(180deg); }
-  .main[data-collapsed] .sidebar { padding: 38px 4px 14px; gap: 14px; align-items: center; }
-  .main[data-collapsed] .sidebar-toggle { top: 8px; right: 50%; transform: translateX(50%); }
+  .main[data-collapsed] .sidebar { padding: 14px 4px; gap: 14px; align-items: center; }
+  /* Keep the rail toggle docked at the right edge in collapsed state too. */
+  .main[data-collapsed] .sidebar-toggle { top: 50%; right: -11px; transform: translateY(-50%); }
 
   /* Hide non-essential sections in the rail. The pause button is left alone
      so its [hidden] attribute (set by applyRecordState when not recording)

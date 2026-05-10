@@ -458,7 +458,7 @@ function applyRecordState({ active, paused: isPaused, sid, durationSec, elapsedS
     tickRecTimer();
   } else {
     if (recTimerInterval) { clearInterval(recTimerInterval); recTimerInterval = null; }
-    stext.textContent = upstreamConnected ? 'connected' : 'idle';
+    stext.textContent = upstreamConnected ? 'connected' : 'disconnected';
     hint.textContent = 'click ● to start recording';
     prog.style.width = '0%';
     document.getElementById('timer').textContent = fmt(0);
@@ -486,15 +486,13 @@ function applyUpstreamState({ connected, fmt: f }) {
   const urlInput = document.getElementById('stream-url');
   if (urlInput) urlInput.disabled = !!connected;
   if (!recording) {
-    document.getElementById('stext').textContent = connected ? 'connected' : 'idle';
+    document.getElementById('stext').textContent = connected ? 'connected' : 'disconnected';
   }
   // Chevron is the click affordance for the health panel; only show it when
-  // there's something to see (connected). The whole .status-indicator is the
-  // click target — toggle the .clickable class for cursor + hover.
+  // there's something to see (connected). The status-indicator itself is a
+  // <button>, always clickable — the chevron just indicates the panel exists.
   const chevron = document.getElementById('health-chevron');
-  const ind = document.getElementById('status-indicator');
   if (chevron) chevron.hidden = !connected;
-  if (ind) ind.classList.toggle('clickable', !!connected);
   updateSdot();
   if (!connected) {
     // Decay meters; clear gain slider since the Pi probe needs reconnect.
@@ -504,6 +502,8 @@ function applyUpstreamState({ connected, fmt: f }) {
     // Auto-collapse the panel on disconnect so it doesn't linger empty.
     const panel = document.getElementById('health-panel');
     if (panel) panel.hidden = true;
+    const ind = document.getElementById('status-indicator');
+    if (ind) ind.setAttribute('aria-expanded', 'false');
   }
 }
 
@@ -567,6 +567,8 @@ function toggleHealthPanel() {
   const panel = document.getElementById('health-panel');
   if (!panel) return;
   panel.hidden = !panel.hidden;
+  const ind = document.getElementById('status-indicator');
+  if (ind) ind.setAttribute('aria-expanded', String(!panel.hidden));
 }
 
 // ── Collapsible sidebar ──────────────────────────────────────────────────
@@ -1741,13 +1743,22 @@ async function applyTagPanel() {
 // ── Disk-space marker ─────────────────────────────────────────────────────
 // Threshold comes from /api/config; default mirrors the server constant so
 // the marker still flips red if the config request hasn't returned yet.
+// Below `lowSpaceGb` the marker is red; below `warnSpaceGb` it's amber.
 let lowSpaceGb = 2.0;
+const warnSpaceGb = 10.0;
 
 function updateDiskFree(gb) {
   const el = document.getElementById('disk-free');
-  if (gb == null) { el.textContent = '— GB free'; el.classList.remove('low'); return; }
+  if (gb == null) {
+    el.textContent = '— GB free';
+    el.classList.remove('low', 'warn');
+    return;
+  }
   el.textContent = gb + ' GB free';
-  el.classList.toggle('low', gb < lowSpaceGb);
+  const low = gb < lowSpaceGb;
+  const warn = !low && gb < warnSpaceGb;
+  el.classList.toggle('low', low);
+  el.classList.toggle('warn', warn);
 }
 
 function renderVersion(v) {

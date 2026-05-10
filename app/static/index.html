@@ -15,11 +15,11 @@
   <div class="header-right">
     <span id="disk-free">— GB free</span>
     <span class="version-tag" id="version-tag" hidden></span>
-    <div class="status-indicator" id="status-indicator" onclick="toggleHealthPanel()" title="Stream health">
+    <button type="button" class="status-indicator" id="status-indicator" onclick="toggleHealthPanel()" title="Stream health" aria-expanded="false" aria-controls="health-panel">
       <div class="dot" id="sdot"></div>
-      <span id="stext">idle</span>
+      <span id="stext">disconnected</span>
       <span class="health-chevron" id="health-chevron" hidden>▼</span>
-    </div>
+    </button>
     <div class="health-panel" id="health-panel" hidden>
       <div class="health-row"><span class="health-label">level</span><span id="hp-level">—</span></div>
       <div class="health-row"><span class="health-label">bytes/sec</span><span id="hp-bps">—</span></div>
