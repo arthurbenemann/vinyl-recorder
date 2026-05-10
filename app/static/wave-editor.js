@@ -1,8 +1,6 @@
 // Unified album-split editor.
 //
-// State, viewport math, and waveform/minimap rendering. Cuts, tracks, audio
-// playback, and the suggest popovers live in the lower halves of this file
-// (kept in one module so the closures share state).
+// See Architecture.md § Wave editor for design rationale.
 
 'use strict';
 
