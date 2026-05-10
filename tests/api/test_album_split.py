@@ -19,8 +19,10 @@ absolutely worth pinning:
     pruned when empty)
   - manifest persistence at the end (plan + music_relpath)
 
-We mock `run_ffmpeg_with_progress` so the test fakes the file ffmpeg
-would have written. metaflac calls are mocked at the subprocess level.
+The orchestration logic lives in `services.split_orchestrator`; the
+route is a thin shim that maps domain exceptions to HTTP. We mock
+`run_ffmpeg_with_progress` and the metaflac subprocess calls there so
+the tests don't need a real ffmpeg/metaflac on PATH.
 """
 from pathlib import Path
 
@@ -46,8 +48,8 @@ class _MockSplitEnv:
         self.metaflac_calls: list[list[str]] = []
         self.ffmpeg_rc = ffmpeg_rc
 
-        from routes import albums as albums_route
         from services import ffmpeg as ffmpeg_mod
+        from services import split_orchestrator as orch
 
         # Every invocation creates a tiny placeholder FLAC at the output
         # path so `out.stat().st_size` and the `if cover_file` branch
@@ -60,7 +62,7 @@ class _MockSplitEnv:
             out_path.write_bytes(b"\x66\x4c\x61\x43" + b"x" * 100)  # fLaC magic
             return self.ffmpeg_rc, b"" if self.ffmpeg_rc == 0 else b"ffmpeg blew up"
 
-        monkeypatch.setattr(albums_route, "run_ffmpeg_with_progress", fake_run_ffmpeg)
+        monkeypatch.setattr(orch, "run_ffmpeg_with_progress", fake_run_ffmpeg)
 
         # Mock the metaflac probe (subprocess.check_output) to return a
         # fixed bit depth / sample rate.
@@ -70,7 +72,7 @@ class _MockSplitEnv:
             # `metaflac --show-bps --show-sample-rate <path>` → "24\n96000\n"
             return f"{src_bit_depth}\n96000\n"
 
-        monkeypatch.setattr(albums_route.subprocess, "check_output", fake_check_output)
+        monkeypatch.setattr(orch.subprocess, "check_output", fake_check_output)
 
         # Mock the metaflac tag + picture passes (subprocess.run).
         def fake_run(cmd, **kw):
@@ -80,18 +82,18 @@ class _MockSplitEnv:
                 returncode = 0
             return _R()
 
-        monkeypatch.setattr(albums_route.subprocess, "run", fake_run)
+        monkeypatch.setattr(orch.subprocess, "run", fake_run)
 
         # We don't depend on real flac_duration_seconds — yield a fixed
         # total so we know what the slicing cursor sees. Patch on the
-        # albums-route module (it imported by name).
+        # orchestrator module (it imported by name).
         monkeypatch.setattr(
-            albums_route, "flac_duration_seconds", lambda p: 600.0,
+            orch, "flac_duration_seconds", lambda p: 600.0,
         )
 
         # Disk-space helper. Patch the underlying disk_free_gb because the
-        # route imports `disk_space_error` by name, and the helper itself
-        # reads disk_free_gb at call time.
+        # orchestrator imports `disk_space_error` by name, and the helper
+        # itself reads disk_free_gb at call time.
         monkeypatch.setattr(
             ffmpeg_mod, "disk_free_gb", lambda: disk_free_gb_value,
         )
@@ -198,8 +200,8 @@ def test_split_unreadable_duration_returns_500(monkeypatch):
     """If `flac_duration_seconds` returns 0/None for every side, the
     endpoint can't compute slice ranges → 500 (not silent garbage out)."""
     _MockSplitEnv(monkeypatch)
-    from routes import albums as albums_route
-    monkeypatch.setattr(albums_route, "flac_duration_seconds", lambda p: 0.0)
+    from services import split_orchestrator as orch
+    monkeypatch.setattr(orch, "flac_duration_seconds", lambda p: 0.0)
 
     aid = _make_album_with_side()
     try:

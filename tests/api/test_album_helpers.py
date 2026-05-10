@@ -1,8 +1,8 @@
 """Tests for the small album-route helpers and lookup endpoints.
 
-Covers `_music_dir_for` shape, `/api/album/{id}/tracks` for various plan
-states, `/api/album/{id}/track/{name}` validation + 404 + download, and
-`side_audio` missing-on-disk path.
+Covers `albums_fs.music_dir_for` shape, `/api/album/{id}/tracks` for
+various plan states, `/api/album/{id}/track/{name}` validation + 404 +
+download, and `side_audio` missing-on-disk path.
 """
 from fastapi.testclient import TestClient
 
@@ -51,10 +51,10 @@ def _cleanup_album(aid: str) -> None:
                 except Exception: pass
 
 
-# ── _music_dir_for ───────────────────────────────────────────────────────
+# ── albums_fs.music_dir_for ──────────────────────────────────────────────
 def test_music_dir_for_uses_artist_album_year():
-    from routes.albums import _music_dir_for
-    abs_dir, relpath = _music_dir_for({
+    from services.albums_fs import music_dir_for
+    abs_dir, relpath = music_dir_for({
         "artist": "Pink Floyd",
         "album":  "The Wall",
         "year":   "1979",
@@ -64,8 +64,8 @@ def test_music_dir_for_uses_artist_album_year():
 
 
 def test_music_dir_for_omits_year_when_blank():
-    from routes.albums import _music_dir_for
-    _, relpath = _music_dir_for({"artist": "X", "album": "Y", "year": ""})
+    from services.albums_fs import music_dir_for
+    _, relpath = music_dir_for({"artist": "X", "album": "Y", "year": ""})
     assert relpath == "X/Y"
 
 
@@ -73,14 +73,14 @@ def test_music_dir_for_falls_back_when_tags_missing():
     """Missing artist/album → "Unknown Artist" / "Unknown Album". The
     Jellyfin tree must always have a populated path so a tagless album
     never lands at the music root."""
-    from routes.albums import _music_dir_for
-    _, relpath = _music_dir_for({})
+    from services.albums_fs import music_dir_for
+    _, relpath = music_dir_for({})
     assert relpath == "Unknown Artist/Unknown Album"
 
 
 def test_music_dir_for_strips_filesystem_hostile_chars():
-    from routes.albums import _music_dir_for
-    _, relpath = _music_dir_for({
+    from services.albums_fs import music_dir_for
+    _, relpath = music_dir_for({
         "artist": 'a/b\\c',
         "album":  'a"b:c',
         "year":   "2020",
