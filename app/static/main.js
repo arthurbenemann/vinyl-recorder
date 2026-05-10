@@ -783,7 +783,10 @@ function updateBulkBar() {
   const checkAll = document.getElementById('check-all');
   if (checkAll) checkAll.checked = visible > 0 && visSelected === visible;
   const combineBtn = document.getElementById('combine-btn');
-  if (combineBtn) combineBtn.disabled = selected.size < 1;
+  if (combineBtn) {
+    combineBtn.disabled = selected.size < 1;
+    combineBtn.textContent = selected.size === 1 ? 'tag as album' : 'combine into album';
+  }
 }
 
 function toggleRow(fname, checked) {
@@ -900,7 +903,6 @@ function refreshLibRender() {
       // cell — including padding and whitespace to the right of short
       // titles — is a click target.
       const previewBtn = `<button class="icon-btn preview-btn ${playing}" data-fname="${fn}" data-kind="lib" title="Preview" onclick="togglePreview(this.dataset.fname, this.dataset.kind)">${playGlyph}</button>`;
-      const tagBtn = _actionBtn('openTag', f.filename, {label: 'Tag album', glyph: '✎'});
       const dlLink = _downloadLink(`/api/download/${encodeURIComponent(f.filename)}`, 'Download');
       const delBtn = _actionBtn('deleteFile', f.filename, {label: 'Delete', glyph: '✕', danger: true});
       // Inline rename pencil: same handler the dblclick uses. Filename
@@ -923,7 +925,7 @@ function refreshLibRender() {
         <td style="color:var(--muted)">${fmtDuration(f.duration_seconds)}</td>
         <td style="color:var(--muted)">${f.size_mb} MB</td>
         <td style="color:var(--muted);font-variant-numeric:tabular-nums" title="N-bit / M kHz">${fmtSourceFormat(f)}</td>
-        <td style="white-space:nowrap;text-align:right">${previewBtn}${tagBtn}${dlLink}${delBtn}</td>
+        <td style="white-space:nowrap;text-align:right">${previewBtn}${dlLink}${delBtn}</td>
       </tr>`;
   }).join('');
   _setTbodyIfChanged(tbody, _libRowsHtml);
@@ -1125,8 +1127,8 @@ function _albumRowHtml(a, opts) {
   const demoteHandler = a.split ? 'demoteAlbumKeepMusic' : 'demoteAlbumDrop';
   const demoteLabel = a.split ? 'Demote to Raw (music/ files preserved)' : 'Demote to Raw';
   const tagBtn = _actionBtn('openTagAlbum', a.album_id, {label: 'Edit tags', glyph: '✎'});
-  const splitBtn = _actionBtn('openWaveEditor', a.album_id, {label: splitTitle, glyph: '⌇'});
-  const demBtn = _actionBtn(demoteHandler, a.album_id, {label: demoteLabel, glyph: '↩'});
+  const splitBtn = _actionBtn('openWaveEditor', a.album_id, {label: splitTitle, glyph: '✂'});
+  const demBtn = _actionBtn(demoteHandler, a.album_id, {label: demoteLabel, glyph: '⤺'});
   const delBtn = _actionBtn('deleteAlbum', a.album_id, {label: 'Delete album', glyph: '✕', danger: true});
   return `
   <tr data-album-id="${fn}">
@@ -1460,9 +1462,9 @@ function openTag(fname) {
   const f = filesByName[fname];
   if (!f) return;
   // openTagAlbum / openCombine pre-set tagPanelTarget for non-default modes.
-  // For a direct openTag call (raw row's ✎, recording-finished WS event),
-  // fall through to single-side promote and clear any stale album_id /
-  // filenames target left from a previous panel.
+  // For a direct openTag call (recording-finished WS event, inline rename
+  // fallthrough), fall through to single-side promote and clear any stale
+  // album_id / filenames target left from a previous panel.
   if (!tagPanelTarget || tagPanelTarget.filename !== undefined) {
     tagPanelTarget = { filename: fname };
   }
@@ -1474,7 +1476,7 @@ function openTag(fname) {
   document.getElementById('tag-modal-title').textContent =
     isCombine ? 'Combine into album' : 'Tag album';
   document.getElementById('tag-apply-btn').textContent =
-    isCombine ? 'combine into album' : 'apply tags';
+    isCombine ? 'combine' : 'apply tags';
   document.getElementById('combine-sides-section').hidden = !isCombine;
   if (isCombine) {
     const n = tagPanelTarget.filenames.length;
