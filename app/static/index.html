@@ -15,11 +15,11 @@
   <div class="header-right">
     <span id="disk-free">— GB free</span>
     <span class="version-tag" id="version-tag" hidden></span>
-    <div class="status-indicator" id="status-indicator" onclick="toggleHealthPanel()" title="Stream health">
+    <button type="button" class="status-indicator" id="status-indicator" onclick="toggleHealthPanel()" title="Stream health" aria-expanded="false" aria-controls="health-panel">
       <div class="dot" id="sdot"></div>
-      <span id="stext">idle</span>
+      <span id="stext">disconnected</span>
       <span class="health-chevron" id="health-chevron" hidden>▼</span>
-    </div>
+    </button>
     <div class="health-panel" id="health-panel" hidden>
       <div class="health-row"><span class="health-label">level</span><span id="hp-level">—</span></div>
       <div class="health-row"><span class="health-label">bytes/sec</span><span id="hp-bps">—</span></div>
@@ -148,7 +148,7 @@
               <th class="sortable" data-sort="date"   onclick="setSort('date')">Recorded<span class="sort-arrow"></span></th>
               <th class="sortable" data-sort="length" onclick="setSort('length')">Length<span class="sort-arrow"></span></th>
               <th class="sortable" data-sort="size"   onclick="setSort('size')">Size<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')" title="Source bit depth / sample rate (kHz)">Fmt<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')" title="Source bit depth / kilo-samples-per-second">Fmt<span class="sort-arrow"></span></th>
               <th></th>
             </tr>
           </thead>
@@ -183,7 +183,7 @@
               <th class="sortable" data-sort="date"   onclick="setSort('date')">Recorded<span class="sort-arrow"></span></th>
               <th class="sortable" data-sort="length" onclick="setSort('length')">Length<span class="sort-arrow"></span></th>
               <th class="sortable" data-sort="size"   onclick="setSort('size')">Size<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')" title="Source bit depth / sample rate (kHz)">Fmt<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')" title="Source bit depth / kilo-samples-per-second">Fmt<span class="sort-arrow"></span></th>
               <th>Sides</th>
               <th></th>
             </tr>
@@ -217,7 +217,7 @@
               <th class="sortable" data-sort="date"   onclick="setSort('date')">Recorded<span class="sort-arrow"></span></th>
               <th class="sortable" data-sort="length" onclick="setSort('length')">Length<span class="sort-arrow"></span></th>
               <th class="sortable" data-sort="size"   onclick="setSort('size')">Size<span class="sort-arrow"></span></th>
-              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')" title="Source bit depth / sample rate (kHz)">Fmt<span class="sort-arrow"></span></th>
+              <th class="sortable" data-sort="fmt"    onclick="setSort('fmt')" title="Source bit depth / kilo-samples-per-second">Fmt<span class="sort-arrow"></span></th>
               <th>Tracks</th>
               <th></th>
             </tr>
@@ -238,7 +238,7 @@
         <div class="modal-sub" id="we-filename">—</div>
       </div>
       <div class="we-header-right">
-        <span class="we-saved" id="we-saved" hidden>saved</span>
+        <span class="we-saved" id="we-saved" hidden></span>
         <button class="btn-small" onclick="closeWaveEditor()">close</button>
       </div>
     </div>
@@ -346,7 +346,7 @@
         </div>
         <button class="btn-small" id="we-measure-btn" onclick="weMeasure()">measure</button>
       </div>
-      <div class="we-process-row">
+      <div class="we-process-row" style="flex-wrap:wrap">
         <label class="we-process-toggle">
           <input type="checkbox" id="we-normalize"> normalize album
         </label>
@@ -356,6 +356,16 @@
             <option value="0">keep source</option>
             <option value="16">16-bit</option>
             <option value="24">24-bit</option>
+          </select>
+        </label>
+        <label class="we-process-bits">
+          output sample rate
+          <select id="we-sample-rate">
+            <option value="0">keep source</option>
+            <option value="44100">44.1 kHz (CD)</option>
+            <option value="48000">48 kHz</option>
+            <option value="88200">88.2 kHz</option>
+            <option value="96000">96 kHz</option>
           </select>
         </label>
       </div>
@@ -415,6 +425,7 @@
         <div class="field"><label>Tracks (one per line)</label><textarea id="t-tracks" rows="6"></textarea></div>
         <div class="action-row">
           <button class="btn primary" id="tag-apply-btn" onclick="applyTagPanel()">apply tags</button>
+          <span class="unsaved-badge" id="tag-unsaved-badge" hidden title="Form has unsaved changes">unsaved</span>
           <button class="btn" onclick="closeTag()">cancel</button>
         </div>
       </div>
