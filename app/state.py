@@ -1,8 +1,10 @@
 """Shared paths, env-driven configuration, in-process recording state, and
 Pydantic request/response models. Imported by every routes/services module."""
 import os
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
 
@@ -64,10 +66,124 @@ DEFAULT_SPLIT_BIT_DEPTH = int(os.getenv("DEFAULT_SPLIT_BIT_DEPTH", "0"))
 # client side, but a hand-crafted POST mustn't slip arbitrary -ar through).
 ALLOWED_SPLIT_SAMPLE_RATES: tuple[int, ...] = (0, 44100, 48000, 88200, 96000)
 
-# Recording sessions, keyed by short uuid.
-active: dict = {}          # session_id -> {proc, meta, start_time, outfile, log_fh}
-log_lines: dict = {}       # session_id -> [str]   (hand-written status lines)
-log_paths: dict = {}       # session_id -> str     (ffmpeg stderr log file)
+# ── Recording session state ──────────────────────────────────────────────
+# Sessions are keyed by short uuid. Previously this lived in three bare
+# module-level dicts (`active`, `log_lines`, `log_paths`) that routes
+# mutated directly. The `RecordingSessionManager` below preserves the same
+# data layout but funnels all access through typed methods so we get a
+# mockable boundary, a lock around mutations, and routes that don't need
+# to know the dict shape.
+@dataclass
+class Session:
+    """One in-flight recording session.
+
+    Mirrors the keys the old `active[sid]` dict carried, plus the
+    per-session log buffer and ffmpeg log path that used to live in the
+    sibling `log_lines` / `log_paths` dicts. Fields that aren't always
+    populated (pre-pause `pause_started`, post-finalize `finalize_result`)
+    default to `None` rather than being absent — callers should treat
+    `None` as "not set yet" to match the old `dict.get(...)` semantics."""
+    sid: str
+    proc:           Any  = None    # subprocess.Popen feeding ffmpeg
+    outfile:        str  = ""
+    log_fh:         Any  = None    # open file handle for ffmpeg stderr
+    start_time:     float = 0.0    # monotonic clock at start (slid forward on resume)
+    started_unix:   float = 0.0    # wallclock for display only
+    duration:       int  = 0       # request.duration (0 = unlimited)
+    meta:           dict = field(default_factory=dict)
+    filename:       str  = ""
+    sess_state:     dict = field(default_factory=dict)   # shared with subscriber sink
+    finalize_lock:  Any  = None    # threading.Lock; created in manager.create
+    finalized:      bool = False
+    upstream_hold:  Any  = None
+    paused:         bool = False
+    pause_started:  Optional[float] = None
+    finalize_result: Optional[dict] = None
+    log_lines:      list = field(default_factory=list)   # hand-written status lines
+    log_path:       Optional[str]   = None               # ffmpeg stderr log file
+
+
+class RecordingSessionManager:
+    """Owns the in-memory map of recording sessions plus the lock that
+    serialises mutation. Exposes typed helpers covering every access
+    pattern the routes currently use against the bare dicts."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._sessions: dict[str, Session] = {}
+
+    # ── lifecycle ───────────────────────────────────────────────────
+    def create(self, sid: str, **fields) -> Session:
+        """Insert a new session. Mirrors the old `active[sid] = {...}`.
+        The finalize_lock is created here unless the caller passed one."""
+        fields.setdefault("finalize_lock", threading.Lock())
+        sess = Session(sid=sid, **fields)
+        with self._lock:
+            self._sessions[sid] = sess
+        return sess
+
+    def insert(self, sess: Session) -> None:
+        """Insert a pre-built Session (used by tests that plant a fake)."""
+        with self._lock:
+            self._sessions[sess.sid] = sess
+
+    def remove(self, sid: str) -> Optional[Session]:
+        """Pop the session, or return None if it was already gone.
+        Mirrors the old `active.pop(sid, None)`."""
+        with self._lock:
+            return self._sessions.pop(sid, None)
+
+    # ── reads ────────────────────────────────────────────────────────
+    def get(self, sid: str) -> Optional[Session]:
+        with self._lock:
+            return self._sessions.get(sid)
+
+    def values(self) -> list[Session]:
+        """Snapshot of currently in-flight sessions. Returns a list (not
+        a view) so callers can iterate without holding the lock."""
+        with self._lock:
+            return list(self._sessions.values())
+
+    def items(self) -> list[tuple[str, Session]]:
+        with self._lock:
+            return list(self._sessions.items())
+
+    def __contains__(self, sid: str) -> bool:
+        with self._lock:
+            return sid in self._sessions
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._sessions)
+
+    def __bool__(self) -> bool:
+        with self._lock:
+            return bool(self._sessions)
+
+    # ── per-session log buffer ──────────────────────────────────────
+    # Replaces the old module-level `log_lines` / `log_paths` dicts.
+    # Routes call these instead of indexing into a sibling dict.
+    def append_log(self, sid: str, line: str) -> None:
+        with self._lock:
+            sess = self._sessions.get(sid)
+            if sess is not None:
+                sess.log_lines.append(line)
+
+    def get_log_lines(self, sid: str) -> list:
+        """Return a shallow copy so callers can mutate without races."""
+        with self._lock:
+            sess = self._sessions.get(sid)
+            return list(sess.log_lines) if sess is not None else []
+
+    def get_log_path(self, sid: str) -> Optional[str]:
+        with self._lock:
+            sess = self._sessions.get(sid)
+            return sess.log_path if sess is not None else None
+
+
+# Singleton — the import sites stay short and tests can monkeypatch when
+# they need to swap behaviour.
+sessions = RecordingSessionManager()
 
 # Single shared upstream pull (see services/upstream.py for why). Wired to
 # the event bus so VU/CLIP/state events fan out to all WS clients.

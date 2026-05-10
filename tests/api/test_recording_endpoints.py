@@ -106,35 +106,34 @@ def test_get_log_for_unknown_session_returns_empty_lines():
 
 
 def test_get_log_returns_in_memory_lines():
-    from state import log_lines
+    from state import sessions, Session
     sid = "log-test-sid"
-    log_lines[sid] = ["line one", "line two"]
+    sessions.insert(Session(sid=sid, log_lines=["line one", "line two"]))
     try:
         r = _client().get(f"/api/log/{sid}")
         assert r.status_code == 200
         assert r.json()["lines"] == ["line one", "line two"]
     finally:
-        log_lines.pop(sid, None)
+        sessions.remove(sid)
 
 
 def test_get_log_appends_ffmpeg_tail_when_present(tmp_path):
     """When a session has a log file on disk, the response splices the
     last 100 lines after a "── ffmpeg ──" separator."""
-    from state import log_lines, log_paths
+    from state import sessions, Session
 
     sid = "log-with-file"
-    log_lines[sid] = ["session start"]
     log_path = tmp_path / "ffmpeg.log"
     log_path.write_text("err1\nerr2\n", encoding="utf-8")
-    log_paths[sid] = str(log_path)
+    sessions.insert(Session(sid=sid, log_lines=["session start"],
+                            log_path=str(log_path)))
     try:
         body = _client().get(f"/api/log/{sid}").json()
         assert body["lines"][0] == "session start"
         assert "── ffmpeg ──" in body["lines"]
         assert body["lines"][-2:] == ["err1", "err2"]
     finally:
-        log_lines.pop(sid, None)
-        log_paths.pop(sid, None)
+        sessions.remove(sid)
 
 
 # ── /api/recordings/{filename}/rename ────────────────────────────────────
@@ -268,21 +267,18 @@ def test_pause_and_resume_already_paused_or_running_are_idempotent():
     """A second pause on an already-paused session returns the same shape;
     same for resume on a non-paused session. Idempotency means the UI's
     optimistic state never wedges the server."""
-    from state import active, log_lines
+    from state import sessions, Session
 
     sid = "pause-sentinel"
     # Minimal session shape — pause/resume only touches `paused` /
-    # `pause_started` / `start_time` / `sess_state` and appends to
-    # log_lines[sid]. We never invoke any subprocess paths.
+    # `pause_started` / `start_time` / `sess_state` and appends to the
+    # session's log_lines. We never invoke any subprocess paths.
     import time as _t
-    active[sid] = {
-        "proc": None,
-        "paused": False,
-        "sess_state": {"paused": False},
-        "start_time": _t.time(),
-        "outfile": "/tmp/x.flac",
-    }
-    log_lines[sid] = []
+    sessions.insert(Session(
+        sid=sid, proc=None, paused=False,
+        sess_state={"paused": False},
+        start_time=_t.time(), outfile="/tmp/x.flac",
+    ))
     try:
         c = _client()
         # Resume on a non-paused session → {paused: False}.
@@ -305,5 +301,4 @@ def test_pause_and_resume_already_paused_or_running_are_idempotent():
         assert r.status_code == 200
         assert r.json() == {"paused": False}
     finally:
-        active.pop(sid, None)
-        log_lines.pop(sid, None)
+        sessions.remove(sid)

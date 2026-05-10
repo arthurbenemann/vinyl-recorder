@@ -72,27 +72,28 @@ def test_disconnect_when_not_connected_is_noop():
 def test_disconnect_while_recording_returns_409():
     # Disconnect must refuse while a session is active — protects the user
     # from accidentally tearing down the upstream mid-record. The handler
-    # checks `if active:`, so a sentinel entry is enough; we don't need a
-    # real ffmpeg subprocess to exercise the guard.
-    from state import active
+    # checks `if sessions:`, so a sentinel entry is enough; we don't need
+    # a real ffmpeg subprocess to exercise the guard.
+    from state import sessions, Session
 
-    active["sentinel-sid"] = {"proc": None}
+    sessions.insert(Session(sid="sentinel-sid", proc=None))
     try:
         r = _client().post("/api/disconnect")
         assert r.status_code == 409
         assert "stop recording" in r.json()["detail"].lower()
     finally:
-        active.pop("sentinel-sid", None)
+        sessions.remove("sentinel-sid")
 
 
 # ── /api/combine ─────────────────────────────────────────────────────────
 def test_combine_while_recording_returns_409():
     # Combining a file that is currently being recorded must be rejected so the
     # in-progress FLAC is never moved out from under the active ffmpeg process.
-    from state import active
+    from state import sessions, Session
 
     recording_file = "Artist - Album (2024).flac"
-    active["sentinel-sid"] = {"proc": None, "filename": recording_file}
+    sessions.insert(Session(sid="sentinel-sid", proc=None,
+                            filename=recording_file))
     try:
         r = _client().post("/api/combine", json={
             "filenames": [recording_file],
@@ -101,7 +102,7 @@ def test_combine_while_recording_returns_409():
         assert r.status_code == 409
         assert "recording in progress" in r.json()["detail"].lower()
     finally:
-        active.pop("sentinel-sid", None)
+        sessions.remove("sentinel-sid")
 
 
 # ── /api/clip/clear ──────────────────────────────────────────────────────
@@ -223,11 +224,11 @@ def test_connect_failure_is_502(monkeypatch):
 
 # ── /api/status with an active session ──────────────────────────────────
 def test_status_reflects_active_session(reset_active_sessions):
-    """When a session is in `state.active`, /api/status surfaces it under
-    `sessions` with elapsed seconds and the outfile basename. The
-    `reset_active_sessions` fixture takes care of teardown — guaranteed
-    cleanup even if an assertion fails between insert and the manual pop
-    that this test used to rely on."""
+    """When a session is registered with the recording session manager,
+    /api/status surfaces it under `sessions` with elapsed seconds and the
+    outfile basename. The `reset_active_sessions` fixture takes care of
+    teardown — guaranteed cleanup even if an assertion fails between
+    insert and the manual remove that this test used to rely on."""
     import time
 
     sid = "status-sentinel"

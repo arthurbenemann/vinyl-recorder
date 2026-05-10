@@ -31,33 +31,35 @@ def test_ws_connect_replays_hello_packet():
 
 
 def test_ws_record_snapshot_reflects_active_session():
-    """When a session is registered in `state.active`, the WS hello packet
-    must include it in `record.sessions` — same shape as /api/status. We
-    inject a sentinel session directly so we don't need ffmpeg."""
+    """When a session is registered with the recording session manager,
+    the WS hello packet must include it in `record.sessions` — same shape
+    as /api/status. We inject a sentinel session directly so we don't need
+    ffmpeg."""
     import time
-    from state import active
+    from state import sessions, Session
 
     sid = "ws-sentinel"
-    active[sid] = {
-        "proc":    None,
-        "paused":  False,
-        "start_time": time.monotonic() - 3,  # ~3 s elapsed
-        "outfile": "/tmp/sample.flac",
-        "meta":    {"artist": "A", "album": "B"},
-        "duration": 0,
-    }
+    sessions.insert(Session(
+        sid=sid,
+        proc=None,
+        paused=False,
+        start_time=time.monotonic() - 3,  # ~3 s elapsed
+        outfile="/tmp/sample.flac",
+        meta={"artist": "A", "album": "B"},
+        duration=0,
+    ))
     try:
         with _client().websocket_connect("/api/ws") as ws:
             msg = json.loads(ws.receive_text())
             assert msg["record"]["recording"] is True
-            sessions = msg["record"]["sessions"]
-            assert any(s["id"] == sid for s in sessions)
-            our = next(s for s in sessions if s["id"] == sid)
+            ws_sessions = msg["record"]["sessions"]
+            assert any(s["id"] == sid for s in ws_sessions)
+            our = next(s for s in ws_sessions if s["id"] == sid)
             assert our["outfile"] == "sample.flac"
             assert our["paused"] is False
             assert our["elapsed"] >= 0
     finally:
-        active.pop(sid, None)
+        sessions.remove(sid)
 
 
 # Going forward, prefer the `reset_active_sessions` fixture (see
@@ -89,19 +91,20 @@ def test_ws_paused_session_freezes_elapsed():
     """A paused session reports elapsed = pause_started - start_time, not
     wall-clock; the UI then doesn't tick the timer while paused."""
     import time
-    from state import active
+    from state import sessions, Session
 
     sid = "ws-paused-sentinel"
     now = time.monotonic()
-    active[sid] = {
-        "proc":          None,
-        "paused":        True,
-        "start_time":    now - 10,
-        "pause_started": now - 4,  # 6 s elapsed at pause time
-        "outfile":       "/tmp/p.flac",
-        "meta":          {},
-        "duration":      0,
-    }
+    sessions.insert(Session(
+        sid=sid,
+        proc=None,
+        paused=True,
+        start_time=now - 10,
+        pause_started=now - 4,  # 6 s elapsed at pause time
+        outfile="/tmp/p.flac",
+        meta={},
+        duration=0,
+    ))
     try:
         with _client().websocket_connect("/api/ws") as ws:
             msg = json.loads(ws.receive_text())
@@ -109,4 +112,4 @@ def test_ws_paused_session_freezes_elapsed():
             assert our["paused"] is True
             assert our["elapsed"] == 6
     finally:
-        active.pop(sid, None)
+        sessions.remove(sid)
