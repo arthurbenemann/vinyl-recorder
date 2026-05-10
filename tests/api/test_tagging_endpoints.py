@@ -105,7 +105,6 @@ def test_release_discogs_zero_id_returns_400():
 def test_release_discogs_includes_composer_and_conductor(monkeypatch):
     """Discogs extraartists drive both fields. Prefix-matching catches
     "Composed By" credits, and bare "Conductor" maps directly."""
-    from routes import tagging as tg
     from services import discogs as ds_mod
 
     fake = {

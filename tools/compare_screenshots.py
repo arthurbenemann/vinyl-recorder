@@ -57,7 +57,7 @@ def _fraction_changed(prev_img, cur_img) -> float:
     """Return the fraction (0.0–1.0) of pixels whose max-channel
     difference exceeds INTENSITY_DELTA. Done via Pillow's C-level
     histogram so this stays fast on 1440×900 PNGs."""
-    from PIL import Image, ImageChops
+    from PIL import ImageChops
 
     if prev_img.size != cur_img.size:
         return 1.0
