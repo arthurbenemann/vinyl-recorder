@@ -91,35 +91,13 @@ HTTP service that:
 ### Install on the Pi
 
 The Pi only needs Python 3 and `alsa-utils` (both already on a fresh
-Raspberry Pi OS install — no `pip install` step). You have two options:
+Raspberry Pi OS install — no `pip install` step).
 
-**One-click from the recorder UI** — easier for re-deploys when
-`pi/server.py` changes. Open the **⋮** menu in the top-right of the
-recorder, pick **deploy to pi…**, fill in host / username / password,
-hit deploy. The recorder
-SSHes in, copies `pi/server.py` and `pi/pi-recorder.service` into place,
-runs `systemctl daemon-reload` + `enable --now`, and reports the
-service's `is-active` status. Same trust model as everything else in this
-app: the password is used for the one request and never persisted; host
-+ username are remembered in `localStorage` so subsequent deploys only
-need the password. Hard-codes SSH port 22 — the rare custom-port case
-falls back to the manual recipe below.
-
-**By hand** — exactly the steps the in-app deploy button automates:
-
-```bash
-# from this repo on your dev machine
-scp pi/server.py pi/pi-recorder.service pi@pi-recorder:/tmp/
-
-# on the Pi
-ssh pi@pi-recorder
-sudo mkdir -p /opt/pi-recorder
-sudo mv /tmp/server.py /opt/pi-recorder/
-sudo mv /tmp/pi-recorder.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now pi-recorder
-systemctl status pi-recorder
-```
+Open the **⋮** menu in the recorder header → **deploy to pi…**, fill in
+host / username / password, hit deploy. Host + username persist in
+`localStorage`; the password is used per-request and never stored.
+SSH port is fixed at 22; for a custom port or a fully manual install,
+see [CONTRIBUTING.md](CONTRIBUTING.md#pi-capture-service--manual-deploy).
 
 ### Verify
 

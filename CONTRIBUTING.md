@@ -88,6 +88,27 @@ most things belong somewhere, even if just under Changes). Example:
 `main` are skipped automatically — open a docs PR if you need one in
 the changelog.
 
+## Pi capture service — manual deploy
+
+The recorder's **deploy to pi…** menu item handles the common case. Use
+the manual recipe below for a custom SSH port, an air-gapped Pi, or any
+other reason the in-app flow doesn't fit. These are exactly the steps
+the in-app deploy button automates.
+
+```bash
+# from this repo on your dev machine
+scp pi/server.py pi/pi-recorder.service pi@pi-recorder:/tmp/
+
+# on the Pi
+ssh pi@pi-recorder
+sudo mkdir -p /opt/pi-recorder
+sudo mv /tmp/server.py /opt/pi-recorder/
+sudo mv /tmp/pi-recorder.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now pi-recorder
+systemctl status pi-recorder
+```
+
 ## Releasing
 
 From a clean `main`, either bump the last tag:
