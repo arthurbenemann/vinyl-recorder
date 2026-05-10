@@ -477,26 +477,34 @@ function tickRecTimer() {
   }
 }
 
-function applyUpstreamState({ connected, fmt: f }) {
-  upstreamConnected = !!connected;
+function applyUpstreamState({ connected, configured, fmt: f }) {
+  // Server distinguishes `configured` (URL set up, may be idle) from
+  // `connected` / `live` (ffmpeg subprocess actually running). The UI
+  // pill binds to `configured` — what the user cares about is "is the
+  // session set up", not "is a subprocess running this exact ms" (it
+  // tears down + respawns on demand to keep idle CPU at zero). Older
+  // servers may not emit `configured`; fall back to `connected` so a
+  // mixed-version client/server combo still works.
+  const isConfigured = (typeof configured === 'boolean') ? configured : !!connected;
+  upstreamConnected = isConfigured;
   const btn = document.getElementById('connect-btn');
-  if (btn) btn.textContent = connected ? 'disconnect' : 'connect';
-  // Lock the URL input while connected — changing it has no effect until
+  if (btn) btn.textContent = isConfigured ? 'disconnect' : 'connect';
+  // Lock the URL input while configured — changing it has no effect until
   // disconnect anyway, so making it look uneditable matches reality.
   const urlInput = document.getElementById('stream-url');
-  if (urlInput) urlInput.disabled = !!connected;
+  if (urlInput) urlInput.disabled = isConfigured;
   if (!recording) {
-    document.getElementById('stext').textContent = connected ? 'connected' : 'idle';
+    document.getElementById('stext').textContent = isConfigured ? 'connected' : 'idle';
   }
   // Chevron is the click affordance for the health panel; only show it when
-  // there's something to see (connected). The whole .status-indicator is the
-  // click target — toggle the .clickable class for cursor + hover.
+  // there's something to see (configured). The whole .status-indicator is
+  // the click target — toggle the .clickable class for cursor + hover.
   const chevron = document.getElementById('health-chevron');
   const ind = document.getElementById('status-indicator');
-  if (chevron) chevron.hidden = !connected;
-  if (ind) ind.classList.toggle('clickable', !!connected);
+  if (chevron) chevron.hidden = !isConfigured;
+  if (ind) ind.classList.toggle('clickable', isConfigured);
   updateSdot();
-  if (!connected) {
+  if (!isConfigured) {
     // Decay meters; clear gain slider since the Pi probe needs reconnect.
     peak.L = peak.R = 0; lvl.L = lvl.R = 0;
     hideGain();
@@ -1807,6 +1815,22 @@ async function applyConfig() {
 let ws = null, wsReconnectMs = 1000;
 let wsReconnectTimer = null;  // single pending reconnect — avoids racing pairs
 
+// Visibility hint sent to the server over the WS so it can decide whether
+// to keep ffmpeg up. A visible tab counts as a lifecycle holder; a hidden
+// tab releases the hold and lets the upstream idle (with a few-second
+// grace) until any tab comes back. Recording sessions and playback proxy
+// connections also hold the upstream alive independently — closing all
+// tabs mid-recording does NOT tear ffmpeg down.
+function sendVisibility() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  try {
+    ws.send(JSON.stringify({
+      type:   'visibility',
+      hidden: !!document.hidden,
+    }));
+  } catch (_) {}
+}
+
 function wsConnect() {
   // Cancel any pending reconnect — `onerror` calls `ws.close()` which fires
   // `onclose` which schedules a reconnect; without this, two reconnects can
@@ -1816,6 +1840,11 @@ function wsConnect() {
   ws = new WebSocket(`${proto}//${location.host}/api/ws`);
   ws.onopen = () => {
     wsReconnectMs = 1000;
+    // Tell the server our current visibility so it can decide whether
+    // to keep the upstream ffmpeg alive or let it idle. The server
+    // assumes "visible" on first connect; sending this immediately
+    // covers the case where the tab opened in the background.
+    sendVisibility();
     // Library / albums weren't replayed in the `hello` snapshot, so a long
     // disconnect leaves the UI showing stale rows until the 15 s poll catches
     // up. Refresh on reconnect so the user sees current state immediately.
@@ -1854,8 +1883,9 @@ function handleWsEvent(m) {
         for (const e of m.log) renderLog(e.msg, e.level);
       }
       if (m.upstream) applyUpstreamState({
-        connected: m.upstream.connected,
-        fmt:       m.upstream.format,
+        connected:  m.upstream.connected,
+        configured: m.upstream.configured,
+        fmt:        m.upstream.format,
       });
       if (m.upstream && m.upstream.url) {
         // Reflect the actually-connected URL into the input so the tab
@@ -1885,8 +1915,10 @@ function handleWsEvent(m) {
       } else {
         applyRecordState({ active: false });
       }
-      // Run gain probe if upstream is connected and we have a URL.
-      if (m.upstream && m.upstream.connected && m.upstream.url) {
+      // Run gain probe if upstream is configured and we have a URL.
+      // (gain queries hit the Pi /gain endpoint, not /stream — they
+      // don't depend on whether ffmpeg is currently up.)
+      if (m.upstream && (m.upstream.configured || m.upstream.connected) && m.upstream.url) {
         probeGain(m.upstream.url);
       }
       break;
@@ -1903,8 +1935,12 @@ function handleWsEvent(m) {
       setClipBadge('R', !!m.clipped_r);
       break;
     case 'upstream':
-      applyUpstreamState({ connected: m.connected, fmt: m.format });
-      if (m.connected && m.url) probeGain(m.url);
+      applyUpstreamState({
+        connected:  m.connected,
+        configured: m.configured,
+        fmt:        m.format,
+      });
+      if ((m.configured || m.connected) && m.url) probeGain(m.url);
       break;
     case 'health':
       applyHealthState(m);
@@ -2002,6 +2038,9 @@ function _stopLibPoll() {
   if (_libPollTimer) { clearInterval(_libPollTimer); _libPollTimer = null; }
 }
 document.addEventListener('visibilitychange', () => {
+  // Always tell the server about the flip — drives the upstream lifecycle
+  // hold so ffmpeg can idle while no tab is visible.
+  sendVisibility();
   if (document.hidden) {
     _stopLibPoll();
   } else {
