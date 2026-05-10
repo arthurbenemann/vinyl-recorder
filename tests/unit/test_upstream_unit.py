@@ -408,13 +408,13 @@ def test_finalize_session_is_idempotent_under_concurrent_calls(monkeypatch):
     ffmpeg exit and race into `_finalize_session`. Pre-fix, the loser
     either returned `{"elapsed": 0, ...}` to its caller (so the e2e
     `test_record_3s_from_loop` assertion `2 <= elapsed <= 6` failed) or
-    raised KeyError on a duplicate `del active[sid]`. Post-fix, the second
-    call returns the same payload as the first and `active` is popped
+    raised KeyError on a duplicate session remove. Post-fix, the second
+    call returns the same payload as the first and the session is removed
     exactly once."""
     import os
     import time as _time
     from routes import recordings as rec
-    from state import active, log_lines
+    from state import sessions, Session
 
     class _DeadProc:
         returncode = 0
@@ -435,20 +435,19 @@ def test_finalize_session_is_idempotent_under_concurrent_calls(monkeypatch):
     with open(outfile, "wb") as f:
         f.write(b"x" * 1024)
 
-    sess = {
-        "proc": _DeadProc(),
-        "outfile": outfile,
-        "log_fh": _FH(),
-        "start_time": _time.monotonic() - 3.0,
-        "duration": 0,
-        "meta": {"artist": "x", "album": "y", "year": "2026"},
-        "filename": "x.flac",
-        "sess_state": {"paused": False},
-        "finalize_lock": threading.Lock(),
-        "finalized": False,
-    }
-    active[sid] = sess
-    log_lines[sid] = []
+    sessions.insert(Session(
+        sid=sid,
+        proc=_DeadProc(),
+        outfile=outfile,
+        log_fh=_FH(),
+        start_time=_time.monotonic() - 3.0,
+        duration=0,
+        meta={"artist": "x", "album": "y", "year": "2026"},
+        filename="x.flac",
+        sess_state={"paused": False},
+        finalize_lock=threading.Lock(),
+        finalized=False,
+    ))
 
     try:
         results: list[dict] = []
@@ -471,10 +470,9 @@ def test_finalize_session_is_idempotent_under_concurrent_calls(monkeypatch):
         assert results[0] == results[1]
         assert results[0]["filename"] == os.path.basename(outfile)
         assert results[0]["elapsed"] >= 2
-        # Session removed from `active` exactly once.
-        assert sid not in active
+        # Session removed from the manager exactly once.
+        assert sessions.get(sid) is None
     finally:
-        active.pop(sid, None)
-        log_lines.pop(sid, None)
+        sessions.remove(sid)
         try: os.unlink(outfile)
         except OSError: pass

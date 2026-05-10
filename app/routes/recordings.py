@@ -19,8 +19,8 @@ from services.ffmpeg import (
     safe_name,
 )
 from state import (
-    BulkDelete, LOG_DIR, RAW_DIR, RecordRequest, RenameRequest, active,
-    log_lines, log_paths, upstream,
+    BulkDelete, LOG_DIR, RAW_DIR, RecordRequest, RenameRequest, sessions,
+    upstream,
 )
 
 router = APIRouter()
@@ -350,28 +350,29 @@ async def start_recording(req: RecordRequest):
     # (NTP step at midnight, container TZ surprises) that would otherwise
     # corrupt the timer mid-recording. `started_unix` keeps the human-
     # readable wallclock-of-record-start for display only.
-    active[sid] = {
-        "proc": proc, "outfile": outfile, "log_fh": log_fh,
-        "start_time":   time.monotonic(),
-        "started_unix": time.time(),
-        "duration": req.duration,
-        "meta": {"artist": req.artist, "album": req.album, "year": year},
-        "filename": fname,
-        "sess_state": sess_state,
-        # Serialize finalize between the user-stop request handler and the
-        # per-session watcher thread. Both can race to reap a session whose
-        # ffmpeg has just exited (SIGINT from user-stop wakes both
-        # `proc.wait()` calls); without this lock the loser would either
-        # double-publish the stop event or KeyError on `del active[sid]`.
-        "finalize_lock": threading.Lock(),
-        "finalized": False,
-        # Lifecycle hold released by `_finalize_session`. Stored on the
-        # session dict so the user-stop handler, the per-session watcher,
-        # and the reaper all reach the same token via `active[sid]`.
-        "upstream_hold": rec_hold,
-    }
-    log_paths[sid] = str(log_path)
-    log_lines[sid] = [f"▶ Started recording → {fname}"]
+    #
+    # The per-session `finalize_lock` (owned by Session) serialises finalize
+    # between the user-stop request handler and the per-session watcher
+    # thread. Both can race to reap a session whose ffmpeg has just exited
+    # (SIGINT from user-stop wakes both `proc.wait()` calls); without this
+    # lock the loser would either double-publish the stop event or KeyError
+    # on the duplicate remove. The `upstream_hold` is released by
+    # `_finalize_session`; storing it on the session means the user-stop
+    # handler, the per-session watcher, and the reaper all reach the same
+    # token through `sessions.get(sid)`.
+    sessions.create(
+        sid,
+        proc=proc, outfile=outfile, log_fh=log_fh,
+        start_time=time.monotonic(),
+        started_unix=time.time(),
+        duration=req.duration,
+        meta={"artist": req.artist, "album": req.album, "year": year},
+        filename=fname,
+        sess_state=sess_state,
+        upstream_hold=rec_hold,
+        log_path=str(log_path),
+        log_lines=[f"▶ Started recording → {fname}"],
+    )
 
     # Spawn a per-session blocking waiter so a self-exit (auto-stop on `-t`,
     # crash, kill -9) gets reaped within milliseconds — replaces the old
@@ -389,9 +390,9 @@ async def start_recording(req: RecordRequest):
 # request handler and the per-session watcher thread can both reach
 # `_finalize_session` for the same session (e.g. SIGINT from user-stop
 # wakes both `proc.wait()` calls). The first thread does the real
-# cleanup, removes the entry from `active`, and stashes its return
-# payload here; the second thread looks here so it can return the same
-# {elapsed, filename, size_mb} body to its caller instead of zeros.
+# cleanup, removes the entry from the session manager, and stashes its
+# return payload here; the second thread looks here so it can return the
+# same {elapsed, filename, size_mb} body to its caller instead of zeros.
 # Bounded so a long-running server doesn't accumulate state for sessions
 # that ended hours ago.
 _RECENT_RESULTS_MAX = 32
@@ -418,13 +419,13 @@ def _finalize_session(session_id: str, reason: str) -> dict:
     Idempotent + serialized: the user-stop request handler and the
     per-session watcher thread can both observe a just-exited ffmpeg
     (SIGINT from user-stop wakes both `proc.wait()` calls). The first
-    caller does the cleanup under `finalize_lock`, removes the session
-    from `active`, and stashes its result in `_recent_results`. A
-    later caller for the same session_id finds the stashed payload and
-    returns it — so the HTTP response stays meaningful (matching the
-    real elapsed/filename) instead of degenerating to zeros, and we
-    never KeyError on a duplicate `del active[sid]`."""
-    s = active.get(session_id)
+    caller does the cleanup under the session's `finalize_lock`, removes
+    the session from the manager, and stashes its result in
+    `_recent_results`. A later caller for the same session_id finds the
+    stashed payload and returns it — so the HTTP response stays meaningful
+    (matching the real elapsed/filename) instead of degenerating to zeros,
+    and we never KeyError on a duplicate remove."""
+    s = sessions.get(session_id)
     if s is None:
         # Session already gone — return whatever the winning caller
         # produced so the HTTP body still tells the user the truth.
@@ -435,39 +436,39 @@ def _finalize_session(session_id: str, reason: str) -> dict:
         return {"elapsed": 0, "filename": "", "size_mb": 0}
     # Sessions written by tests / fallbacks may not carry a finalize_lock.
     # Synthesise one so the with-block below stays uniform.
-    lock = s.get("finalize_lock") or threading.Lock()
+    lock = s.finalize_lock or threading.Lock()
     with lock:
-        if s.get("finalized"):
-            return dict(s.get("finalize_result",
-                              {"elapsed": 0, "filename": "", "size_mb": 0}))
+        if s.finalized:
+            return dict(s.finalize_result or
+                        {"elapsed": 0, "filename": "", "size_mb": 0})
         # Detach from the upstream so its bytes stop being written into a
         # half-closed stdin. Closing the subscription closes proc.stdin which
         # makes ffmpeg flush + exit on its own when we then SIGINT it (or
         # naturally if it already finished from `-t duration`).
         upstream.unsubscribe(f"rec-{session_id}")
-        if s.get("paused"):
-            s["paused"] = False
-            s["sess_state"]["paused"] = False
-        if s["proc"].poll() is None:
+        if s.paused:
+            s.paused = False
+            s.sess_state["paused"] = False
+        if s.proc.poll() is None:
             # SIGINT lets ffmpeg finalize the FLAC trailer cleanly; SIGTERM truncates.
-            try: s["proc"].send_signal(signal.SIGINT)
+            try: s.proc.send_signal(signal.SIGINT)
             except Exception:
-                try: s["proc"].terminate()
+                try: s.proc.terminate()
                 except Exception: pass
-            try: s["proc"].wait(timeout=10)
+            try: s.proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                try: s["proc"].kill()
+                try: s.proc.kill()
                 except Exception: pass
-        try: s["log_fh"].close()
+        try: s.log_fh.close()
         except Exception: pass
         # If we stopped while paused, start_time hasn't been advanced for the
         # current pause window — only resume does that. Use pause_started so the
         # reported elapsed matches the FLAC duration (un-paused recording time).
-        end_time = s.get("pause_started") if s.get("paused") else time.monotonic()
-        elapsed = int(end_time - s["start_time"])
-        fname = Path(s["outfile"]).name
-        fsize = round(Path(s["outfile"]).stat().st_size / 1e6, 1) if Path(s["outfile"]).exists() else 0
-        log_lines[session_id].append(f"■ Stopped — {elapsed}s  |  {fsize} MB  |  {fname}")
+        end_time = s.pause_started if s.paused else time.monotonic()
+        elapsed = int(end_time - s.start_time)
+        fname = Path(s.outfile).name
+        fsize = round(Path(s.outfile).stat().st_size / 1e6, 1) if Path(s.outfile).exists() else 0
+        s.log_lines.append(f"■ Stopped — {elapsed}s  |  {fsize} MB  |  {fname}")
         icon = {"user": "■ Saved", "auto": "■ Auto-stopped", "crash": "✗ Recording crashed"}.get(reason, "■ Stopped")
         level = "err" if reason == "crash" else "ok"
         bus.log(f"{icon} — {elapsed}s · {fsize} MB · {fname}", level)
@@ -475,26 +476,26 @@ def _finalize_session(session_id: str, reason: str) -> dict:
                      "session_id": session_id, "filename": fname,
                      "elapsed": elapsed, "size_mb": fsize})
         result = {"elapsed": elapsed, "filename": fname, "size_mb": fsize}
-        # Cache on both the session dict (for any caller still holding `s`)
+        # Cache on both the session (for any caller still holding `s`)
         # and the module-level recent-results table (for callers whose
-        # `active.get(sid)` happens to fire AFTER our pop below).
-        s["finalized"] = True
-        s["finalize_result"] = result
+        # `sessions.get(sid)` happens to fire AFTER our remove below).
+        s.finalized = True
+        s.finalize_result = result
         # Release the lifecycle hold so the upstream session can drop to
         # idle if no other holder (visible WS tab, playback proxy, another
         # recording) keeps it alive. Idempotent on the token.
-        hold = s.get("upstream_hold")
+        hold = s.upstream_hold
         if hold is not None:
             try: upstream.release(hold)
             except Exception: pass
         _record_recent_result(session_id, result)
-        active.pop(session_id, None)
+        sessions.remove(session_id)
         return result
 
 
 @router.post("/api/record/stop/{session_id}")
 async def stop_recording(session_id: str):
-    if session_id not in active:
+    if sessions.get(session_id) is None:
         raise HTTPException(404, "Session not found")
     return _finalize_session(session_id, "user")
 
@@ -507,54 +508,54 @@ async def pause_recording(session_id: str):
     reader thread never blocks (which used to deadlock the whole server when
     we previously SIGSTOPped ffmpeg). The resulting FLAC has a clean cut: file
     duration equals only the un-paused recording time."""
-    s = active.get(session_id)
+    s = sessions.get(session_id)
     if not s:
         raise HTTPException(404, "Session not found")
-    if s.get("paused"):
+    if s.paused:
         return {"paused": True}
-    s["paused"] = True
-    s["sess_state"]["paused"] = True
-    s["pause_started"] = time.monotonic()
-    log_lines[session_id].append("‖ Paused")
+    s.paused = True
+    s.sess_state["paused"] = True
+    s.pause_started = time.monotonic()
+    s.log_lines.append("‖ Paused")
     bus.log("‖ Recording paused", "info")
     bus.publish({"type": "record", "event": "pause",
                  "session_id": session_id,
-                 "elapsed": int(s["pause_started"] - s["start_time"])})
+                 "elapsed": int(s.pause_started - s.start_time)})
     return {"paused": True}
 
 
 @router.post("/api/record/resume/{session_id}")
 async def resume_recording(session_id: str):
-    s = active.get(session_id)
+    s = sessions.get(session_id)
     if not s:
         raise HTTPException(404, "Session not found")
-    if not s.get("paused"):
+    if not s.paused:
         return {"paused": False}
     # Slide start_time forward by the pause duration so the reported elapsed
     # excludes the time spent paused.
     now = time.monotonic()
-    paused_for = now - s.get("pause_started", now)
-    s["start_time"] += paused_for
-    s["paused"] = False
-    s["sess_state"]["paused"] = False
-    s.pop("pause_started", None)
-    log_lines[session_id].append("▶ Resumed")
+    paused_for = now - (s.pause_started if s.pause_started is not None else now)
+    s.start_time += paused_for
+    s.paused = False
+    s.sess_state["paused"] = False
+    s.pause_started = None
+    s.log_lines.append("▶ Resumed")
     bus.log("▶ Recording resumed", "info")
     bus.publish({"type": "record", "event": "resume",
                  "session_id": session_id,
-                 "elapsed": int(time.monotonic() - s["start_time"])})
+                 "elapsed": int(time.monotonic() - s.start_time)})
     return {"paused": False}
 
 
-def _classify_exit(s: dict) -> str:
+def _classify_exit(s) -> str:
     """Decide whether a self-exited ffmpeg counts as an auto-stop or a
     crash. Used by the per-session watcher and any explicit reaper."""
-    outfile = Path(s["outfile"])
-    duration = s.get("duration", 0)
-    elapsed = time.monotonic() - s["start_time"]
+    outfile = Path(s.outfile)
+    duration = s.duration
+    elapsed = time.monotonic() - s.start_time
     if duration > 0 and elapsed >= duration - 1 and outfile.exists() and outfile.stat().st_size > 0:
         return "auto"
-    if outfile.exists() and outfile.stat().st_size > 0 and s["proc"].returncode == 0:
+    if outfile.exists() and outfile.stat().st_size > 0 and s.proc.returncode == 0:
         return "auto"
     return "crash"
 
@@ -564,14 +565,14 @@ def _watch_session(sid: str) -> None:
     until ffmpeg exits, so the reap is event-driven (≤ a few ms) instead
     of polled at 1 Hz. The thread also serves as the canonical reaper for
     its child, so stop_recording's wait() doesn't race the watcher."""
-    s = active.get(sid)
+    s = sessions.get(sid)
     if not s:
         return
     try:
-        s["proc"].wait()
+        s.proc.wait()
     except Exception:
         pass
-    s = active.get(sid)
+    s = sessions.get(sid)
     if not s:
         # User-stop already finalized us before ffmpeg exited.
         return
@@ -579,7 +580,7 @@ def _watch_session(sid: str) -> None:
     try:
         _finalize_session(sid, reason)
     except Exception:
-        active.pop(sid, None)
+        sessions.remove(sid)
 
 
 def start_watcher() -> None:
@@ -595,8 +596,8 @@ def stop_watcher() -> None:
 
 @router.get("/api/log/{session_id}")
 async def get_log(session_id: str):
-    lines = list(log_lines.get(session_id, []))
-    log_path = log_paths.get(session_id)
+    lines = sessions.get_log_lines(session_id)
+    log_path = sessions.get_log_path(session_id)
     if log_path and Path(log_path).exists():
         try:
             with open(log_path, "rb") as f:

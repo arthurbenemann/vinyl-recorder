@@ -22,7 +22,7 @@ from services.upstream import (
 from state import (
     AUTO_CONNECT, ConnectRequest, DEFAULT_GAIN_DB, DEFAULT_SPLIT_BIT_DEPTH,
     DEFAULT_SPLIT_NORMALIZE, DEFAULT_SPLIT_TARGET_PEAK_DB, DEFAULT_STREAM_URL,
-    DISCOGS_USERNAME, PRE_ROLL_SECONDS, active, upstream,
+    DISCOGS_USERNAME, PRE_ROLL_SECONDS, sessions, upstream,
 )
 from version import VERSION
 
@@ -137,26 +137,27 @@ async def get_config():
 
 @app.get("/api/status")
 async def status():
-    sessions = []
-    for sid, s in active.items():
+    snapshot = []
+    for s in sessions.values():
         # Frozen elapsed while paused — pause_started captures the freeze
         # point. Use monotonic so a system-clock step (NTP correction at
         # midnight, etc.) doesn't make the timer jump.
-        if s.get("paused"):
-            elapsed = int(s.get("pause_started", time.monotonic()) - s["start_time"])
+        if s.paused:
+            elapsed = int((s.pause_started if s.pause_started is not None
+                           else time.monotonic()) - s.start_time)
         else:
-            elapsed = int(time.monotonic() - s["start_time"])
-        sessions.append({
-            "id": sid,
+            elapsed = int(time.monotonic() - s.start_time)
+        snapshot.append({
+            "id": s.sid,
             "elapsed": elapsed,
-            "paused": bool(s.get("paused")),
-            "outfile": Path(s["outfile"]).name,
-            "meta": s["meta"],
-            "duration": s["duration"],
+            "paused": bool(s.paused),
+            "outfile": Path(s.outfile).name,
+            "meta": s.meta,
+            "duration": s.duration,
         })
     return {
-        "recording":    len(active) > 0,
-        "sessions":     sessions,
+        "recording":    len(sessions) > 0,
+        "sessions":     snapshot,
         "disk_free_gb": disk_free_gb(),
         "upstream":     upstream.state(),
     }
@@ -190,7 +191,7 @@ async def connect(req: ConnectRequest):
 @app.post("/api/disconnect")
 async def disconnect():
     """Stop the shared upstream pull. Refused while recording (any tab)."""
-    if active:
+    if sessions:
         bus.log("✗ Disconnect refused — stop recording first", "err")
         raise HTTPException(409, "stop recording before disconnecting")
     if not upstream.configured:
@@ -238,7 +239,7 @@ async def metrics():
         f"vinyl_upstream_reconnect_count {int(h.get('reconnect_count') or 0)}",
         "# HELP vinyl_active_recordings Recording sessions currently running.",
         "# TYPE vinyl_active_recordings gauge",
-        f"vinyl_active_recordings {len(active)}",
+        f"vinyl_active_recordings {len(sessions)}",
         "# HELP vinyl_disk_free_gb Free space on the output volume, in GB.",
         "# TYPE vinyl_disk_free_gb gauge",
         f"vinyl_disk_free_gb {disk_free_gb()}",

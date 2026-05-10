@@ -71,19 +71,19 @@ def _reset_external_api_state(monkeypatch):
 
 @pytest.fixture
 def reset_active_sessions():
-    """Yield a context that pops every key it inserted into `state.active`
-    on teardown. Use instead of try/finally + manual pop in tests that need
-    to plant a fake recording session — guaranteed cleanup even if an
-    assertion fails between insert and pop."""
+    """Yield a context that pops every sid it inserted into the recording
+    session manager on teardown. Use instead of try/finally + manual pop in
+    tests that need to plant a fake recording session — guaranteed cleanup
+    even if an assertion fails between insert and pop."""
     inserted: list = []
 
     class _Helper:
         def insert(self, sid: str, value: dict) -> None:
-            from state import active
-            active[sid] = value
+            from state import sessions, Session
+            sessions.insert(Session(sid=sid, **value))
             inserted.append(sid)
 
     yield _Helper()
-    from state import active
+    from state import sessions
     for sid in inserted:
-        active.pop(sid, None)
+        sessions.remove(sid)

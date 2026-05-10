@@ -26,28 +26,29 @@ from pathlib import Path
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from services.eventbus import bus
-from state import active, upstream
+from state import sessions as session_mgr, upstream
 
 router = APIRouter()
 
 
 def _record_snapshot() -> dict:
     """Live snapshot of all in-flight recording sessions for the WS replay."""
-    sessions = []
-    for sid, s in active.items():
-        if s.get("paused"):
-            elapsed = int(s.get("pause_started", time.monotonic()) - s["start_time"])
+    out = []
+    for s in session_mgr.values():
+        if s.paused:
+            elapsed = int((s.pause_started if s.pause_started is not None
+                           else time.monotonic()) - s.start_time)
         else:
-            elapsed = int(time.monotonic() - s["start_time"])
-        sessions.append({
-            "id":       sid,
+            elapsed = int(time.monotonic() - s.start_time)
+        out.append({
+            "id":       s.sid,
             "elapsed":  elapsed,
-            "paused":   bool(s.get("paused")),
-            "outfile":  Path(s["outfile"]).name,
-            "meta":     s["meta"],
-            "duration": s["duration"],
+            "paused":   bool(s.paused),
+            "outfile":  Path(s.outfile).name,
+            "meta":     s.meta,
+            "duration": s.duration,
         })
-    return {"recording": len(sessions) > 0, "sessions": sessions}
+    return {"recording": len(out) > 0, "sessions": out}
 
 
 @router.websocket("/api/ws")
