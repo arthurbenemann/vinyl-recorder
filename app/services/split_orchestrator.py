@@ -120,6 +120,12 @@ def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
                 f"--set-tag=TITLE={title}",
                 f"--set-tag=TRACKNUMBER={out_idx}",
                 f"--set-tag=TRACKTOTAL={out_total}"]
+    # Optional classical-style tags — only emit when present so we don't
+    # leave empty COMPOSER=/CONDUCTOR= entries on every track.
+    if tags.get("composer"):
+        tag_args.append(f"--set-tag=COMPOSER={tags['composer']}")
+    if tags.get("conductor"):
+        tag_args.append(f"--set-tag=CONDUCTOR={tags['conductor']}")
     if tags.get("musicbrainz_albumid"):
         tag_args.append(f"--set-tag=MUSICBRAINZ_ALBUMID={tags['musicbrainz_albumid']}")
     if tags.get("discogs_release_id"):

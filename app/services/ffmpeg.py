@@ -214,6 +214,8 @@ TAG_KEY_MAP = {
     "label":          "LABEL",
     "catalog_number": "CATALOGNUMBER",
     "country":        "RELEASECOUNTRY",
+    "composer":       "COMPOSER",
+    "conductor":      "CONDUCTOR",
 }
 
 
