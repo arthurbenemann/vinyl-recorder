@@ -122,10 +122,22 @@ async function _savePlanNow() {
     skip: !!r.skip,
   }));
   const albumId = we.albumId;
+  // Persist the format / bit-depth / sample-rate selectors alongside the
+  // tracks. PlanUpdateRequest treats null fields as no-op, so reading the
+  // <select> values once each save is fine even if the user never touched
+  // them — we just write the same default back. Re-edit reload then sees
+  // these and rehydrates the selectors.
+  const outputFormat = document.getElementById('we-format')?.value || 'flac';
+  const bitDepth     = parseInt(document.getElementById('we-bitdepth')?.value, 10);
+  const sampleRate   = parseInt(document.getElementById('we-sample-rate')?.value, 10);
+  const planBody = { tracks };
+  if (!Number.isNaN(bitDepth))   planBody.bit_depth     = bitDepth;
+  if (!Number.isNaN(sampleRate)) planBody.sample_rate   = sampleRate;
+  if (outputFormat)              planBody.output_format = outputFormat;
   try {
     _planSaveInFlight = fetch(`/api/album/${albumId}/plan`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ tracks }),
+      body: JSON.stringify(planBody),
     });
     const r = await _planSaveInFlight;
     if (r && r.ok && we.albumId === albumId) {
@@ -369,6 +381,17 @@ function openWaveEditor(fname) {
     dirty:       false,
   });
   resetMeasureUI();
+  // Reset the encoder selectors to defaults on every open. weLoadExistingSplit
+  // overrides these from the saved plan if one exists; otherwise the user
+  // gets a clean FLAC/keep-source/keep-source slate without state bleeding
+  // across albums.
+  const fmtSelReset = document.getElementById('we-format');
+  if (fmtSelReset) fmtSelReset.value = 'flac';
+  const bdSelReset  = document.getElementById('we-bitdepth');
+  if (bdSelReset)  bdSelReset.value = '0';
+  const srSelReset  = document.getElementById('we-sample-rate');
+  if (srSelReset)  srSelReset.value = '0';
+  _weApplyFormatUI();
   // Reset the auto-save indicator. Each open starts hidden; the first
   // successful debounced save flips it to "saved just now".
   _stopSavedTicker();
@@ -464,6 +487,21 @@ async function weLoadExistingSplit(fname) {
     we.cuts    = cuts;
     we.titles  = ptracks.map(t => t.title || '');
     we.skipped = ptracks.map(t => !!t.skip);
+    // Rehydrate the encoder selectors from the saved plan. Default `flac`
+    // when an older plan predates the format selector, so the first reopen
+    // of a legacy draft picks up "lossless" without changing anything.
+    const fmtSel = document.getElementById('we-format');
+    if (fmtSel) {
+      fmtSel.value = plan.output_format || 'flac';
+      // Reapply the disabled state on the bit-depth select. Use the pure-UI
+      // helper so the load path doesn't flip we.dirty (which would trigger
+      // a redundant plan-save echoing back what we just read).
+      _weApplyFormatUI();
+    }
+    const bdSel = document.getElementById('we-bitdepth');
+    if (bdSel && plan.bit_depth != null) bdSel.value = String(plan.bit_depth);
+    const srSel = document.getElementById('we-sample-rate');
+    if (srSel && plan.sample_rate != null) srSel.value = String(plan.sample_rate);
     drawAll();
   } catch (e) { /* nothing existing — leave the empty state */ }
   finally {
@@ -1661,6 +1699,33 @@ function _regions() {
   }));
 }
 
+// ── Output format change ─────────────────────────────────────────────────
+
+// Disable the bit-depth select for lossy formats — encoders use their own
+// internal precision; the value would be silently ignored. Greyed out so
+// users can still see what they previously had selected. Pure UI mutation
+// — no dirty/save side effects so the load path can call this safely.
+function _weApplyFormatUI() {
+  const fmt = document.getElementById('we-format')?.value || 'flac';
+  const bd  = document.getElementById('we-bitdepth');
+  const losslessFormats = ['flac', 'wav', 'm4a-alac'];
+  const supportsBits = losslessFormats.includes(fmt);
+  if (bd) {
+    bd.disabled = !supportsBits;
+    bd.title = supportsBits
+      ? ''
+      : 'Bit depth applies to lossless formats only (FLAC / WAV / ALAC).';
+  }
+}
+
+// onchange handler wired up from the <select> in index.html. Updates the UI
+// AND marks the editor dirty so the debounced plan-save fires.
+function weOnFormatChange() {
+  _weApplyFormatUI();
+  we.dirty = true;
+  _persistDraft();
+}
+
 // ── Apply ─────────────────────────────────────────────────────────────────
 async function weApplySplit() {
   if (!we.albumId) return;
@@ -1678,6 +1743,7 @@ async function weApplySplit() {
   const normalize = !!document.getElementById('we-normalize').checked;
   const bitDepth = parseInt(document.getElementById('we-bitdepth').value, 10) || 0;
   const sampleRate = parseInt(document.getElementById('we-sample-rate').value, 10) || 0;
+  const outputFormat = document.getElementById('we-format')?.value || 'flac';
   if (normalize && (we.measured == null || we.measured.peak_db == null)) {
     // Either nothing measured yet, or skipping/cut changes invalidated it.
     await weMeasure();
@@ -1692,7 +1758,7 @@ async function weApplySplit() {
   showBar(bar, 'encoding tracks');
   try {
     const d = await withJobProgress(bar, async (jobId) => {
-      const body = { album_id: we.albumId, tracks, bit_depth: bitDepth, sample_rate: sampleRate, job_id: jobId };
+      const body = { album_id: we.albumId, tracks, bit_depth: bitDepth, sample_rate: sampleRate, output_format: outputFormat, job_id: jobId };
       if (normalize) {
         body.normalize         = true;
         body.target_peak_db    = we.targetPeakDb;

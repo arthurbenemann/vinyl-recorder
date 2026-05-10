@@ -66,6 +66,11 @@ DEFAULT_SPLIT_BIT_DEPTH = int(os.getenv("DEFAULT_SPLIT_BIT_DEPTH", "0"))
 # client side, but a hand-crafted POST mustn't slip arbitrary -ar through).
 ALLOWED_SPLIT_SAMPLE_RATES: tuple[int, ...] = (0, 44100, 48000, 88200, 96000)
 
+# Allowed output container formats for the split. The route validates the
+# value against this tuple so a hand-crafted POST can't slip arbitrary
+# codec/extension combos through to ffmpeg.
+ALLOWED_OUTPUT_FORMATS: tuple[str, ...] = ("flac", "wav", "mp3", "ogg", "m4a-aac", "m4a-alac")
+
 # ── Recording session state ──────────────────────────────────────────────
 # Sessions are keyed by short uuid. Previously this lived in three bare
 # module-level dicts (`active`, `log_lines`, `log_paths`) that routes
@@ -259,6 +264,7 @@ class SplitRequest(BaseModel):
     # The route validates the value against ALLOWED_SPLIT_SAMPLE_RATES so a
     # malicious / malformed client can't slip arbitrary -ar values to ffmpeg.
     sample_rate: int = 0
+    output_format: str = "flac"        # one of ALLOWED_OUTPUT_FORMATS; "flac" preserves prior behavior
     job_id: Optional[str] = None      # progress reporting (see CombineRequest)
 
 
@@ -291,6 +297,7 @@ class PlanUpdateRequest(BaseModel):
     measured_peak_db: Optional[float]  = None
     bit_depth:        Optional[int]    = None
     sample_rate:      Optional[int]    = None
+    output_format:    Optional[str]    = None
 
 
 class BulkDelete(BaseModel):

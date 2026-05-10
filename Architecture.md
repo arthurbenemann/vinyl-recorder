@@ -213,11 +213,14 @@ For multi-side LP rips:
    (`/api/album/detect-silences`) seed suggested cuts; the user adjusts and
    labels tracks. The split plan is persisted into `album.json` via
    `/api/album/{id}/plan`.
-3. `/api/album/split` writes one FLAC per track into
-   `music/{Artist}/{Album} (Year)/NN - Title.flac` (Jellyfin-shaped) and
-   embeds tags + cover at that step. The original sides remain in
-   `in-progress/{album_id}/` so the album can be re-split later without
-   re-recording.
+3. `/api/album/split` writes one file per track into
+   `music/{Artist}/{Album} (Year)/NN - Title.<ext>` (Jellyfin-shaped). The
+   container is selected via the wave-editor's **output format** dropdown
+   (default FLAC; also WAV / MP3 / Ogg Vorbis / AAC / ALAC). FLAC keeps
+   the existing metaflac post-encode tag/cover flow; the other formats
+   bake tags inline via ffmpeg `-metadata`. The original sides remain in
+   `in-progress/{album_id}/` so the album can be re-split (or re-emitted
+   as a different format) later without re-recording.
 
 ### Wave editor
 

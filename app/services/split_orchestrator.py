@@ -37,7 +37,73 @@ from services.ffmpeg import (
     run_ffmpeg_with_progress, safe_path_component,
 )
 from services.jobs import finish_job, start_job
-from state import ALLOWED_SPLIT_SAMPLE_RATES, MUSIC_DIR
+from state import ALLOWED_OUTPUT_FORMATS, ALLOWED_SPLIT_SAMPLE_RATES, MUSIC_DIR
+
+
+# Container/codec settings per output_format. `ext` is the file extension
+# (with leading dot); `ffmpeg_args` is the codec arg list appended to the
+# encode command. `lossless` controls whether bit-depth selection (via
+# aformat) gets applied — lossy codecs ignore it and pick their own
+# internal precision.
+_FORMAT_SETTINGS: dict[str, dict] = {
+    "flac":     {"ext": ".flac", "ffmpeg_args": ["-c:a", "flac", "-compression_level", "5"], "lossless": True,  "supports_metaflac": True},
+    "wav":      {"ext": ".wav",  "ffmpeg_args": ["-c:a", "pcm_s16le"],                       "lossless": True,  "supports_metaflac": False},
+    "mp3":      {"ext": ".mp3",  "ffmpeg_args": ["-c:a", "libmp3lame", "-q:a", "0"],         "lossless": False, "supports_metaflac": False},
+    "ogg":      {"ext": ".ogg",  "ffmpeg_args": ["-c:a", "libvorbis",  "-q:a", "8"],         "lossless": False, "supports_metaflac": False},
+    "m4a-aac":  {"ext": ".m4a",  "ffmpeg_args": ["-c:a", "aac",        "-b:a", "256k"],      "lossless": False, "supports_metaflac": False},
+    "m4a-alac": {"ext": ".m4a",  "ffmpeg_args": ["-c:a", "alac"],                            "lossless": True,  "supports_metaflac": False},
+}
+
+# Every audio extension the split pipeline can produce. Used to wipe
+# prior music dirs and to recognise track filenames in `download_track`
+# / `album_tracks` regardless of which format the album was emitted as.
+_AUDIO_EXTS: tuple[str, ...] = (".flac", ".wav", ".mp3", ".ogg", ".m4a")
+
+
+def _wav_codec_for_bits(bits: Optional[int]) -> str:
+    """16-bit signed LE for WAV unless the user asked for 24-bit explicitly."""
+    return "pcm_s24le" if bits == 24 else "pcm_s16le"
+
+
+def _media_type_for(ext: str) -> str:
+    """Map an audio file extension to the HTTP `Content-Type` used by
+    `download_track`. Falls back to octet-stream so an unknown extension
+    still downloads instead of confusing the browser into trying to render."""
+    return {
+        ".flac": "audio/flac", ".wav":  "audio/wav",  ".mp3":  "audio/mpeg",
+        ".ogg":  "audio/ogg",  ".m4a":  "audio/mp4",
+    }.get(ext.lower(), "application/octet-stream")
+
+
+def _ffmpeg_metadata_args(title: str, out_idx: int, out_total: int,
+                          tags: dict, cover_file: Optional[Path]) -> list[str]:
+    """Build the `-metadata key=value` flag set used for non-FLAC encodes.
+    metaflac handles FLAC tag writing after encode (existing flow); for
+    every other container we have to bake the tags in at encode time.
+
+    Cover-art embedding for AAC/MP3/OGG would need a second `-i` input
+    plus `-c:v copy -disposition:v attached_pic`. ffmpeg's behaviour
+    varies by container (mp3 ID3v2.3 / m4a covr atom / vorbis
+    METADATA_BLOCK_PICTURE base64). For now we leave cover embedding to
+    the FLAC-only path; the cover.jpg sits in the album dir and
+    Jellyfin's scanner picks it up as folder art for the non-FLAC tracks
+    too."""
+    args: list[str] = []
+    pairs = [
+        ("artist",      tags.get("artist", "")),
+        ("album",       tags.get("album", "")),
+        ("date",        tags.get("year", "")),
+        ("genre",       tags.get("genre", "")),
+        ("publisher",   tags.get("label", "")),
+        ("title",       title),
+        ("track",       f"{out_idx}/{out_total}"),
+    ]
+    if tags.get("composer"):  pairs.append(("composer",  tags["composer"]))
+    if tags.get("conductor"): pairs.append(("conductor", tags["conductor"]))
+    for k, v in pairs:
+        if v != "":
+            args += ["-metadata", f"{k}={v}"]
+    return args
 
 
 # ── Domain exceptions ────────────────────────────────────────────────────
@@ -72,9 +138,10 @@ def wipe_prior_music_dir(prior_relpath: Optional[str], new_relpath: str) -> None
         return
     prior_dir = MUSIC_DIR / prior_relpath
     if prior_dir.is_dir():
-        for old in prior_dir.glob("*.flac"):
-            try: old.unlink()
-            except Exception: pass
+        for ext in _AUDIO_EXTS:
+            for old in prior_dir.glob(f"*{ext}"):
+                try: old.unlink()
+                except Exception: pass
         try: prior_dir.rmdir()
         except Exception: pass
         try:
@@ -141,10 +208,14 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
                       sample_fmt: Optional[str], target_rate: Optional[int],
                       tags: dict, cover_file: Optional[Path],
                       slice_range: tuple[float, float]) -> dict:
-    """Encode one track FLAC into music/, write tags, embed cover. Raises
-    SplitProcessingError on ffmpeg failure (the outer handler unlinks the
-    playlist via the existing try/finally before propagation)."""
-    track_name = f"{str(out_idx).zfill(pad)} - {safe_path_component(t.title) or 'Track'}.flac"
+    """Encode one track into music/ in the requested container, write tags,
+    embed cover. FLAC keeps the existing flow (encode -> metaflac post-pass);
+    every other format embeds tags inline with `-metadata` flags during the
+    ffmpeg encode. Raises SplitProcessingError on ffmpeg failure (the outer
+    handler unlinks the playlist via the existing try/finally before
+    propagation)."""
+    settings = _FORMAT_SETTINGS[req.output_format]
+    track_name = f"{str(out_idx).zfill(pad)} - {safe_path_component(t.title) or 'Track'}{settings['ext']}"
     out = music_dir / track_name
     af = []
     if apply_gain:
@@ -154,7 +225,10 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
         # so quantisation from the resample is inaudible. Placed BEFORE
         # aformat so the bit-depth conversion happens after the rate change.
         af.append("aresample=resampler=soxr:precision=28")
-    if sample_fmt:
+    if sample_fmt and settings["lossless"]:
+        # aformat-driven bit-depth selection only makes sense for the lossless
+        # codec path. WAV's bit depth is the codec choice itself (handled
+        # below); lossy codecs would silently ignore aformat.
         af.append(f"aformat=sample_fmts={sample_fmt}")
     # The concat demuxer presents the full album as one virtual input
     # stream so -ss/-to act in album time, including across side boundaries
@@ -167,8 +241,23 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
         cmd += ["-af", ",".join(af)]
     if target_rate:
         cmd += ["-ar", str(target_rate)]
-    cmd += ["-c:a", "flac", "-compression_level", "5",
-            "-map_metadata", "-1", str(out)]
+    cmd += list(settings["ffmpeg_args"])
+    if req.output_format == "wav":
+        # WAV's bit depth IS the codec choice, not an aformat operation.
+        # Replace the default pcm_s16le with pcm_s24le when the user asked
+        # for 24-bit. (settings appended pcm_s16le above; rewrite that token.)
+        idx = cmd.index("pcm_s16le")
+        cmd[idx] = _wav_codec_for_bits(req.bit_depth or None)
+    if req.output_format == "flac":
+        # FLAC: metaflac writes tags after encode (existing flow). Strip any
+        # inherited metadata from the input first.
+        cmd += ["-map_metadata", "-1"]
+    else:
+        # Non-FLAC: bake tags + track number in via -metadata flags. metaflac
+        # only handles FLAC, so for every other container we have to do the
+        # tagging at encode time.
+        cmd += _ffmpeg_metadata_args(t.title, out_idx, out_total, tags, cover_file)
+    cmd.append(str(out))
     track_dur = end_ - start_
     rc, stderr = await asyncio.to_thread(
         run_ffmpeg_with_progress, cmd, track_dur, req.job_id,
@@ -178,7 +267,8 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
         err = (stderr or b"").decode(errors="replace")[:300]
         finish_job(req.job_id, error=err)
         raise SplitProcessingError(f"ffmpeg failed on track {i}: {err}")
-    write_track_tags(out, t.title, out_idx, out_total, tags, cover_file)
+    if req.output_format == "flac":
+        write_track_tags(out, t.title, out_idx, out_total, tags, cover_file)
     return {
         "filename":         track_name,
         "duration_seconds": end_ - start_,
@@ -201,6 +291,7 @@ def _persist_split_plan(req, relpath: str) -> None:
         "measured_peak_db": req.measured_peak_db,
         "bit_depth":        req.bit_depth,
         "sample_rate":      req.sample_rate,
+        "output_format":    req.output_format,
     }
     manifest = albums_fs.read_manifest(req.album_id)
     manifest["plan"] = plan
@@ -233,6 +324,11 @@ async def split_album(req, manifest: dict) -> dict:
         raise SplitValidationError(
             f"unsupported sample_rate {req.sample_rate}; "
             f"allowed: {sorted(ALLOWED_SPLIT_SAMPLE_RATES)}"
+        )
+    if req.output_format not in ALLOWED_OUTPUT_FORMATS:
+        raise SplitValidationError(
+            f"unsupported output_format {req.output_format!r}; "
+            f"allowed: {sorted(ALLOWED_OUTPUT_FORMATS)}"
         )
 
     try:
@@ -284,9 +380,10 @@ async def split_album(req, manifest: dict) -> dict:
     prior_relpath = manifest.get("music_relpath")
     wipe_prior_music_dir(prior_relpath, relpath)
     music_dir.mkdir(parents=True, exist_ok=True)
-    for old in music_dir.glob("*.flac"):
-        try: old.unlink()
-        except Exception: pass
+    for ext in _AUDIO_EXTS:
+        for old in music_dir.glob(f"*{ext}"):
+            try: old.unlink()
+            except Exception: pass
 
     cover_file = albums_fs.cover_path(req.album_id)
     out_dur_total = kept_duration_total(req.tracks, total) or 1.0

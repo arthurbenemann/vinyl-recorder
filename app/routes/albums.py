@@ -27,6 +27,7 @@ from services.ffmpeg import (
 )
 from services.peaks import silence_runs_from_dat
 from services.jobs import finish_job, start_job
+from services.split_orchestrator import _AUDIO_EXTS, _media_type_for
 from state import (
     CombineRequest, MUSIC_DIR, MeasureRequest, PlanUpdateRequest,
     PromoteRequest, ReorderSidesRequest, SilenceDetectRequest, SplitRequest,
@@ -141,6 +142,7 @@ async def update_plan(album_id: str, req: PlanUpdateRequest):
     if req.measured_peak_db is not None: plan["measured_peak_db"] = req.measured_peak_db
     if req.bit_depth        is not None: plan["bit_depth"]        = req.bit_depth
     if req.sample_rate      is not None: plan["sample_rate"]      = req.sample_rate
+    if req.output_format    is not None: plan["output_format"]    = req.output_format
     manifest["plan"] = plan
     albums_fs.write_manifest(album_id, manifest)
     return {"ok": True, "plan": plan}
@@ -408,12 +410,26 @@ async def album_tracks(album_id: str):
     tracks = []
     for i, t in enumerate(kept, start=1):
         title = t.get("title", "") or "Track"
-        track_name = f"{str(i).zfill(pad)} - {safe_path_component(title) or 'Track'}.flac"
-        f = music_dir / track_name if music_dir else None
+        track_name_stem = f"{str(i).zfill(pad)} - {safe_path_component(title) or 'Track'}"
+        # The plan can be re-loaded across format changes, so probe every
+        # supported extension and pick whichever lands on disk first. Falls
+        # back to .flac for the never-yet-emitted plan case so the row still
+        # has a sensible filename to render.
+        f = None
+        if music_dir:
+            for ext in _AUDIO_EXTS:
+                cand = music_dir / f"{track_name_stem}{ext}"
+                if cand.exists():
+                    f = cand
+                    break
+        track_name = f.name if f else f"{track_name_stem}.flac"
         size_mb = duration = None
         if f and f.exists():
             size_mb = round(f.stat().st_size / 1e6, 1)
-            duration = flac_duration_seconds(f)
+            # Duration probing for non-FLAC requires ffprobe and isn't worth
+            # the per-row cost — the in-memory plan carries the planned
+            # duration which the fallback below uses.
+            duration = flac_duration_seconds(f) if f.suffix == ".flac" else None
         tracks.append({
             "filename":         track_name,
             "title":            title,
@@ -428,7 +444,7 @@ async def album_tracks(album_id: str):
     }
 
 
-_TRACKNAME_RE = re.compile(r"^[^/\\]+\.flac$")
+_TRACKNAME_RE = re.compile(r"^[^/\\]+\.(?:flac|wav|mp3|ogg|m4a)$")
 
 
 @router.get("/api/album/{album_id}/track/{trackname}")
@@ -442,4 +458,4 @@ async def download_track(album_id: str, trackname: str):
     p = MUSIC_DIR / relpath / trackname
     if not p.exists():
         raise HTTPException(404)
-    return FileResponse(str(p), media_type="audio/flac", filename=trackname)
+    return FileResponse(str(p), media_type=_media_type_for(p.suffix), filename=trackname)

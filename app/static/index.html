@@ -369,6 +369,17 @@
           <input type="checkbox" id="we-normalize"> normalize album
         </label>
         <label class="we-process-bits">
+          output format
+          <select id="we-format" onchange="weOnFormatChange()">
+            <option value="flac" selected>FLAC (lossless, default)</option>
+            <option value="wav">WAV (PCM, lossless)</option>
+            <option value="mp3">MP3 (lossy, V0 ~245 kbps)</option>
+            <option value="ogg">Ogg Vorbis (lossy, q8 ~256 kbps)</option>
+            <option value="m4a-aac">AAC / m4a (lossy, 256 kbps)</option>
+            <option value="m4a-alac">ALAC / m4a (Apple Lossless)</option>
+          </select>
+        </label>
+        <label class="we-process-bits">
           output bit depth
           <select id="we-bitdepth">
             <option value="0">keep source</option>
