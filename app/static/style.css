@@ -366,18 +366,16 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 
 /* Wave editor — toolbar */
 /* Editor header right cluster: the auto-saved indicator + close button.
-   `we-saved` flashes for ~1 s every time the debounced plan-save lands;
-   without it auto-save is invisible and returning users can't tell the
-   editor persisted their last drag. The opacity transition fades it out
-   while it stays visible, then JS hides the element so layout doesn't
-   shift between flashes. */
+   `we-saved` is hidden until the first debounced plan-save lands, then
+   shows a quiet "saved Xs ago" pill that ticks every few seconds while
+   the modal is open. Persistent (vs the earlier 1 s flash) so users who
+   close the modal between flashes can still tell their work persisted. */
 .we-header-right { display: flex; align-items: center; gap: 10px; }
 .we-saved {
   font-size: 10px; letter-spacing: 0.08em; color: var(--green);
   padding: 2px 6px; border: 0.5px solid rgba(99,153,34,0.35); border-radius: 4px;
-  opacity: 0; transition: opacity 0.9s ease-out;
+  font-variant-numeric: tabular-nums;
 }
-.we-saved.flash { opacity: 1; }
 .we-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .we-toolbar .grow { flex: 1; }
 .we-toolbar .play-btn { width: 36px; height: 28px; border-radius: 4px; background: var(--surface); border: 0.5px solid var(--border2); color: var(--text); font-family: var(--mono); font-size: 14px; cursor: pointer; line-height: 1; }
@@ -480,6 +478,35 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .wave-track.unfit { opacity: 0.6; }
 .wave-track.unfit input { font-style: italic; color: var(--muted); }
 .wave-track.unfit .range { color: var(--accent2); font-style: italic; }
+
+/* Narrow-modal track-row layout (Option A).
+   At full width the row is one line: pn / play / title / start / range / skip / del.
+   Below ~1080 px the modal shrinks (modal is `max-width:100%`) and the
+   title input is squeezed below readable width while the meta cells
+   wrap unpredictably. Re-flow into two visual rows:
+     row 1: pn | play | title (input takes the freed horizontal space)
+     row 2: <empty> | start | range | skip | del   (right-aligned cluster;
+            playhead-relevant fields stay closest to the title)
+   Children stay in DOM order — selectors below place them by `:nth-child`,
+   so existing JS hooks, keyboard shortcuts and `.skip` / `.unfit`
+   modifiers keep working untouched. */
+@media (max-width: 1080px) {
+  .wave-track {
+    grid-template-columns: 28px 28px 1fr 110px 70px 24px 24px;
+    grid-template-rows: auto auto;
+    row-gap: 4px;
+  }
+  /* Row 1: pn / play / title — title spans the trailing meta columns. */
+  .wave-track > :nth-child(1) { grid-row: 1; grid-column: 1; }       /* .pn */
+  .wave-track > :nth-child(2) { grid-row: 1; grid-column: 2; }       /* .play-track */
+  .wave-track > :nth-child(3) { grid-row: 1; grid-column: 3 / -1; }  /* title input */
+  /* Row 2: leave columns 1-2 empty so the meta cluster aligns under the
+     title slot. start / range / skip / del keep their normal widths. */
+  .wave-track > :nth-child(4) { grid-row: 2; grid-column: 4; }       /* .start-input */
+  .wave-track > :nth-child(5) { grid-row: 2; grid-column: 5; }       /* .range */
+  .wave-track > :nth-child(6) { grid-row: 2; grid-column: 6; }       /* .skip-btn */
+  .wave-track > :nth-child(7) { grid-row: 2; grid-column: 7; }       /* .del */
+}
 
 /* Skipped-region overlay — diagonal hatch on top of the waveform + minimap. */
 .wave-skip {
