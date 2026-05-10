@@ -2347,18 +2347,47 @@ async function runPiDeploy() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ host, username, password }),
     });
-    let payload = null;
-    try { payload = await r.json(); } catch(e) {}
     if (!r.ok) {
-      const detail = (payload && payload.detail) || ('HTTP ' + r.status);
+      // Pre-stream failure (e.g. 422 validation) — body is regular JSON.
+      let detail = 'HTTP ' + r.status;
+      try { detail = (await r.json()).detail || detail; } catch (e) {}
       _piDeployLogLine('✗ ' + detail, 'err');
       toast('✗ pi deploy failed: ' + detail, 'err');
       return;
     }
-    const lines = (payload && payload.log) || [];
-    for (const line of lines) _piDeployLogLine(line);
-    _piDeployLogLine('✓ pi-recorder is up. you can now point the stream URL at this host.', 'ok');
-    toast('✓ pi deployed to ' + host, 'ok');
+    // Streamed NDJSON: one JSON object per \n-terminated chunk. Parse
+    // and render as each line arrives so the modal updates live during
+    // the apt step (which can be the slowest phase on a fresh Pi OS).
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let succeeded = false;
+    let errorDetail = null;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) !== -1) {
+        const raw = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!raw) continue;
+        let msg;
+        try { msg = JSON.parse(raw); }
+        catch (e) { _piDeployLogLine(raw); continue; }
+        if (msg.type === 'log')   _piDeployLogLine(msg.line);
+        else if (msg.type === 'done')  succeeded = true;
+        else if (msg.type === 'error') errorDetail = msg.detail || 'deploy failed';
+      }
+    }
+    if (succeeded) {
+      _piDeployLogLine('✓ pi-recorder is up. you can now point the stream URL at this host.', 'ok');
+      toast('✓ pi deployed to ' + host, 'ok');
+    } else {
+      const detail = errorDetail || 'deploy ended without a result';
+      _piDeployLogLine('✗ ' + detail, 'err');
+      toast('✗ pi deploy failed: ' + detail, 'err');
+    }
   } catch (e) {
     _piDeployLogLine('✗ ' + (e.message || e), 'err');
     toast('✗ pi deploy failed: ' + (e.message || e), 'err');

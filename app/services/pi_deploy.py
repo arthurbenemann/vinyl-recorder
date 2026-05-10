@@ -50,8 +50,18 @@ PI_SOURCE_DIR = _resolve_pi_source_dir()
 # and feed it via stdin to `sh -s --` instead. Keeping it as a
 # bash-on-stdin invocation also makes it trivial to add NEW steps later
 # without re-quoting.
+#
+# `apt-get install` of python3 + alsa-utils is idempotent — both ship on
+# a fresh Raspberry Pi OS install, so the apt step is a near-no-op there
+# (a few seconds for the index update). Including it unconditionally lets
+# the deploy bootstrap from a stripped-down Pi OS Lite image (or any
+# Debian-derivative) without the user having to remember a manual prep
+# step. DEBIAN_FRONTEND + -qq keep the log compact and the run hands-free.
 _INSTALL_SCRIPT = """\
 set -e
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq python3 alsa-utils
 mkdir -p /opt/pi-recorder
 mv /tmp/server.py /opt/pi-recorder/server.py
 mv /tmp/pi-recorder.service /etc/systemd/system/pi-recorder.service
@@ -179,55 +189,85 @@ def deploy(
         emit("✓ uploaded")
 
         # ── 2. Run the install script under sudo ─────────────────────────
-        # `sudo -S -p ''` reads the password from stdin and suppresses the
-        # prompt that would otherwise show up in stderr. `sh -s` reads the
-        # script body from stdin too — paramiko's stdin is multiplexed for
-        # both, so we send password\n followed by the script. Default
-        # Raspberry Pi OS configures NOPASSWD for the `pi` user (sudo
-        # ignores extra stdin in that case), so this works either way.
-        cmd = "sudo -S -p '' sh -s"
-        emit("running install (mkdir / mv / systemctl daemon-reload / enable)…")
+        # Probe whether sudo needs a password. Default Raspberry Pi OS
+        # configures NOPASSWD for the `pi` user (sudo runs without
+        # prompting); a custom box may require it.
+        #
+        # The probe matters for security, not just elegance: with
+        # `sudo -S` and NOPASSWD in effect, sudo does NOT consume the
+        # password line we wrote to stdin — it falls through to `sh -s`
+        # which then runs the literal password as a command. The remote
+        # `sh: 1: <password>: not found` lands in stderr and leaks the
+        # password into the deploy log. Probing first lets us write the
+        # password ONLY when sudo will actually consume it.
         try:
-            stdin, stdout, stderr = client.exec_command(
-                cmd, get_pty=False, timeout=command_timeout,
+            _, probe_out, _ = client.exec_command(
+                "sudo -n true 2>/dev/null", get_pty=False, timeout=10,
             )
+            sudo_nopasswd = probe_out.channel.recv_exit_status() == 0
+        except Exception:
+            # If the probe fails for any reason, fall back to the safer
+            # password-required path. Worst case: an extra (ignored)
+            # password write on a NOPASSWD host with stdin already
+            # consumed — handled by the same -S -p '' flags below.
+            sudo_nopasswd = False
+
+        if sudo_nopasswd:
+            cmd = "sudo sh -s"
+            payload = _INSTALL_SCRIPT
+        else:
+            cmd = "sudo -S -p '' sh -s"
+            payload = password + "\n" + _INSTALL_SCRIPT
+
+        emit("running install (apt-get install python3 alsa-utils / mkdir / mv / systemctl)…")
+        # Use the channel directly so we can: (a) merge stderr into stdout
+        # via set_combine_stderr — interleaved output is what the user
+        # expects from a live install log; (b) read line-by-line via
+        # makefile().readline() so the modal updates as the script runs
+        # rather than only at the very end.
+        try:
+            transport = client.get_transport()
+            chan = transport.open_session()
+            chan.settimeout(command_timeout)
+            chan.set_combine_stderr(True)
+            chan.exec_command(cmd)
         except Exception as e:
             raise DeployError(f"could not start remote command: {e}")
 
         try:
-            stdin.write(password + "\n")
-            stdin.write(_INSTALL_SCRIPT)
-            stdin.flush()
-            try: stdin.channel.shutdown_write()
-            except Exception: pass
+            chan.sendall(payload.encode("utf-8"))
+            chan.shutdown_write()
         except Exception as e:
             raise DeployError(f"failed sending command: {e}")
 
-        # Wait + collect. exec_command returns immediately; recv_exit_status
-        # blocks until the remote shell finishes.
-        rc = stdout.channel.recv_exit_status()
-        out = _decode(stdout.read())
-        err = _decode(stderr.read())
-
-        for line in out.splitlines():
-            if line.strip():
-                emit(line.rstrip())
-        for line in err.splitlines():
+        # Stream output line-by-line as the remote shell produces it. The
+        # iter(readline, '') idiom yields until EOF (peer close), which
+        # paramiko signals when the channel's exit status is final.
+        out_lines: list[str] = []
+        stdout_file = chan.makefile("r", -1)
+        for raw in iter(stdout_file.readline, ""):
+            line = raw.rstrip("\r\n")
+            out_lines.append(line)
             stripped = line.strip()
             if not stripped:
                 continue
-            # Filter sudo's own prompt artifact in case the shell echoed it
-            # despite -p '' (some sudo builds still emit "Password:" once).
             low = stripped.lower()
+            # Filter sudo's own prompt artifact in case the shell echoed it
+            # despite -p '' (some sudo builds emit "Password:" once before
+            # giving up, even when NOPASSWD is set).
             if low.startswith("password") or low.startswith("[sudo]"):
                 continue
-            emit(stripped)
+            # Defense-in-depth: never let the literal password appear in
+            # an emitted line, even if a future code path or remote shell
+            # quirk reintroduces a leak. Cheap O(n) substring replace.
+            emit(_scrub(line, password))
+        rc = chan.recv_exit_status()
 
         if rc != 0:
             # Pick a useful error tail. sudo's "incorrect password" message
             # ends up here — surface it explicitly so the user knows it's a
             # sudo-password problem, not an SSH-password problem.
-            tail = (err or out).strip().splitlines()
+            tail = [_scrub(line, password) for line in out_lines if line.strip()]
             msg = tail[-1] if tail else f"install commands exited {rc}"
             if "incorrect password" in msg.lower():
                 msg = "sudo rejected the password (this is the SSH password; on default Pi OS sudo is NOPASSWD for the 'pi' user)"
@@ -260,3 +300,16 @@ def deploy(
 
 def _decode(b: bytes) -> str:
     return b.decode("utf-8", errors="replace")
+
+
+def _scrub(line: str, password: str) -> str:
+    """Redact any literal occurrence of `password` from a log line.
+
+    Defense-in-depth — the install path is structured so the password
+    never reaches the remote sh stdin in the first place (we probe sudo
+    and only feed the password when sudo will actually consume it). This
+    is the second line of defence in case a future change or an unusual
+    sudo build still echoes it back."""
+    if not password:
+        return line
+    return line.replace(password, "<redacted>")
