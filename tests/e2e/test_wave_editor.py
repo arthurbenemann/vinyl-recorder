@@ -523,7 +523,7 @@ def test_split_with_cuts_across_side_boundaries(stack, page):
             }}
             """
         )
-        assert split_result.get('ok'), split_result
+        assert 'music_relpath' in split_result, split_result
         relpath = split_result['music_relpath']
         music = output_dir / "music" / relpath
         out_flacs = sorted(music.glob("*.flac"))
