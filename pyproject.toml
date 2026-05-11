@@ -24,6 +24,41 @@ Repository = "https://github.com/arthurbenemann/vinyl-recorder"
 Issues = "https://github.com/arthurbenemann/vinyl-recorder/issues"
 Changelog = "https://github.com/arthurbenemann/vinyl-recorder/blob/main/CHANGELOG.md"
 
+# PEP 735 dependency groups — single source of truth for what gets pip-
+# installed into the runtime image and each CI job. Refer to a group from
+# the Dockerfile / a workflow with `pip install --group <name>`; bump a
+# pin here and every consumer picks it up. `runtime` is also included
+# into `test` so the unit/API job exercises the same FastAPI/uvicorn
+# stack the image ships.
+[dependency-groups]
+runtime = [
+    "fastapi==0.136.1",
+    "uvicorn[standard]==0.46.0",
+    "python-multipart==0.0.28",
+    "paramiko==5.0.0",
+    "audioop-lts==0.2.2",
+]
+test = [
+    {include-group = "runtime"},
+    "pytest==9.0.3",
+    "pytest-cov==7.1.0",
+    "pytest-xdist==3.8.0",
+    "pytest-timeout==2.4.0",
+    "httpx==0.28.1",
+    "pydantic==2.13.4",
+]
+e2e = [
+    "pytest==9.0.3",
+    "pytest-playwright==0.7.2",
+]
+screenshots = [
+    "playwright==1.59.0",
+    "Pillow==12.2.0",
+]
+lint = [
+    "ruff==0.15.12",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Default run skips e2e — those need a docker daemon and ~2 min. CI's

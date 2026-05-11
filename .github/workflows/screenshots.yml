@@ -71,12 +71,12 @@ jobs:
             playwright-${{ runner.os }}-
 
       - name: Install Playwright + Python deps
-        # `playwright` drives the screenshot capture; `Pillow` powers the
-        # perceptual-diff gate (tools/compare_screenshots.py). Adding both
-        # to the install line keeps the workflow self-contained — neither
-        # is a runtime app dep.
+        # `screenshots` group in pyproject.toml: `playwright` drives the
+        # screenshot capture; `Pillow` powers the perceptual-diff gate
+        # (tools/compare_screenshots.py). Neither is a runtime app dep,
+        # which is why they live in their own group rather than `runtime`.
         run: |
-          pip install playwright==1.59.0 Pillow==12.2.0
+          pip install --group screenshots
           playwright install --with-deps chromium
 
       - name: Build stack with layer cache

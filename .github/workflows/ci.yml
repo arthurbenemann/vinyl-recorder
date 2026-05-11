@@ -29,7 +29,7 @@ jobs:
           python-version: "3.14"
 
       - name: Install ruff
-        run: pip install ruff==0.15.12
+        run: pip install --group lint
 
       - name: Ruff check
         run: ruff check app pi tests
@@ -49,11 +49,11 @@ jobs:
           cache: pip
 
       - name: Install test deps
-        # Pinned to the same shape the runtime image installs (FastAPI +
-        # uvicorn + paramiko for the pi-deploy route) plus pytest tooling.
-        # httpx is what TestClient uses internally; pytest-cov publishes a
-        # coverage report at the end.
-        run: pip install pytest==9.0.3 pytest-cov==7.1.0 pytest-xdist==3.8.0 pytest-timeout==2.4.0 fastapi==0.136.1 "uvicorn[standard]==0.46.0" httpx==0.28.1 pydantic==2.13.4 paramiko==5.0.0 audioop-lts==0.2.2
+        # `test` group in pyproject.toml. Pulls the runtime FastAPI / uvicorn /
+        # paramiko stack via `include-group = "runtime"` plus pytest tooling
+        # (pytest-cov publishes the coverage report; httpx is what
+        # TestClient uses internally).
+        run: pip install --group test
 
       - name: Run unit + API tests with coverage
         # `--cov-fail-under` is the floor; bump it whenever a PR meaningfully
@@ -121,9 +121,10 @@ jobs:
           cache: pip
 
       - name: Install test deps
-        # ffmpeg is pre-installed on ubuntu-latest runners; no apt needed.
-        # pytest-playwright drives the headless-chromium frontend smoke tests.
-        run: pip install pytest==9.0.3 pytest-playwright==0.7.2
+        # `e2e` group in pyproject.toml. ffmpeg is pre-installed on
+        # ubuntu-latest runners; no apt needed. pytest-playwright drives
+        # the headless-chromium frontend smoke tests.
+        run: pip install --group e2e
 
       - name: Cache Playwright browsers
         # Chromium + Linux deps are ~150 MB; cache survives across runs so
