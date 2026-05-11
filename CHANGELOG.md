@@ -1,3 +1,17 @@
+## v1.0.0 — 2026-05-11
+
+### Features
+- **split:** Multi-format export — WAV / MP3 / Ogg / AAC / ALAC (#137)
+- **tags:** Expose composer + conductor in tag panel and FLAC tags (#136)
+
+### Refactoring
+- Extract subprocess teardown, queue retry, and string helpers (#131)
+- **albums:** Move domain logic from routes to services (#132)
+- **upstream:** Split into probe, lifecycle, and fan-out modules (#134)
+- **state:** Wrap recording session state in manager class (#133)
+- **frontend:** Split main.js into ES modules (#135)
+- **api:** Standardize response shapes and error format (#138)
+
 ## v0.9.1 — 2026-05-10
 
 ### Bug Fixes
