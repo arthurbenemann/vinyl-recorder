@@ -57,16 +57,41 @@ except ValueError:
 # pre-fill the per-recording defaults; each `POST /api/record/start` can
 # override them via `auto_stop_on_silence` / `silence_threshold_db` /
 # `silence_seconds`.
-DEFAULT_AUTO_STOP_ON_SILENCE = os.getenv(
-    "AUTO_STOP_ON_SILENCE", "").strip().lower() in ("1", "true", "yes", "on")
+def _infer_auto_stop_on_silence(auto_stop_env: str, threshold_env: str,
+                                seconds_env: str) -> bool:
+    """Decide whether auto-stop-on-silence defaults to on.
+
+    Contract:
+      * `AUTO_STOP_ON_SILENCE` truthy → True (explicit on).
+      * `AUTO_STOP_ON_SILENCE` falsy  → False (explicit off; wins over inference).
+      * unset / unrecognized          → True iff EITHER silence-tuning var
+                                         is set (implicit consent: the user
+                                         wouldn't tune those if they didn't
+                                         want the feature). Empty otherwise.
+
+    Pure function so unit tests can drive the truth table directly without
+    reloading `state` — module-reload causes test-isolation grief because
+    the `sessions` singleton swaps under route-level tests."""
+    flag = auto_stop_env.strip().lower()
+    if flag in ("1", "true", "yes", "on"):
+        return True
+    if flag in ("0", "false", "no", "off"):
+        return False
+    return bool(threshold_env.strip()) or bool(seconds_env.strip())
+
+
+_silence_db_env  = os.getenv("SILENCE_THRESHOLD_DB", "")
+_silence_sec_env = os.getenv("SILENCE_SECONDS", "")
+DEFAULT_AUTO_STOP_ON_SILENCE = _infer_auto_stop_on_silence(
+    os.getenv("AUTO_STOP_ON_SILENCE", ""),
+    _silence_db_env, _silence_sec_env,
+)
 try:
-    DEFAULT_SILENCE_THRESHOLD_DB = float(
-        os.getenv("SILENCE_THRESHOLD_DB", "-50.0"))
+    DEFAULT_SILENCE_THRESHOLD_DB = float(_silence_db_env.strip() or "-50.0")
 except ValueError:
     DEFAULT_SILENCE_THRESHOLD_DB = -50.0
 try:
-    DEFAULT_SILENCE_SECONDS = max(
-        1, int(os.getenv("SILENCE_SECONDS", "20")))
+    DEFAULT_SILENCE_SECONDS = max(1, int(_silence_sec_env.strip() or "20"))
 except ValueError:
     DEFAULT_SILENCE_SECONDS = 20
 

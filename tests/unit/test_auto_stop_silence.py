@@ -9,6 +9,11 @@ exercise just the two pure functions it relies on:
 A full lifecycle (start_recording → silent stream → finalize) is covered
 by the e2e suite via the existing `test_auto_stop` harness shape; the
 ffmpeg + UpstreamSession plumbing belongs there, not in a unit test.
+
+This module also covers `_infer_auto_stop_on_silence` in `state.py`,
+the pure helper that decides `DEFAULT_AUTO_STOP_ON_SILENCE` from the
+three env vars (AUTO_STOP_ON_SILENCE / SILENCE_THRESHOLD_DB /
+SILENCE_SECONDS).
 """
 import time
 from dataclasses import dataclass
@@ -141,3 +146,77 @@ def test_should_autostop_well_past_threshold():
     s = _FakeSession(silence_seconds=5, silence_armed=True,
                      silence_since=now - 60.0)
     assert _silence_should_autostop(s, now) is True
+
+
+# ── _infer_auto_stop_on_silence ──────────────────────────────────────────
+# Pure function so we can drive the truth table without reloading the
+# state module. Re-importing state would swap the `sessions` singleton
+# and break route-level tests that hold the old reference.
+#
+# Contract:
+#   * AUTO_STOP_ON_SILENCE truthy   → on  (explicit)
+#   * AUTO_STOP_ON_SILENCE falsy    → off (explicit; wins over inference)
+#   * unset/unrecognized, EITHER silence var set → on  (inferred)
+#   * unset/unrecognized, BOTH silence vars unset → off (safe default)
+def test_inference_off_when_all_vars_unset():
+    """Safe default: existing deployments untouched."""
+    from state import _infer_auto_stop_on_silence as f
+    assert f("", "", "") is False
+
+
+def test_inference_on_when_only_threshold_set():
+    """Setting just SILENCE_THRESHOLD_DB implies consent — the user
+    wouldn't bother tuning the threshold if they didn't want the
+    feature on."""
+    from state import _infer_auto_stop_on_silence as f
+    assert f("", "-42", "") is True
+
+
+def test_inference_on_when_only_seconds_set():
+    """Symmetric: setting just SILENCE_SECONDS turns the feature on."""
+    from state import _infer_auto_stop_on_silence as f
+    assert f("", "", "30") is True
+
+
+def test_inference_on_when_both_silence_vars_set():
+    from state import _infer_auto_stop_on_silence as f
+    assert f("", "-55", "15") is True
+
+
+def test_explicit_true_keeps_feature_on():
+    """AUTO_STOP_ON_SILENCE=true alone (no silence vars) → on."""
+    from state import _infer_auto_stop_on_silence as f
+    for truthy in ("true", "True", "TRUE", "1", "yes", "on"):
+        assert f(truthy, "", "") is True, f"failed for {truthy!r}"
+
+
+def test_explicit_false_overrides_inference():
+    """The opt-out path: user wants the silence values customised but
+    the feature off. Explicit AUTO_STOP_ON_SILENCE=false wins over the
+    implicit inference, otherwise there'd be no way to pre-set values
+    without also enabling the feature."""
+    from state import _infer_auto_stop_on_silence as f
+    assert f("false", "-42", "30") is False
+    for falsy in ("0", "no", "off", "FALSE"):
+        assert f(falsy, "-42", "30") is False, f"failed for {falsy!r}"
+
+
+def test_unrecognized_auto_stop_value_falls_through_to_inference():
+    """Defensive: a typo / unknown value in AUTO_STOP_ON_SILENCE (e.g.
+    "maybe", "yep") shouldn't silently disable the feature when the
+    user has clearly tuned the silence vars. Unrecognized = "unset" so
+    the inference still fires."""
+    from state import _infer_auto_stop_on_silence as f
+    assert f("maybe", "", "25") is True
+    # Unrecognized with no silence vars tuned → still off (safe default).
+    assert f("yep", "", "") is False
+
+
+def test_whitespace_around_env_values_does_not_break_inference():
+    """Real-world .env files often have stray whitespace. The inference
+    must tolerate that — empty-after-strip means "unset"."""
+    from state import _infer_auto_stop_on_silence as f
+    # All vars effectively empty.
+    assert f("   ", "  ", " ") is False
+    # SILENCE_SECONDS set with surrounding whitespace.
+    assert f(" ", " ", "  20  ") is True
