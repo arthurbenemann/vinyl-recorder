@@ -111,6 +111,32 @@
       <div class="prog-wrap" style="margin-top:10px">
         <div class="prog-fill" id="prog" style="width:0%"></div>
       </div>
+      <!-- Auto-stop on silence: when checked, server-side watcher ends
+           the recording after N continuous seconds below the threshold.
+           Lead-in silence is ignored — the watcher only arms after the
+           first above-threshold chunk. Values persist via localStorage. -->
+      <details class="autostop" id="autostop-details">
+        <summary class="autostop-summary">
+          <input type="checkbox" id="autostop-enable" onclick="event.stopPropagation()"
+                 title="Auto-stop the recording when the upstream goes silent (after at least one above-threshold chunk).">
+          <span>auto-stop on silence</span>
+          <span class="autostop-hint" id="autostop-hint" hidden></span>
+        </summary>
+        <div class="autostop-row">
+          <label class="autostop-field" for="autostop-seconds"
+                 title="How many continuous seconds of silence trigger the auto-stop.">
+            after
+            <input type="number" id="autostop-seconds" value="20" min="1" step="1">
+            s
+          </label>
+          <label class="autostop-field" for="autostop-threshold"
+                 title="Peak below this value (in dBFS) is treated as silence. -50 dBFS is a reasonable default for vinyl runs-out groove noise.">
+            below
+            <input type="number" id="autostop-threshold" value="-50" min="-100" max="0" step="1">
+            dBFS
+          </label>
+        </div>
+      </details>
     </div>
 
     <div class="sb-section">

@@ -7,11 +7,21 @@ import subprocess
 import threading
 import time
 import uuid
+import warnings
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
+
+# audioop drives the per-chunk peak calc on the silence-watcher hot path.
+# It's deprecated in 3.12 (silenced here) and slated for removal in 3.13;
+# the project targets 3.12 (see Dockerfile) so the replacement story only
+# matters when we bump the runtime — same story as services/upstream.py.
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", category=DeprecationWarning,
+                            message=r".*audioop.*")
+    import audioop
 
 from services.eventbus import bus
 from services.ffmpeg import (
@@ -19,9 +29,22 @@ from services.ffmpeg import (
     safe_name,
 )
 from state import (
-    BulkDelete, LOG_DIR, RAW_DIR, RecordRequest, RenameRequest, sessions,
-    upstream,
+    BulkDelete, DEFAULT_AUTO_STOP_ON_SILENCE, DEFAULT_SILENCE_SECONDS,
+    DEFAULT_SILENCE_THRESHOLD_DB, LOG_DIR, RAW_DIR, RecordRequest,
+    RenameRequest, sessions, upstream,
 )
+
+
+def _silence_threshold_int(threshold_db: float, bytes_per_sample: int) -> int:
+    """Convert a dBFS threshold to the integer peak-sample cutoff that
+    audioop.max(chunk, bps) returns. amp = 10**(db/20); the cutoff is
+    full_scale * amp, floored at 1 so an extremely-quiet threshold never
+    becomes "everything is silent" (audioop.max returns 0 only on empty
+    chunks). Used by start_recording to precompute the per-session
+    silence-detection threshold."""
+    full_scale = 0x7FFFFF if bytes_per_sample == 3 else 0x7FFF
+    amp = 10.0 ** (max(-200.0, min(0.0, float(threshold_db))) / 20.0)
+    return max(1, int(full_scale * amp))
 
 router = APIRouter()
 
@@ -308,6 +331,26 @@ async def start_recording(req: RecordRequest):
     # upstream reader thread on its next pipe write.
     sess_state = {"paused": False}
 
+    # Auto-stop on silence: any unset request field falls back to the env
+    # default. silence_seconds == 0 disables the watcher entirely (the sink
+    # then skips the audioop.max call too — zero overhead on the hot path).
+    auto_stop = (req.auto_stop_on_silence
+                 if req.auto_stop_on_silence is not None
+                 else DEFAULT_AUTO_STOP_ON_SILENCE)
+    silence_seconds = max(0, int(req.silence_seconds)) if auto_stop else 0
+    if silence_seconds == 0 and auto_stop:
+        # The user asked for auto-stop but gave a non-positive duration —
+        # honour the spirit of the request with the configured default
+        # rather than silently dropping the flag.
+        silence_seconds = DEFAULT_SILENCE_SECONDS
+    threshold_db = (req.silence_threshold_db
+                    if req.silence_threshold_db is not None
+                    else DEFAULT_SILENCE_THRESHOLD_DB)
+    bytes_per_sample = 3 if sample_format == "s24le" else 2
+    silence_threshold_int = (_silence_threshold_int(threshold_db,
+                                                    bytes_per_sample)
+                             if silence_seconds > 0 else 0)
+
     # Pre-roll: live bytes must wait until the buffered pre-roll is written
     # to ffmpeg's stdin first, otherwise the timeline is scrambled. The
     # subscriber's worker thread is gated on this Event.
@@ -320,6 +363,21 @@ async def start_recording(req: RecordRequest):
         preroll_done.wait()
         if sess_state["paused"]:
             return
+        if silence_seconds > 0:
+            # Peak-sample magnitude — same audioop primitive the upstream uses
+            # for the VU meter, so the C cost is identical-shape and cheap.
+            # Updates a few session fields the per-session watcher reads
+            # below; the GIL makes single-attribute writes atomic enough for
+            # the watcher's purpose (worst case: a one-tick delay before
+            # auto-stop fires after silence clears).
+            sess = sessions.get(sid)
+            if sess is not None:
+                peak = audioop.max(chunk, bytes_per_sample)
+                if peak >= silence_threshold_int:
+                    sess.silence_armed = True
+                    sess.silence_since = None
+                elif sess.silence_armed and sess.silence_since is None:
+                    sess.silence_since = time.monotonic()
         proc.stdin.write(chunk)
 
     def _on_sub_close() -> None:
@@ -366,6 +424,14 @@ async def start_recording(req: RecordRequest):
     # `_finalize_session`; storing it on the session means the user-stop
     # handler, the per-session watcher, and the reaper all reach the same
     # token through `sessions.get(sid)`.
+    start_log = f"▶ Started recording → {fname}"
+    init_log_lines = [start_log]
+    if silence_seconds > 0:
+        init_log_lines.append(
+            f"⏱ Auto-stop on silence: {silence_seconds}s under "
+            f"{threshold_db:.1f} dBFS"
+        )
+
     sessions.create(
         sid,
         proc=proc, outfile=outfile, log_fh=log_fh,
@@ -377,7 +443,9 @@ async def start_recording(req: RecordRequest):
         sess_state=sess_state,
         upstream_hold=rec_hold,
         log_path=str(log_path),
-        log_lines=[f"▶ Started recording → {fname}"],
+        log_lines=init_log_lines,
+        silence_seconds=silence_seconds,
+        silence_threshold_int=silence_threshold_int,
     )
 
     # Spawn a per-session blocking waiter so a self-exit (auto-stop on `-t`,
@@ -566,18 +634,78 @@ def _classify_exit(s) -> str:
     return "crash"
 
 
+# Silence-watch tick. Half a second is short enough that auto-stop never
+# lags more than ~500 ms behind the configured silence_seconds budget, but
+# long enough that the poll loop's overhead stays negligible.
+_SILENCE_TICK_SECONDS = 0.5
+
+
+def _silence_should_autostop(s, now: float) -> bool:
+    """Decide whether the per-session watcher should finalize `s` with
+    reason="auto" right now. Pulled out so unit tests can drive the
+    decision logic without spinning a real ffmpeg subprocess.
+
+    The contract:
+      * silence_seconds == 0 → feature off, never trigger.
+      * paused              → silence accumulation pauses too (the sink
+                              stops writing, but it also stops updating
+                              `silence_since` while paused).
+      * silence_armed       → at least one above-threshold chunk has been
+                              seen; lead-in / pre-roll silence cannot
+                              trigger an auto-stop.
+      * silence_since None  → most recent chunk was above threshold.
+      * elapsed gate        → `now - silence_since >= silence_seconds`."""
+    if s.silence_seconds <= 0:
+        return False
+    if s.paused:
+        return False
+    if not s.silence_armed:
+        return False
+    since = s.silence_since  # snapshot — sink writes from another thread
+    if since is None:
+        return False
+    return (now - since) >= s.silence_seconds
+
+
 def _watch_session(sid: str) -> None:
-    """One thread per recording session — `proc.wait()` blocks in the OS
-    until ffmpeg exits, so the reap is event-driven (≤ a few ms) instead
-    of polled at 1 Hz. The thread also serves as the canonical reaper for
-    its child, so stop_recording's wait() doesn't race the watcher."""
+    """One thread per recording session — polls every ~500 ms for either
+    a self-exited ffmpeg (auto-stop on `-t`, crash, kill -9) or an
+    accumulated run of silent chunks long enough to trigger
+    auto-stop-on-silence. The thread also serves as the canonical reaper
+    for its child, so stop_recording's wait() doesn't race the watcher.
+
+    The previous (silence-free) implementation called a single blocking
+    `proc.wait()` so a self-exit was reaped within a few ms; the poll
+    here adds at most one tick (~500 ms) of latency, which is invisible
+    to the e2e tests and orders of magnitude smaller than the 1 Hz polling
+    loop the per-session thread replaced."""
     s = sessions.get(sid)
     if not s:
         return
-    try:
-        s.proc.wait()
-    except Exception:
-        pass
+    proc = s.proc
+    while True:
+        try:
+            proc.wait(timeout=_SILENCE_TICK_SECONDS)
+            break  # ffmpeg exited — fall through to _classify_exit
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception:
+            break
+        # ffmpeg is still alive — check the silence-watch state.
+        live = sessions.get(sid)
+        if live is None:
+            # user-stop / disconnect already finalized us
+            return
+        if _silence_should_autostop(live, time.monotonic()):
+            bus.log(
+                f"⏱ Auto-stop: {live.silence_seconds}s of silence",
+                "info",
+            )
+            try:
+                _finalize_session(sid, "auto")
+            except Exception:
+                sessions.remove(sid)
+            return
     s = sessions.get(sid)
     if not s:
         # User-stop already finalized us before ffmpeg exited.

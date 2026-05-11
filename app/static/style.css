@@ -249,6 +249,19 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .prog-wrap { height: 3px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
 .prog-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.5s linear; }
 
+/* Auto-stop on silence — collapsible options panel under the transport. */
+.autostop { margin-top: 10px; font-size: 11px; color: var(--muted); }
+.autostop-summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; user-select: none; }
+.autostop-summary::-webkit-details-marker { display: none; }
+.autostop-summary::before { content: "▸"; font-size: 9px; color: var(--muted); transition: transform 0.15s; }
+.autostop[open] .autostop-summary::before { transform: rotate(90deg); }
+.autostop-summary input[type="checkbox"] { margin: 0; cursor: pointer; }
+.autostop-hint { color: var(--muted); margin-left: auto; font-family: var(--mono); font-size: 10px; }
+.autostop-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 6px; padding-left: 18px; }
+.autostop-field { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+.autostop-field input[type="number"] { width: 56px; background: var(--surface); border: 0.5px solid var(--border2); border-radius: 4px; color: var(--text); font-family: var(--mono); font-size: 11px; padding: 3px 4px; }
+.main[data-collapsed] .autostop { display: none; }
+
 /* Job progress bars (combine / split / measure / silence / waveform).
    Hidden by default; .running flips it visible while polling. */
 .job-bar { display: flex; flex-direction: column; gap: 4px; font-size: 10px; color: var(--muted); font-family: var(--mono); }

@@ -49,6 +49,27 @@ try:
 except ValueError:
     PRE_ROLL_SECONDS = 5
 
+# Auto-stop on silence: when the upstream stays below `silence_threshold_db`
+# for `silence_seconds` continuous seconds, finalize the recording with
+# reason="auto". The session must have seen at least one above-threshold
+# chunk first — lead-in silence (cueing the needle, pre-roll, dead air
+# before the first track) can never trigger an auto-stop. These env vars
+# pre-fill the per-recording defaults; each `POST /api/record/start` can
+# override them via `auto_stop_on_silence` / `silence_threshold_db` /
+# `silence_seconds`.
+DEFAULT_AUTO_STOP_ON_SILENCE = os.getenv(
+    "AUTO_STOP_ON_SILENCE", "").strip().lower() in ("1", "true", "yes", "on")
+try:
+    DEFAULT_SILENCE_THRESHOLD_DB = float(
+        os.getenv("SILENCE_THRESHOLD_DB", "-50.0"))
+except ValueError:
+    DEFAULT_SILENCE_THRESHOLD_DB = -50.0
+try:
+    DEFAULT_SILENCE_SECONDS = max(
+        1, int(os.getenv("SILENCE_SECONDS", "20")))
+except ValueError:
+    DEFAULT_SILENCE_SECONDS = 20
+
 # Discogs collection-aware tagging. When set, the auto-tag candidate panel
 # surfaces matches from the user's Discogs collection in a separate section
 # above the MusicBrainz results. DISCOGS_TOKEN is optional but raises rate
@@ -106,6 +127,18 @@ class Session:
     finalize_result: Optional[dict] = None
     log_lines:      list = field(default_factory=list)   # hand-written status lines
     log_path:       Optional[str]   = None               # ffmpeg stderr log file
+    # Auto-stop on silence (per-session config, set by start_recording).
+    # silence_seconds == 0 disables. silence_threshold_int is the integer
+    # peak-sample cutoff matching the upstream's sample_format (full_scale
+    # × 10**(threshold_db/20)). silence_armed flips true the first time the
+    # sink sees a chunk above the threshold — pre-arming silence (lead-in,
+    # cueing the needle) is ignored. silence_since is the monotonic clock
+    # at which the current run of silent chunks started, or None when the
+    # most recent chunk was above threshold.
+    silence_seconds:      int   = 0
+    silence_threshold_int: int  = 0
+    silence_armed:        bool  = False
+    silence_since:        Optional[float] = None
 
 
 class RecordingSessionManager:
@@ -205,6 +238,13 @@ class RecordRequest(BaseModel):
     duration: int = 0      # 0 = unlimited
     sample_rate: int = 0   # 0 = auto-detect from stream
     bit_depth: int = 0     # 0 = auto-detect
+    # Auto-stop on silence. Defaults track the env vars
+    # (DEFAULT_AUTO_STOP_ON_SILENCE / DEFAULT_SILENCE_THRESHOLD_DB /
+    # DEFAULT_SILENCE_SECONDS); start_recording reads each field with the
+    # env-default as fallback so an unsent field falls back to ops policy.
+    auto_stop_on_silence: bool  = False
+    silence_threshold_db: float = -50.0
+    silence_seconds:      int   = 20
 
 
 class TagEdit(BaseModel):
