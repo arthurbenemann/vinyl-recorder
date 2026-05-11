@@ -204,6 +204,9 @@ threading.Thread(target=_reaper_loop, daemon=True, name="proxy-reaper").start()
 
 @router.post("/api/test-stream")
 async def test_stream(body: dict):
+    """Probe an upstream URL with ffprobe and surface its stream parameters.
+    Failure modes (ffprobe nonzero, timeout, OSError) raise 502 with the
+    underlying message in `detail` — clients rely on HTTP status to branch."""
     url = body.get("stream_url", "")
     try:
         result = subprocess.run(
@@ -212,21 +215,24 @@ async def test_stream(body: dict):
             capture_output=True, text=True, timeout=10
         )
         if result.returncode != 0:
-            return {"ok": False, "error": (result.stderr or "ffprobe failed").strip()[:300]}
+            raise HTTPException(
+                502, (result.stderr or "ffprobe failed").strip()[:300],
+            )
         info = json.loads(result.stdout)
         streams = info.get("streams", [{}])
         s = streams[0] if streams else {}
         return {
-            "ok": True,
             "sample_rate": s.get("sample_rate", "?"),
-            "channels": s.get("channels", "?"),
-            "codec": s.get("codec_name", "?"),
-            "bit_depth": s.get("bits_per_sample", "?"),
+            "channels":    s.get("channels", "?"),
+            "codec":       s.get("codec_name", "?"),
+            "bit_depth":   s.get("bits_per_sample", "?"),
         }
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "Timeout — is the stream URL reachable?"}
+        raise HTTPException(502, "Timeout — is the stream URL reachable?")
+    except HTTPException:
+        raise
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        raise HTTPException(502, str(e))
 
 
 @router.post("/api/record/start")
@@ -630,7 +636,7 @@ async def rename_recording(filename: str, req: RenameRequest):
     if target.exists() and target.resolve() != src.resolve():
         raise HTTPException(409, "a file with that name already exists")
     src.rename(target)
-    return {"ok": True, "filename": target.name}
+    return {"filename": target.name}
 
 
 @router.delete("/api/recordings/{filename}")
@@ -639,7 +645,7 @@ async def delete_recording(filename: str):
     if not path:
         raise HTTPException(404)
     path.unlink()
-    return {"ok": True}
+    return {}
 
 
 @router.post("/api/recordings/bulk-delete")

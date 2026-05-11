@@ -436,4 +436,4 @@ async def apply_tags(req: ApplyRequest):
         try: albums_fs.write_cover(album_id, art)
         except Exception: pass
 
-    return {"ok": True, "album_id": album_id}
+    return {"album_id": album_id}

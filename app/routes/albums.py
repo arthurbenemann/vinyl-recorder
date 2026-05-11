@@ -61,7 +61,7 @@ async def combine_album(req: CombineRequest):
     no ffmpeg encode. Sides are MOVED out of `raw/` into the album dir
     (preserving original filenames; uniquify on collision); tags from the
     request body land in `album.json` only. Returns the new `album_id` plus
-    a duration sum so the UI can show "✓ Combined N sides · MMm SSs"."""
+    a duration sum so the UI can show "Combined N sides · MMm SSs"."""
     if not req.filenames:
         raise HTTPException(400, "need at least one side to combine")
     recording_filenames = {s.filename for s in sessions.values() if s.filename}
@@ -83,7 +83,6 @@ async def combine_album(req: CombineRequest):
         sum((d / s).stat().st_size for s in manifest["sides"]) / 1e6, 1,
     )
     return {
-        "ok":               True,
         "album_id":         album_id,
         "duration_seconds": total_dur,
         "size_mb":          size_mb,
@@ -109,7 +108,7 @@ async def delete_album(album_id: str):
     if not albums_fs.album_dir(album_id).is_dir():
         raise HTTPException(404)
     albums_fs.delete_album(album_id)
-    return {"ok": True}
+    return {}
 
 
 @router.post("/api/album/{album_id}/demote")
@@ -118,7 +117,7 @@ async def demote_album(album_id: str):
     subtree is preserved if the album was already split — the UI confirm
     dialog warns about this so the user is never surprised."""
     _require_album(album_id)
-    return {"ok": True, **albums_fs.demote_album(album_id)}
+    return albums_fs.demote_album(album_id)
 
 
 @router.post("/api/album/{album_id}/plan")
@@ -145,7 +144,7 @@ async def update_plan(album_id: str, req: PlanUpdateRequest):
     if req.output_format    is not None: plan["output_format"]    = req.output_format
     manifest["plan"] = plan
     albums_fs.write_manifest(album_id, manifest)
-    return {"ok": True, "plan": plan}
+    return {"plan": plan}
 
 
 @router.post("/api/album/{album_id}/sides/reorder")
@@ -158,7 +157,7 @@ async def reorder_sides(album_id: str, req: ReorderSidesRequest):
         manifest = albums_fs.reorder_sides(album_id, req.sides)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"ok": True, "sides": manifest["sides"]}
+    return {"sides": manifest["sides"]}
 
 
 # ── Wave-editor source: per-side peaks + audio ───────────────────────────

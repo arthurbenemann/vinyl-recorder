@@ -14,9 +14,8 @@ def _client():
 
 # ── /api/test-stream ─────────────────────────────────────────────────────
 def test_test_stream_reports_ffprobe_failure(monkeypatch):
-    """ffprobe returns nonzero (e.g. unreachable URL) → {ok: False, error}.
-    The response is intentionally 200 OK; the UI distinguishes via the
-    body's ``ok`` field, not the HTTP status."""
+    """ffprobe returns nonzero (e.g. unreachable URL) → 502 with the
+    underlying message in ``detail``. Clients branch on HTTP status."""
     from routes import recordings as recs_mod
 
     class _FakeProc:
@@ -28,10 +27,8 @@ def test_test_stream_reports_ffprobe_failure(monkeypatch):
         recs_mod.subprocess, "run", lambda *a, **kw: _FakeProc(),
     )
     r = _client().post("/api/test-stream", json={"stream_url": "http://x/none"})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] is False
-    assert "404" in body["error"]
+    assert r.status_code == 502
+    assert "404" in r.json()["detail"]
 
 
 def test_test_stream_parses_ffprobe_streams_payload(monkeypatch):
@@ -51,14 +48,13 @@ def test_test_stream_parses_ffprobe_streams_payload(monkeypatch):
     r = _client().post("/api/test-stream", json={"stream_url": "http://x"})
     assert r.status_code == 200
     body = r.json()
-    assert body["ok"] is True
     assert body["sample_rate"] == "44100"
     assert body["channels"] == 2
     assert body["codec"] == "mp3"
 
 
 def test_test_stream_handles_timeout(monkeypatch):
-    """ffprobe TimeoutExpired surfaces as a friendly message rather than 500."""
+    """ffprobe TimeoutExpired surfaces as 502 + friendly detail."""
     import subprocess as sp
 
     from routes import recordings as recs_mod
@@ -68,10 +64,8 @@ def test_test_stream_handles_timeout(monkeypatch):
 
     monkeypatch.setattr(recs_mod.subprocess, "run", boom)
     r = _client().post("/api/test-stream", json={"stream_url": "http://slow/"})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] is False
-    assert "Timeout" in body["error"]
+    assert r.status_code == 502
+    assert "Timeout" in r.json()["detail"]
 
 
 def test_test_stream_handles_other_errors(monkeypatch):
@@ -82,10 +76,8 @@ def test_test_stream_handles_other_errors(monkeypatch):
 
     monkeypatch.setattr(recs_mod.subprocess, "run", boom)
     r = _client().post("/api/test-stream", json={"stream_url": "http://x"})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["ok"] is False
-    assert "ffprobe" in body["error"]
+    assert r.status_code == 502
+    assert "ffprobe" in r.json()["detail"]
 
 
 # ── /api/stream-proxy guards ─────────────────────────────────────────────
@@ -199,7 +191,7 @@ def test_delete_removes_file():
     try:
         r = _client().delete("/api/recordings/to_delete.flac")
         assert r.status_code == 200
-        assert r.json() == {"ok": True}
+        assert r.json() == {}
         assert not f.exists()
     finally:
         f.unlink(missing_ok=True)

@@ -10,7 +10,7 @@ thin handler and makes the pipeline testable without FastAPI.
 Public surface:
 
   - `split_album(req, manifest)`: the full orchestrator. Returns a result
-    dict matching the route's response body (`{ok, music_relpath, tracks}`)
+    dict matching the route's response body (`{music_relpath, tracks}`)
     on success, or raises one of the domain exceptions below.
   - `wipe_prior_music_dir`, `kept_duration_total`, `write_track_tags`:
     individually testable helpers that the orchestrator composes.
@@ -317,7 +317,7 @@ async def split_album(req, manifest: dict) -> dict:
         route's `_require_album` helper); `manifest` is its (reconciled)
         manifest.
 
-    Returns `{ok, music_relpath, tracks}` on success.
+    Returns `{music_relpath, tracks}` on success.
 
     Raises one of the `Split*Error` types listed at module top for the
     typed failure cases; the route maps each to its HTTP status."""
@@ -428,4 +428,4 @@ async def split_album(req, manifest: dict) -> dict:
 
     _persist_split_plan(req, relpath)
     finish_job(req.job_id)
-    return {"ok": True, "music_relpath": relpath, "tracks": created}
+    return {"music_relpath": relpath, "tracks": created}

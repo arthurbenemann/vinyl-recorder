@@ -73,7 +73,6 @@ def test_combine_creates_album_for_valid_side(monkeypatch):
     })
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["ok"] is True
     assert body["album_id"]
     assert body["duration_seconds"] == 1234.5
     _cleanup_album(body["album_id"])

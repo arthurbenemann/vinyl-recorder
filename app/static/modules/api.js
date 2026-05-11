@@ -3,18 +3,15 @@
 
 // Extract a friendly error message from a non-OK fetch response. FastAPI
 // surfaces HTTPException(status, "msg") as {"detail": "msg"}; fall back to
-// raw body / status code for anything else (e.g. proxy failures).
+// `message` (some frameworks / streamed errors use it) and finally to a
+// status-coded sentinel so callers always get a non-empty string.
 export async function parseError(resp) {
-  let body = '';
-  try { body = await resp.text(); } catch (e) {}
-  if (body) {
-    try {
-      const j = JSON.parse(body);
-      if (j && typeof j.detail === 'string') return j.detail;
-    } catch (e) {}
-    return body;
-  }
-  return 'HTTP ' + resp.status;
+  try {
+    const j = await resp.clone().json();
+    if (j && typeof j.detail === 'string') return j.detail;
+    if (j && typeof j.message === 'string') return j.message;
+  } catch (e) { /* non-JSON body — fall through */ }
+  return `Unknown error (HTTP ${resp.status})`;
 }
 
 // ── Job progress bars ─────────────────────────────────────────────────────
