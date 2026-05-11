@@ -45,9 +45,16 @@ async def deploy_pi(req: PiDeployRequest):
 
     def on_log(line: str) -> None:
         # Called from the paramiko worker thread spawned by asyncio.to_thread.
-        # call_soon_threadsafe is the supported handoff between threads
-        # and the asyncio loop.
-        loop.call_soon_threadsafe(queue.put_nowait, ("log", line))
+        # `run_coroutine_threadsafe(...).result()` schedules the put on the
+        # event loop and blocks the worker until it lands. The fire-and-forget
+        # `call_soon_threadsafe(queue.put_nowait, ...)` it replaced raced with
+        # the `to_thread` future-completion path on 3.14: the future could win
+        # and `run_deploy` enqueued "done" before the scheduled log puts had
+        # fired, so the stream consumer drained "done" first and exited
+        # without yielding any logs.
+        asyncio.run_coroutine_threadsafe(
+            queue.put(("log", line)), loop
+        ).result()
 
     async def run_deploy() -> None:
         try:
