@@ -121,13 +121,13 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
      still controls visibility — it appears beneath REC during capture and
      visually flips to ▶ when paused, which is the only visible cue that the
      session is paused while the rail is collapsed. */
-  .main[data-collapsed] .sb-section:not(.sb-section-transport):not(.sb-section-vu) { display: none; }
-  .main[data-collapsed] .sb-section-transport .transport-head,
-  .main[data-collapsed] .sb-section-transport .timer-hint,
-  .main[data-collapsed] .sb-section-transport .prog-wrap { display: none; }
+  .main[data-collapsed] .sb-section:not(.sb-section-record):not(.sb-section-vu) { display: none; }
+  .main[data-collapsed] .sb-section-record .label,
+  .main[data-collapsed] .sb-section-record .timer-hint,
+  .main[data-collapsed] .sb-section-record .prog-wrap { display: none; }
 
-  /* Compact transport: REC + (pause when recording) + tiny timer, stacked */
-  .main[data-collapsed] .sb-section-transport { width: 100%; display: flex; justify-content: center; }
+  /* Compact record control: REC + (pause when recording) + tiny timer, stacked */
+  .main[data-collapsed] .sb-section-record { width: 100%; display: flex; justify-content: center; }
   .main[data-collapsed] .transport { flex-direction: column; gap: 6px; align-items: center; }
   .main[data-collapsed] .pause-btn { width: 28px; height: 28px; font-size: 12px; }
   .main[data-collapsed] .timer-block { flex: 0 0 auto; width: 100%; text-align: center; }
@@ -227,10 +227,18 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 .vu-clip:hover { opacity: 0.85; }
 @keyframes clipPulse { from { transform: scale(1.5); } to { transform: scale(1); } }
 
-/* Transport */
-.transport-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 10px; }
-.transport-head .label { margin-bottom: 0; }
+/* Record button + transport controls. The .transport selector still
+   carries the record button + pause + timer flex row; the legacy
+   .transport-head is gone (the duration dropdown moved out to its
+   own "Stop conditions" section). */
 .transport { display: flex; align-items: center; gap: 10px; }
+
+/* Stop conditions section — houses the time limit dropdown and the
+   auto-stop-on-silence panel. Both write reason="auto" through the
+   same finalize path; the user picks which one(s) apply per recording. */
+.sb-section-stop .stop-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.sb-section-stop .stop-label { font-size: 11px; color: var(--muted); flex: 1; }
+.sb-section-stop select.dur { flex: 0 0 auto; }
 .rec-btn { width: 48px; height: 48px; border-radius: 50%; border: 2px solid var(--accent); background: transparent; cursor: pointer; position: relative; flex-shrink: 0; transition: all 0.15s; }
 .rec-btn:hover { box-shadow: 0 0 0 6px rgba(226,75,74,0.12); }
 .rec-btn.active { background: var(--accent); }

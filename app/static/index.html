@@ -87,17 +87,8 @@
       </div>
     </div>
 
-    <div class="sb-section sb-section-transport">
-      <div class="transport-head">
-        <div class="label">Transport</div>
-        <select class="dur" id="dur-sel" title="Max recording length">
-          <option value="1200">20 min</option>
-          <option value="2700" selected>45 min</option>
-          <option value="3600">60 min</option>
-          <option value="5400">90 min</option>
-          <option value="0">∞ unlimited</option>
-        </select>
-      </div>
+    <div class="sb-section sb-section-record">
+      <div class="label">Record</div>
       <div class="transport">
         <button class="rec-btn" id="recbtn" onclick="toggleRec()" title="Record / Stop (R)" aria-label="Record or stop (keyboard shortcut: R)" aria-keyshortcuts="R">
           <div class="rec-btn-dot"></div>
@@ -110,6 +101,26 @@
       </div>
       <div class="prog-wrap" style="margin-top:10px">
         <div class="prog-fill" id="prog" style="width:0%"></div>
+      </div>
+    </div>
+
+    <!-- Stop conditions: configuration that decides when an in-flight
+         recording finalizes. Time limit is a hard cap (passed to the
+         server at start_recording); auto-stop on silence is a smart
+         trigger evaluated by the per-session watcher. Both write
+         reason="auto" through the same finalize path; the user picks
+         which one(s) apply per recording. -->
+    <div class="sb-section sb-section-stop">
+      <div class="label">Stop conditions</div>
+      <div class="stop-row">
+        <label class="stop-label" for="dur-sel">Time limit</label>
+        <select class="dur" id="dur-sel" title="Hard cap on recording length.">
+          <option value="1200">20 min</option>
+          <option value="2700" selected>45 min</option>
+          <option value="3600">60 min</option>
+          <option value="5400">90 min</option>
+          <option value="0">∞ unlimited</option>
+        </select>
       </div>
       <!-- Auto-stop on silence: when checked, server-side watcher ends
            the recording after N continuous seconds below the threshold.
