@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 INDEX = REPO_ROOT / "app" / "static" / "index.html"
 STYLE = REPO_ROOT / "app" / "static" / "style.css"
 MAIN_JS = REPO_ROOT / "app" / "static" / "main.js"
+MODULES_DIR = REPO_ROOT / "app" / "static" / "modules"
 
 
 @pytest.fixture(scope="module")
@@ -25,7 +26,14 @@ def css() -> str:
 
 @pytest.fixture(scope="module")
 def js() -> str:
-    return MAIN_JS.read_text(encoding="utf-8")
+    # Phase 8 split main.js into ES modules; concatenate them so substring
+    # checks for helpers (e.g. trapModalFocus, _announceLibCount) keep working
+    # regardless of which module they ended up in.
+    parts = [MAIN_JS.read_text(encoding="utf-8")]
+    if MODULES_DIR.is_dir():
+        for p in sorted(MODULES_DIR.glob("*.js")):
+            parts.append(p.read_text(encoding="utf-8"))
+    return "\n".join(parts)
 
 
 def test_wave_canvas_is_keyboard_focusable(html):
