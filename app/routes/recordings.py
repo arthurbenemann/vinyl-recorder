@@ -30,8 +30,9 @@ from services.ffmpeg import (
 )
 from state import (
     BulkDelete, DEFAULT_AUTO_STOP_ON_SILENCE, DEFAULT_SILENCE_SECONDS,
-    DEFAULT_SILENCE_THRESHOLD_DB, LOG_DIR, RAW_DIR, RecordRequest,
-    RenameRequest, sessions, upstream,
+    DEFAULT_SILENCE_THRESHOLD_DB, DURATION_EDIT_MIN_SLACK_SECONDS,
+    DurationEditRequest, LOG_DIR, RAW_DIR, RecordRequest, RenameRequest,
+    sessions, upstream,
 )
 
 
@@ -295,6 +296,13 @@ async def start_recording(req: RecordRequest):
     fmt = upstream.fmt
     sample_format = upstream.sample_format
 
+    # ffmpeg runs unbounded; the per-session watcher owns the duration
+    # cap and proactively finalizes via _finalize_session(sid, "auto") on
+    # its 500 ms poll tick. Owning the cap server-side (instead of via
+    # ffmpeg's `-t`) is what lets the user edit it mid-recording — see
+    # POST /api/record/{sid}/duration. We deliberately accept the ≤500 ms
+    # overshoot vs ffmpeg's `-t` (sub-second, dwarfed by the SIGINT-flush
+    # path) for the editability win.
     cmd = [
         "ffmpeg", "-y",
         # Input is raw PCM piped from the upstream reader thread. Telling
@@ -303,10 +311,6 @@ async def start_recording(req: RecordRequest):
         "-ar", str(fmt["sample_rate"]),
         "-ac", str(fmt["channels"]),
         "-i", "pipe:0",
-    ]
-    if req.duration > 0:
-        cmd += ["-t", str(req.duration)]
-    cmd += [
         "-c:a", "flac", "-compression_level", "8",
         "-map_metadata", "-1",
         "-metadata", f"artist={req.artist}",
@@ -621,29 +625,115 @@ async def resume_recording(session_id: str):
     return {"paused": False}
 
 
+def _elapsed_seconds(s) -> float:
+    """Wallclock elapsed for a live session, frozen at `pause_started`
+    when paused so paused time doesn't consume the duration budget."""
+    end = s.pause_started if (s.paused and s.pause_started is not None) \
+        else time.monotonic()
+    return end - s.start_time
+
+
+@router.post("/api/record/duration/{session_id}")
+async def edit_duration(session_id: str, req: DurationEditRequest):
+    """Edit the duration cap of a live recording without restarting ffmpeg.
+
+    The cap lives entirely in `session.duration`; the per-session watcher
+    reads it on every ~500 ms tick. The endpoint just mutates the field.
+
+    Extension (or → unlimited) is always allowed. Reduction (or stepping
+    DOWN from unlimited to a bounded value) requires at least
+    `DURATION_EDIT_MIN_SLACK_SECONDS` of remaining headroom — without
+    that guard, a stray click on the dropdown could terminate the
+    recording within the next watcher tick. The 409 path returns the
+    actual slack so the UI can render a useful error.
+
+    Pause-aware: `_elapsed_seconds` freezes at `pause_started` while
+    paused, so editing the cap of a paused recording uses the same
+    elapsed-budget math the timer + status snapshot use."""
+    s = sessions.get(session_id)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    if req.duration < 0:
+        raise HTTPException(400,
+            "duration must be 0 (unlimited) or a positive number of seconds")
+
+    new_duration = int(req.duration)
+    lock = s.finalize_lock or threading.Lock()
+    with lock:
+        if s.finalized:
+            raise HTTPException(409, "Session already finalized")
+        old_duration = s.duration
+        # No-op edits return 200 with the unchanged value — keeps the UI's
+        # optimistic "set the dropdown then POST" flow idempotent.
+        if new_duration == old_duration:
+            return {"duration": new_duration}
+        # Reduction guard. "Reduction" = the new cap could fire sooner
+        # than the old one would have, which covers two cases:
+        #   * new > 0 AND old > 0 AND new < old  (literal reduction)
+        #   * new > 0 AND old == 0               (bounded from unlimited)
+        if new_duration > 0 and (old_duration == 0 or new_duration < old_duration):
+            elapsed = _elapsed_seconds(s)
+            slack = new_duration - elapsed
+            if slack < DURATION_EDIT_MIN_SLACK_SECONDS:
+                # 409 conflict: the new cap is too close to "now". Includes
+                # the slack budget so a UI can tell the user "need N s more".
+                raise HTTPException(
+                    409,
+                    f"reducing to {new_duration}s would leave only "
+                    f"{int(slack)}s of headroom (need "
+                    f"{DURATION_EDIT_MIN_SLACK_SECONDS}s)",
+                )
+        s.duration = new_duration
+        s.log_lines.append(
+            f"⏱ Duration cap → {('∞' if new_duration == 0 else f'{new_duration}s')}"
+        )
+    bus.log(
+        f"⏱ Recording {session_id}: duration cap "
+        f"{('unlimited' if new_duration == 0 else f'{new_duration}s')}",
+        "info",
+    )
+    # WS broadcast so every tab re-anchors its progress bar against the
+    # new cap; the elapsed field lets a freshly-rejoined tab compute its
+    # share of the bar without a separate /api/status fetch.
+    bus.publish({
+        "type":       "record",
+        "event":      "duration",
+        "session_id": session_id,
+        "duration":   new_duration,
+        "elapsed":    int(_elapsed_seconds(s)),
+    })
+    return {"duration": new_duration}
+
+
 def _classify_exit(s) -> str:
     """Decide whether a self-exited ffmpeg counts as an auto-stop or a
-    crash. Used by the per-session watcher and any explicit reaper."""
+    crash. Used by the per-session watcher and any explicit reaper.
+
+    Note: ffmpeg no longer self-exits on a duration cap — the Python
+    watcher proactively finalizes via `_finalize_session(sid, "auto")`
+    before ffmpeg can reach an `-t` boundary (we no longer pass `-t`).
+    So in steady state this function only sees the crash / upstream-died
+    paths, returning "crash". The clean-exit branch is kept as a
+    belt-and-braces fallback for any future code path that does let
+    ffmpeg exit on its own."""
     outfile = Path(s.outfile)
-    duration = s.duration
-    elapsed = time.monotonic() - s.start_time
-    if duration > 0 and elapsed >= duration - 1 and outfile.exists() and outfile.stat().st_size > 0:
-        return "auto"
     if outfile.exists() and outfile.stat().st_size > 0 and s.proc.returncode == 0:
         return "auto"
     return "crash"
 
 
-# Silence-watch tick. Half a second is short enough that auto-stop never
-# lags more than ~500 ms behind the configured silence_seconds budget, but
-# long enough that the poll loop's overhead stays negligible.
-_SILENCE_TICK_SECONDS = 0.5
+# Watcher tick. ~500 ms is fast enough that the user-facing "auto-stop at
+# 30:00" or the silence trigger lands within sub-second of its target, and
+# slow enough that the per-session thread spends ~all its time blocked in
+# proc.wait(timeout=).
+_WATCH_TICK_SECONDS = 0.5
 
 
 def _silence_should_autostop(s, now: float) -> bool:
     """Decide whether the per-session watcher should finalize `s` with
-    reason="auto" right now. Pulled out so unit tests can drive the
-    decision logic without spinning a real ffmpeg subprocess.
+    reason="auto" right now because the upstream has been silent long
+    enough. Pulled out so unit tests can drive the decision logic without
+    spinning a real ffmpeg subprocess.
 
     The contract:
       * silence_seconds == 0 → feature off, never trigger.
@@ -667,36 +757,73 @@ def _silence_should_autostop(s, now: float) -> bool:
     return (now - since) >= s.silence_seconds
 
 
-def _watch_session(sid: str) -> None:
-    """One thread per recording session — polls every ~500 ms for either
-    a self-exited ffmpeg (auto-stop on `-t`, crash, kill -9) or an
-    accumulated run of silent chunks long enough to trigger
-    auto-stop-on-silence. The thread also serves as the canonical reaper
-    for its child, so stop_recording's wait() doesn't race the watcher.
+def _duration_cap_reached(s, now: float) -> bool:
+    """Pure decision function: should the watcher finalize `s` with
+    reason="auto" right now because the duration cap has elapsed?
 
-    The previous (silence-free) implementation called a single blocking
-    `proc.wait()` so a self-exit was reaped within a few ms; the poll
-    here adds at most one tick (~500 ms) of latency, which is invisible
-    to the e2e tests and orders of magnitude smaller than the 1 Hz polling
-    loop the per-session thread replaced."""
+    Contract:
+      * duration == 0 → unlimited, never trigger.
+      * paused        → elapsed is frozen (pause_started anchors it), so
+                        time spent paused does not consume the cap.
+      * monotonic time only — a wallclock NTP step at midnight must not
+                        change which side of the cap the recording is on.
+
+    Pulled out so unit tests can drive the truth table without spinning a
+    real ffmpeg subprocess."""
+    if s.duration <= 0:
+        return False
+    if s.paused:
+        end = s.pause_started if s.pause_started is not None else now
+    else:
+        end = now
+    return (end - s.start_time) >= s.duration
+
+
+def _watch_session(sid: str) -> None:
+    """One thread per recording session — polls every ~500 ms for any
+    finalize trigger: a self-exited ffmpeg (crash, kill -9, upstream
+    died), an elapsed duration cap, or an accumulated run of silent
+    chunks long enough to auto-stop-on-silence. The thread also serves
+    as the canonical reaper for its child, so stop_recording's wait()
+    doesn't race the watcher.
+
+    Owning both the duration cap AND the silence detector here (vs
+    ffmpeg's `-t` or a separate timer) is what lets the user edit the
+    cap mid-recording and lets silence accumulate in step with the
+    same poll cadence — `session.duration` / `session.silence_since`
+    are plain Python fields the sink and endpoints mutate, and the next
+    tick picks up the new values."""
     s = sessions.get(sid)
     if not s:
         return
     proc = s.proc
     while True:
         try:
-            proc.wait(timeout=_SILENCE_TICK_SECONDS)
+            proc.wait(timeout=_WATCH_TICK_SECONDS)
             break  # ffmpeg exited — fall through to _classify_exit
         except subprocess.TimeoutExpired:
             pass
         except Exception:
             break
-        # ffmpeg is still alive — check the silence-watch state.
         live = sessions.get(sid)
         if live is None:
-            # user-stop / disconnect already finalized us
+            # user-stop / disconnect finalized us between ticks
             return
-        if _silence_should_autostop(live, time.monotonic()):
+        now = time.monotonic()
+        # Order matters only for the log line — both triggers route into
+        # the same _finalize_session(sid, "auto") call site. Duration is
+        # checked first so the user-visible reason "duration cap" wins
+        # when a recording happens to end at silence at exactly the cap
+        # boundary (rare; the cap is the more authoritative signal).
+        if _duration_cap_reached(live, now):
+            bus.log(f"⏱ Auto-stop: duration cap {live.duration}s reached",
+                    "info")
+            try:
+                _finalize_session(sid, "auto")
+            except Exception:
+                sessions.remove(sid)
+            return
+        if _silence_should_autostop(live, now):
             bus.log(
                 f"⏱ Auto-stop: {live.silence_seconds}s of silence",
                 "info",

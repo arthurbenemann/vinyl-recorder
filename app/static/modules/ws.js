@@ -6,7 +6,7 @@
 import { state } from './state.js';
 import { setClipBadge, updateMeter, decayMeters } from './meter.js';
 import { applyUpstreamState, applyHealthState, probeGain } from './upstream.js';
-import { applyRecordState, getRecDurationSec, getRecStartTimeMs } from './recording.js';
+import { applyRecordState, applyDurationChange, getRecDurationSec, getRecStartTimeMs } from './recording.js';
 import { renderLog } from './log.js';
 import { refreshLib, refreshDiskFree } from './library.js';
 import { refreshAlbums } from './albums.js';
@@ -176,6 +176,12 @@ function handleWsEvent(m) {
           elapsedSec: typeof m.elapsed === 'number' ? m.elapsed
                       : Math.floor((Date.now() - getRecStartTimeMs()) / 1000),
         });
+      } else if (m.event === 'duration') {
+        // Server-driven cap change — broadcasts here so every tab's
+        // progress bar re-anchors against the new cap, including the tab
+        // that originated the edit (the POST response says 200 but the WS
+        // event is what triggers the visible UI update).
+        applyDurationChange(m.duration, m.elapsed);
       }
       break;
     case 'log':

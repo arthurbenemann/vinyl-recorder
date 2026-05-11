@@ -272,6 +272,23 @@ class RecordRequest(BaseModel):
     silence_seconds:      int   = 20
 
 
+class DurationEditRequest(BaseModel):
+    """PATCH-style edit of a live recording's duration cap.
+
+    0 = unlimited; positive = seconds. The endpoint validates that
+    reductions leave at least DURATION_EDIT_MIN_SLACK_SECONDS of headroom
+    so a user clicking the dropdown by accident can't terminate a
+    recording with no warning."""
+    duration: int
+
+
+# Slack required when reducing a live recording's duration cap. A new cap
+# that lands within this many seconds of `now` would auto-stop the
+# recording on the next watcher tick — and a clumsy click on the dropdown
+# shouldn't be enough to do that. The endpoint returns 409 otherwise.
+DURATION_EDIT_MIN_SLACK_SECONDS = 300
+
+
 class TagEdit(BaseModel):
     artist: Optional[str] = None
     album: Optional[str] = None
