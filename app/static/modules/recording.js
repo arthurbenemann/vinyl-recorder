@@ -14,6 +14,11 @@ import { updateSdot } from './upstream.js';
 let recStartTimeMs = 0;        // local clock anchor for the elapsed timer
 let recDurationSec = 0;        // 0 = unlimited
 let recTimerInterval = null;
+// Snapshot of the dur-sel value before the user's mid-recording edit. Lets
+// us revert the dropdown if the server rejects the new cap (409 — would
+// leave too little slack). Not used while idle (the value just rides into
+// the next start_recording POST).
+let _durSelLastValue = null;
 
 // Auto-stop on silence settings persist across page reloads via
 // localStorage so the user only configures them once. applyConfig (in
@@ -182,6 +187,68 @@ export function applyRecordState({ active, paused: isPaused, sid, durationSec, e
     document.getElementById('timer').textContent = fmt(0);
   }
   updateSdot();
+}
+
+// Wire the duration dropdown so that while a recording is live, changing
+// it POSTs the new cap to the server instead of waiting for the next
+// start. Server enforces extension-always-OK + reduction-needs-5min-slack;
+// a 409 reverts the dropdown to its prior value so the UI never lies.
+export function wireDurationSel() {
+  const sel = document.getElementById('dur-sel');
+  if (!sel) return;
+  // Track the value at focus time so we can revert on rejection without
+  // racing the user's next click. focus fires before change, every time.
+  sel.addEventListener('focus', () => { _durSelLastValue = sel.value; });
+  sel.addEventListener('change', async () => {
+    // Idle: nothing to push. The next toggleRec() will read this value.
+    if (!state.recording || !state.sessionId) {
+      _durSelLastValue = sel.value;
+      return;
+    }
+    const prev = _durSelLastValue ?? sel.value;
+    const next = parseInt(sel.value, 10);
+    try {
+      const r = await fetch(`/api/record/duration/${state.sessionId}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ duration: next }),
+      });
+      if (!r.ok) {
+        const msg = await parseError(r);
+        sel.value = prev;             // revert — server refused
+        toast('✗ ' + msg, 'err');
+        return;
+      }
+      _durSelLastValue = sel.value;
+      // applyRecordState fires via WS `record:duration` and updates the
+      // progress bar anchor; no local mutation needed here.
+    } catch (e) {
+      sel.value = prev;
+      toast('✗ ' + e.message, 'err');
+    }
+  });
+}
+
+// Called by the WS handler when the server broadcasts a duration edit.
+// Re-anchors the progress bar against the new cap; the timer keeps
+// running from the same recStartTimeMs.
+export function applyDurationChange(newDurationSec, elapsedSec) {
+  recDurationSec = newDurationSec || 0;
+  // Snap the local clock anchor to the server-reported elapsed so the
+  // progress bar lines up with the new cap even if a small WS gap had
+  // accumulated drift.
+  recStartTimeMs = Date.now() - (elapsedSec || 0) * 1000;
+  // Reflect the new cap on the dropdown so the user's view of "where am
+  // I" matches the new cap, even when the edit came from another tab.
+  const sel = document.getElementById('dur-sel');
+  if (sel) {
+    const v = String(newDurationSec || 0);
+    if ([...sel.options].some(o => o.value === v)) {
+      sel.value = v;
+      _durSelLastValue = v;
+    }
+  }
+  tickRecTimer();
 }
 
 export function tickRecTimer() {

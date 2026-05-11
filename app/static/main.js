@@ -17,7 +17,7 @@ import {
   wireGainSlider, toggleHeaderMenu, closeHeaderMenu, toggleHealthPanel,
   toggleSidebar, restoreSidebarState,
 } from './modules/upstream.js';
-import { toggleRec, togglePause, wireAutoStopForm } from './modules/recording.js';
+import { toggleRec, togglePause, wireAutoStopForm, wireDurationSel } from './modules/recording.js';
 import { wireLogCollapse } from './modules/log.js';
 import {
   refreshLib, refreshDiskFree,
@@ -178,6 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   applyConfig();
   wireAutoStopForm();
+  wireDurationSel();
   ensureAudioGraph();
   applyMuteState();
   wireSortableHeaders();
