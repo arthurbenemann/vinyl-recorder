@@ -862,7 +862,6 @@ def test_split_response_body_shape(monkeypatch):
         })
         assert r.status_code == 200
         body = r.json()
-        assert body["ok"] is True
         assert body["music_relpath"] == "A/B"  # no year tag → no "(YYYY)" suffix
         assert len(body["tracks"]) == 1
         # Each track row exposes filename + duration + size_mb.

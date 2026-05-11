@@ -6,6 +6,7 @@
 
 import { makeModalEscHandler } from './util.js';
 import { toast } from './log.js';
+import { parseError } from './api.js';
 
 const PI_DEPLOY_HOST_KEY = 'piDeploy.host';
 const PI_DEPLOY_USER_KEY = 'piDeploy.user';
@@ -104,8 +105,7 @@ export async function runPiDeploy() {
     });
     if (!r.ok) {
       // Pre-stream failure (e.g. 422 validation) — body is regular JSON.
-      let detail = 'HTTP ' + r.status;
-      try { detail = (await r.json()).detail || detail; } catch (e) {}
+      const detail = await parseError(r);
       _piDeployLogLine('✗ ' + detail, 'err');
       toast('✗ pi deploy failed: ' + detail, 'err');
       return;
