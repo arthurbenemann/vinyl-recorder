@@ -59,7 +59,8 @@ RUN pip install --no-cache-dir \
     fastapi==0.136.1 \
     "uvicorn[standard]==0.46.0" \
     python-multipart==0.0.28 \
-    paramiko==5.0.0
+    paramiko==5.0.0 \
+    audioop-lts==0.2.2
 
 WORKDIR /app
 COPY app/ /app/

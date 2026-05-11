@@ -53,7 +53,7 @@ jobs:
         # uvicorn + paramiko for the pi-deploy route) plus pytest tooling.
         # httpx is what TestClient uses internally; pytest-cov publishes a
         # coverage report at the end.
-        run: pip install pytest==9.0.3 pytest-cov==7.1.0 pytest-xdist==3.8.0 pytest-timeout==2.4.0 fastapi==0.136.1 "uvicorn[standard]==0.46.0" httpx==0.28.1 pydantic==2.13.4 paramiko==5.0.0
+        run: pip install pytest==9.0.3 pytest-cov==7.1.0 pytest-xdist==3.8.0 pytest-timeout==2.4.0 fastapi==0.136.1 "uvicorn[standard]==0.46.0" httpx==0.28.1 pydantic==2.13.4 paramiko==5.0.0 audioop-lts==0.2.2
 
       - name: Run unit + API tests with coverage
         # `--cov-fail-under` is the floor; bump it whenever a PR meaningfully

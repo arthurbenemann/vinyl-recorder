@@ -15,20 +15,15 @@ import time
 import traceback
 import urllib.error  # noqa: F401 (kept for tests that monkeypatch up_mod.urllib)
 import urllib.request  # noqa: F401 (kept for tests that monkeypatch up_mod.urllib)
-import warnings
 from collections import deque
 from typing import Callable, Optional
 
-# `audioop` is a stdlib C module that decodes PCM samples in one call —
-# orders of magnitude faster than per-sample Python on the VU hot path
-# (called every ~16 ms). It's deprecated in 3.12 (silenced here) and
-# slated for removal in 3.13; the project targets 3.12 (see Dockerfile)
-# so the replacement story (`audioop-lts` or numpy) only matters when we
-# bump the runtime.
-with warnings.catch_warnings():
-    warnings.filterwarnings("ignore", category=DeprecationWarning,
-                            message=r".*audioop.*")
-    import audioop
+# `audioop` is a C module that decodes PCM samples in one call — orders of
+# magnitude faster than per-sample Python on the VU hot path (called every
+# ~16 ms). It was a stdlib module deprecated in 3.12 and removed in 3.13;
+# on 3.14 (our current runtime) we depend on `audioop-lts`, a drop-in
+# replacement that re-exposes the same C API under the `audioop` name.
+import audioop
 
 # Re-exports — keep external imports (`from services.upstream import ...`)
 # working unchanged after the split. The flake8 noqa is because these are
