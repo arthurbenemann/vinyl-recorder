@@ -15,6 +15,77 @@ let recStartTimeMs = 0;        // local clock anchor for the elapsed timer
 let recDurationSec = 0;        // 0 = unlimited
 let recTimerInterval = null;
 
+// Auto-stop on silence settings persist across page reloads via
+// localStorage so the user only configures them once. applyConfig (in
+// config.js) seeds these from /api/config the first time the page is
+// loaded on a fresh browser.
+const LS_AUTOSTOP   = 'autoStopOnSilence';
+const LS_AS_SECONDS = 'autoStopSilenceSeconds';
+const LS_AS_DB      = 'autoStopSilenceDb';
+
+function readAutoStopForm() {
+  const en   = document.getElementById('autostop-enable');
+  const sec  = document.getElementById('autostop-seconds');
+  const thr  = document.getElementById('autostop-threshold');
+  return {
+    enabled:     !!(en && en.checked),
+    seconds:     Math.max(1, parseInt((sec && sec.value) || '20', 10)),
+    threshold_db: Math.max(-100, Math.min(0, parseFloat((thr && thr.value) || '-50'))),
+  };
+}
+
+function persistAutoStopForm(f) {
+  try {
+    localStorage.setItem(LS_AUTOSTOP,   f.enabled ? '1' : '0');
+    localStorage.setItem(LS_AS_SECONDS, String(f.seconds));
+    localStorage.setItem(LS_AS_DB,      String(f.threshold_db));
+  } catch (e) {}
+}
+
+// Reflect the auto-stop config on the summary line so the user can see
+// the current setting at a glance without expanding the panel.
+function updateAutoStopHint(f) {
+  const hint = document.getElementById('autostop-hint');
+  if (!hint) return;
+  if (f.enabled) {
+    hint.hidden = false;
+    hint.textContent = `${f.seconds}s · ${f.threshold_db.toFixed(0)} dB`;
+  } else {
+    hint.hidden = true;
+    hint.textContent = '';
+  }
+}
+
+export function wireAutoStopForm() {
+  const en  = document.getElementById('autostop-enable');
+  const sec = document.getElementById('autostop-seconds');
+  const thr = document.getElementById('autostop-threshold');
+  if (!en || !sec || !thr) return;
+  // Hydrate from localStorage if present; applyConfig will only fill
+  // unset keys, so a user who changed their settings keeps them.
+  const lsEn  = localStorage.getItem(LS_AUTOSTOP);
+  const lsSec = localStorage.getItem(LS_AS_SECONDS);
+  const lsDb  = localStorage.getItem(LS_AS_DB);
+  if (lsEn  !== null) en.checked  = lsEn === '1';
+  if (lsSec !== null) sec.value   = lsSec;
+  if (lsDb  !== null) thr.value   = lsDb;
+  const onChange = () => {
+    const f = readAutoStopForm();
+    persistAutoStopForm(f);
+    updateAutoStopHint(f);
+    // Open the details when enabled so the user can see the inputs;
+    // collapse otherwise to save sidebar space.
+    const det = document.getElementById('autostop-details');
+    if (det) det.open = f.enabled;
+  };
+  en.addEventListener('change', onChange);
+  sec.addEventListener('change', onChange);
+  thr.addEventListener('change', onChange);
+  updateAutoStopHint(readAutoStopForm());
+  const det = document.getElementById('autostop-details');
+  if (det) det.open = en.checked;
+}
+
 // The pause/resume WS branches use the duration that was current at the
 // last applyRecordState call, so expose it for ws.js.
 export function getRecDurationSec() { return recDurationSec; }
@@ -46,11 +117,17 @@ export async function toggleRec() {
     }
     const url = document.getElementById('stream-url').value;
     const dur = parseInt(document.getElementById('dur-sel').value);
+    const as  = readAutoStopForm();
     try {
       const r = await fetch('/api/record/start', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ stream_url: url, duration: dur }),
+        body: JSON.stringify({
+          stream_url: url, duration: dur,
+          auto_stop_on_silence: as.enabled,
+          silence_seconds:      as.seconds,
+          silence_threshold_db: as.threshold_db,
+        }),
       });
       if (!r.ok) throw new Error(await parseError(r));
     } catch(e) { toast('✗ ' + e.message, 'err'); }
