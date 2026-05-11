@@ -129,9 +129,12 @@ def release_full(mbid: str) -> dict:
         cached = _release_cache.get(mbid)
         if cached and (now - cached[0]) < _RELEASE_CACHE_TTL_S:
             return cached[1]
+    # `artist-rels` pulls release-level artist relations like "conductor" so
+    # the tag panel can surface them on classical/jazz pressings without an
+    # extra round trip.
     data = _http_json(
         f"{MB_BASE}/release/{mbid}"
-        f"?inc=artist-credits+labels+recordings+url-rels+release-groups&fmt=json"
+        f"?inc=artist-credits+labels+recordings+url-rels+release-groups+artist-rels&fmt=json"
     )
     with _release_cache_lock:
         _release_cache[mbid] = (time.monotonic(), data)

@@ -26,6 +26,38 @@ def _str(d: dict, key: str, default: str = "") -> str:
     return str(v).strip() if v else default
 
 
+def _mb_artist_relation(mb_release: dict, rel_type: str) -> str:
+    """Return a comma-joined list of artist names from a MusicBrainz release's
+    `relations[]` matching `rel_type` (e.g. "conductor"). Empty string when
+    none. MB stores release-level artist relations as
+    `{type, artist:{name,...}}` once `inc=artist-rels` is requested."""
+    names: list[str] = []
+    for rel in (mb_release.get("relations") or []):
+        if (rel.get("type") or "").lower() != rel_type:
+            continue
+        name = ((rel.get("artist") or {}).get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return ", ".join(names)
+
+
+def _discogs_extra_artists(release: dict, role_prefixes: tuple[str, ...]) -> str:
+    """Pull credits from a Discogs release's `extraartists[]` whose role
+    starts with any of the given prefixes (lowercased). Discogs uses
+    "Composed By" as the canonical credit, occasionally with a bracketed
+    qualifier ("Composed By [Original Music]"); prefix-matching catches
+    those without including unrelated roles like "Cover [Photography]"."""
+    names: list[str] = []
+    for ea in (release.get("extraartists") or []):
+        role = (ea.get("role") or "").strip().lower()
+        if not any(role.startswith(p) for p in role_prefixes):
+            continue
+        name = (ea.get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return ", ".join(names)
+
+
 @router.post("/api/search")
 async def search(req: SearchRequest):
     """Search MusicBrainz for release candidates, plus matches from the
@@ -143,6 +175,8 @@ async def release_detail_discogs(release_id: int):
                    images[0] if images else None)
     cover_url = (primary or {}).get("uri", "") if primary else ""
     discogs_url = d.get("uri") or f"https://www.discogs.com/release/{release_id}"
+    composer  = _discogs_extra_artists(d, ("composed by", "composer"))
+    conductor = _discogs_extra_artists(d, ("conductor",))
     return {
         "mbid":           None,
         "title":          title,
@@ -153,6 +187,8 @@ async def release_detail_discogs(release_id: int):
         "country":        country,
         "format":         fmt,
         "genre":          ", ".join(genres),
+        "composer":       composer,
+        "conductor":      conductor,
         "tracks":         tracks,
         "track_details":  track_details,
         "discogs_id":     release_id,
@@ -183,6 +219,10 @@ async def release_detail(mbid: str):
         catno = li[0].get("catalog-number", "") or ""
     country = mb.get("country", "") or ""
     fmt = (mb.get("media") or [{}])[0].get("format", "") or ""
+    # Release-level artist relations: pick out conductor credits. MB models
+    # composer per-work (a separate query per recording), so we leave that
+    # to the user / Discogs's release-level extraartists block.
+    conductor = _mb_artist_relation(mb, "conductor")
     tracks: list[str] = []
     track_details: list[dict] = []
     for media in mb.get("media", []):
@@ -200,6 +240,7 @@ async def release_detail(mbid: str):
     discogs_id = extract_discogs_id(mb)
     genres: list[str] = []
     discogs_url = None
+    composer = ""
     if discogs_id:
         d = await asyncio.to_thread(discogs.release, discogs_id)
         if d:
@@ -219,6 +260,9 @@ async def release_detail(mbid: str):
                 if g not in genres: genres.append(g)
             for s in (d.get("styles") or []):
                 if s not in genres: genres.append(s)
+            composer = _discogs_extra_artists(d, ("composed by", "composer"))
+            if not conductor:
+                conductor = _discogs_extra_artists(d, ("conductor",))
             # Backfill missing track durations from Discogs's "M:SS" strings.
             d_tracks = [t for t in (d.get("tracklist") or []) if not t.get("type_") or t.get("type_") == "track"]
             for i, td in enumerate(track_details):
@@ -241,6 +285,8 @@ async def release_detail(mbid: str):
         "country":        country,
         "format":         fmt,
         "genre":          ", ".join(genres),
+        "composer":       composer,
+        "conductor":      conductor,
         "tracks":         tracks,
         "track_details":  track_details,
         "discogs_id":     discogs_id,

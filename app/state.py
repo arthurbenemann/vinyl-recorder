@@ -216,6 +216,8 @@ class TagEdit(BaseModel):
     tracks: Optional[list[str]] = None
     catalog_number: Optional[str] = None
     country: Optional[str] = None
+    composer: Optional[str] = None
+    conductor: Optional[str] = None
 
 
 class SearchRequest(BaseModel):
