@@ -312,7 +312,6 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
   transform: translateY(-1px); transition: transform 0.15s ease; flex-shrink: 0;
 }
 .log-details:not([open]) > summary::before { transform: rotate(-90deg) translateX(1px); }
-.log-details > summary .label { margin-bottom: 0; flex-shrink: 0; }
 .log-summary .log-tail {
   flex: 1; min-width: 0;
   font-size: 11px; color: var(--muted);
@@ -323,7 +322,7 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .log-summary .log-tail.info { color: var(--blue); }
 .log-details[open] > summary .log-tail { display: none; }
 .log-details[open] > .log { margin-top: 6px; }
-.log-details > summary:hover .label,
+.log-details > summary:hover .log-tail,
 .log-details > summary:hover::before { color: var(--text); }
 
 /* Meta form */
