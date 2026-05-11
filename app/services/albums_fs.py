@@ -15,7 +15,8 @@ The manifest schema (v2):
       "sides":          [filename, ...]  # ORDER matters
       "cover":          "cover.jpg" | null,
       "plan":           {tracks, normalize, target_peak_db,
-                         measured_peak_db, bit_depth} | null,
+                         measured_peak_db, bit_depth, sample_rate,
+                         output_format} | null,
       "music_relpath":  "Artist/Album (Year)" | null
     }
 

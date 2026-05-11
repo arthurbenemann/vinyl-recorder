@@ -547,6 +547,124 @@ def test_split_unsupported_sample_rate_rejected(monkeypatch):
         _cleanup_album(aid)
 
 
+def test_split_unsupported_output_format_rejected(monkeypatch):
+    """Defence in depth: an unsupported output_format value (one not in
+    ALLOWED_OUTPUT_FORMATS) must be rejected. The UI's <select> already
+    pins the client side, but a hand-crafted POST mustn't slip arbitrary
+    codec/extension combos through to ffmpeg."""
+    env = _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+            "output_format": "wma",  # not in the allowed set
+        })
+        assert r.status_code == 400
+        # ffmpeg never invoked.
+        assert env.ffmpeg_calls == []
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_default_output_format_is_flac(monkeypatch):
+    """When `output_format` is omitted from the request, the default kicks
+    in: tracks land as .flac and metaflac runs (existing behaviour)."""
+    env = _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+        })
+        assert r.status_code == 200, r.text
+        # Output filename ends in .flac.
+        out = env.ffmpeg_calls[0][-1]
+        assert out.endswith(".flac")
+        # FLAC encoder selected.
+        cmd = env.ffmpeg_calls[0]
+        assert cmd[cmd.index("-c:a") + 1] == "flac"
+        # metaflac runs (one --remove-all-tags per track) — the post-encode
+        # tag pass that's specific to FLAC.
+        assert any("--remove-all-tags" in c for c in env.metaflac_calls)
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_mp3_uses_libmp3lame_and_inline_metadata(monkeypatch):
+    """MP3 output: encoder is libmp3lame, no metaflac post-pass, tags are
+    inline via -metadata flags."""
+    env = _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B", "year": "2024"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+            "output_format": "mp3",
+        })
+        assert r.status_code == 200, r.text
+        cmd = env.ffmpeg_calls[0]
+        out = cmd[-1]
+        assert out.endswith(".mp3")
+        assert cmd[cmd.index("-c:a") + 1] == "libmp3lame"
+        # Inline tags via -metadata flags.
+        flat = " ".join(cmd)
+        assert "artist=A" in flat
+        assert "album=B" in flat
+        assert "date=2024" in flat
+        assert "title=T1" in flat
+        assert "track=1/1" in flat
+        # No metaflac post-pass for non-FLAC output.
+        assert env.metaflac_calls == []
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_wav_24bit_uses_pcm_s24le(monkeypatch):
+    """WAV at 24-bit picks pcm_s24le directly (not aformat). Pinned because
+    aformat doesn't change WAV's container precision — the codec name itself
+    is what determines the on-disk bit depth."""
+    env = _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+            "output_format": "wav",
+            "bit_depth": 24,
+        })
+        assert r.status_code == 200, r.text
+        cmd = env.ffmpeg_calls[0]
+        assert cmd[-1].endswith(".wav")
+        assert cmd[cmd.index("-c:a") + 1] == "pcm_s24le"
+        # No aformat in the filter chain (lossy/lossless WAV bit-depth is
+        # the codec choice).
+        flat = " ".join(cmd)
+        assert "aformat=sample_fmts=s32" not in flat
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_output_format_persisted_in_plan(monkeypatch):
+    """The chosen output_format flows back into album.json.plan so a re-edit
+    reload sees the same selector position."""
+    _MockSplitEnv(monkeypatch)
+    from services import albums_fs
+
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+            "output_format": "m4a-alac",
+        })
+        assert r.status_code == 200, r.text
+        manifest = albums_fs.read_manifest(aid)
+        assert manifest["plan"]["output_format"] == "m4a-alac"
+    finally:
+        _cleanup_album(aid)
+
+
 def test_split_sample_rate_persisted_in_plan(monkeypatch):
     """The chosen sample rate flows back into album.json.plan alongside
     bit_depth, so a re-edit reload sees the same knob position."""

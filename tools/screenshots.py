@@ -30,7 +30,6 @@ Defaults: URL=http://127.0.0.1:8080, output=images/.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 from pathlib import Path
