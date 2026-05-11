@@ -55,12 +55,12 @@ RUN apk add --no-cache \
 COPY --from=aw-builder /build/audiowaveform/audiowaveform /usr/local/bin/audiowaveform
 RUN audiowaveform --version
 
-RUN pip install --no-cache-dir \
-    fastapi==0.136.1 \
-    "uvicorn[standard]==0.46.0" \
-    python-multipart==0.0.28 \
-    paramiko==5.0.0 \
-    audioop-lts==0.2.2
+# Install the `runtime` dependency group from pyproject.toml. Centralising
+# the pin list in pyproject keeps Docker + CI on the same versions — bump
+# once, both follow.
+COPY pyproject.toml /tmp/pyproject.toml
+RUN pip install --no-cache-dir --group /tmp/pyproject.toml:runtime \
+ && rm /tmp/pyproject.toml
 
 WORKDIR /app
 COPY app/ /app/
