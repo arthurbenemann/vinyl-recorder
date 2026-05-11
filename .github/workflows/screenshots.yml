@@ -53,7 +53,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
           cache: pip
 
       - uses: docker/setup-buildx-action@v3
@@ -76,7 +76,7 @@ jobs:
         # to the install line keeps the workflow self-contained — neither
         # is a runtime app dep.
         run: |
-          pip install playwright Pillow
+          pip install playwright==1.59.0 Pillow==12.2.0
           playwright install --with-deps chromium
 
       - name: Build stack with layer cache

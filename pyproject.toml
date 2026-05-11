@@ -4,7 +4,7 @@ version = "0.9.1"
 description = "Web UI for capturing an HTTP audio stream as tagged FLAC, with MusicBrainz/Discogs lookup and Jellyfin-ready output."
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 authors = [{ name = "Arthur Benemann" }]
 keywords = ["vinyl", "flac", "musicbrainz", "discogs", "jellyfin", "audio", "recording"]
 classifiers = [
@@ -14,7 +14,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Multimedia :: Sound/Audio :: Capture/Recording",
 ]
 

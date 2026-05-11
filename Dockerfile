@@ -22,7 +22,7 @@ RUN (git update-index --refresh >/dev/null 2>&1 || true) \
 #
 # The result is a single ~2 MB binary copied into the runtime stage; build
 # tools (cmake, g++, boost-dev, …) stay in the builder layer and never ship.
-FROM alpine:3.21 AS aw-builder
+FROM alpine:3.22 AS aw-builder
 RUN apk add --no-cache \
         build-base cmake git \
         boost-dev libsndfile-dev gd-dev libid3tag-dev libmad-dev
@@ -34,7 +34,7 @@ RUN cmake -DENABLE_TESTS=0 -DBUILD_STATIC=0 . \
  && strip audiowaveform
 
 
-FROM python:3.12-alpine3.21
+FROM python:3.14-alpine3.22
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
@@ -56,10 +56,11 @@ COPY --from=aw-builder /build/audiowaveform/audiowaveform /usr/local/bin/audiowa
 RUN audiowaveform --version
 
 RUN pip install --no-cache-dir \
-    fastapi \
-    "uvicorn[standard]" \
-    python-multipart \
-    paramiko
+    fastapi==0.136.1 \
+    "uvicorn[standard]==0.46.0" \
+    python-multipart==0.0.28 \
+    paramiko==5.0.0 \
+    audioop-lts==0.2.2
 
 WORKDIR /app
 COPY app/ /app/
