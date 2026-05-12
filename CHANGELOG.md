@@ -1,3 +1,12 @@
+## v1.1.0 — 2026-05-12
+
+### Features
+- Auto-stop recording on extended silence (#1)
+- Editable duration cap + trimmed dropdown options (#4)
+
+### Refactoring
+- **deps:** Consolidate pins into pyproject [dependency-groups] (#3)
+
 ## v1.0.0 — 2026-05-11
 
 ### Features
