@@ -1859,10 +1859,8 @@ async function weMeasure() {
 }
 
 // Album-stats prefix: `source: 24b / 96 ksps · ` if format is known, else ''.
-// TODO: per-side `source_format` isn't carried on the album payload yet, so
-// we surface only the topline (album-level) format derived from the first
-// side. Once `sides[].source_format` lands we can detect mixed rates here
-// and either show the highest or "mixed" when they differ.
+// Resolves to `source: mixed · ` when sides differ in bit depth or sample rate
+// (handled by `fmtSourceFormat` walking `sides[]`).
 function _sourceFormatPrefix() {
   if (!we.albumId) return '';
   const a = (typeof albumsByName !== 'undefined') ? albumsByName[we.albumId] : null;
