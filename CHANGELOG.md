@@ -1,3 +1,11 @@
+## v1.1.1 — 2026-05-12
+
+### Features
+- **albums:** Surface 'mixed' format when sides disagree (#6)
+
+### Tests
+- **e2e:** Cover pi-deploy modal client-side validation (#7)
+
 ## v1.1.0 — 2026-05-12
 
 ### Features
