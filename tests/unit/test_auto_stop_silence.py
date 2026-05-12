@@ -3,7 +3,11 @@
 The watcher logic itself runs in a background thread fed by ffmpeg; here we
 exercise just the two pure functions it relies on:
 
-  * `_silence_threshold_int(db, bps)` — dB → integer peak-sample cutoff.
+  * `_silence_threshold_int(db, bps)` — dB → integer RMS / peak cutoff.
+    The math is the same in both interpretations (full_scale × 10**(db/20));
+    only the integer is reused, with the live sink comparing it against a
+    smoothed RMS rather than a per-chunk peak. See `test_silence_rms.py`
+    for the EMA-smoothed detector itself.
   * `_silence_should_autostop(session, now)` — whether to finalize.
 
 A full lifecycle (start_recording → silent stream → finalize) is covered
@@ -53,7 +57,7 @@ def test_threshold_minus_50db_clamped_at_one_floor():
 
 def test_threshold_very_negative_db_floors_at_one():
     """An absurdly low dB value (-300 dB → amp ~0) must still produce
-    a cutoff of at least 1, otherwise audioop.max would compare ≥0 and
+    a cutoff of at least 1, otherwise audioop.rms would compare ≥0 and
     *every* chunk would register as silent → instant auto-stop the moment
     the watcher arms. The floor is what keeps the feature safe."""
     from routes.recordings import _silence_threshold_int
@@ -62,7 +66,7 @@ def test_threshold_very_negative_db_floors_at_one():
 
 
 def test_threshold_positive_db_clamps_to_zero():
-    """Positive dB makes no physical sense for a peak threshold (above
+    """Positive dB makes no physical sense for an RMS threshold (above
     full scale). The helper clamps to 0 dBFS — anything looser would
     never trigger silence anyway. This protects against a hand-crafted
     POST that tries to slip silence_threshold_db=+99 in."""

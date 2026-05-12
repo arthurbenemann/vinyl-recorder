@@ -140,9 +140,9 @@
             s
           </label>
           <label class="autostop-field" for="autostop-threshold"
-                 title="Peak below this value (in dBFS) is treated as silence. -50 dBFS is a reasonable default for vinyl runs-out groove noise.">
+                 title="Smoothed RMS (~2 s window) below this value in dBFS is treated as silence. -40 dBFS is a reasonable default — quieter than music but well above the average energy of a vinyl runout groove, so the periodic ~1.8 s clicks can't keep re-arming the detector.">
             below
-            <input type="number" id="autostop-threshold" value="-50" min="-100" max="0" step="1">
+            <input type="number" id="autostop-threshold" value="-40" min="-100" max="0" step="1">
             dBFS
           </label>
         </div>

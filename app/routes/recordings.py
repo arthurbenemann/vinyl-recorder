@@ -1,6 +1,7 @@
 """Recording sessions, library file ops, stream proxy + probe."""
 import asyncio
 import json
+import math
 import queue
 import signal
 import subprocess
@@ -37,15 +38,62 @@ from state import (
 
 
 def _silence_threshold_int(threshold_db: float, bytes_per_sample: int) -> int:
-    """Convert a dBFS threshold to the integer peak-sample cutoff that
-    audioop.max(chunk, bps) returns. amp = 10**(db/20); the cutoff is
+    """Convert a dBFS threshold to the integer cutoff audioop.rms returns
+    for `bytes_per_sample`-wide samples. amp = 10**(db/20); the cutoff is
     full_scale * amp, floored at 1 so an extremely-quiet threshold never
-    becomes "everything is silent" (audioop.max returns 0 only on empty
-    chunks). Used by start_recording to precompute the per-session
-    silence-detection threshold."""
+    becomes "everything is silent" (audioop.rms returns 0 only on truly
+    zero chunks). Used by start_recording to precompute the per-session
+    silence-detection threshold.
+
+    The conversion matches `audioop.max` too — the integer scale is
+    identical — but the live sink compares the cutoff against a smoothed
+    RMS rather than a per-chunk peak, because vinyl runout grooves emit
+    a ~-29 dBFS click every revolution (~1.8 s at 33⅓ RPM) that would
+    keep re-arming a peak detector even though the average energy of the
+    runout is well below music levels (~-47 dBFS RMS)."""
     full_scale = 0x7FFFFF if bytes_per_sample == 3 else 0x7FFF
     amp = 10.0 ** (max(-200.0, min(0.0, float(threshold_db))) / 20.0)
     return max(1, int(full_scale * amp))
+
+
+# Time constant of the EMA that smooths the per-chunk RMS into a stable
+# "energy level" for the silence detector. ~2 s is wide enough to average
+# over a 33⅓ RPM runout-groove click period (~1.8 s) so the smoothed RMS
+# converges to the mean noise floor instead of tracking the click peaks,
+# and short enough that the detector reacts within a few seconds of a
+# music→runout transition. Per-chunk alpha is computed from chunk
+# duration, so the time constant is correct regardless of upstream
+# sample rate / bit depth / frame size.
+_SILENCE_RMS_TAU_SECONDS = 2.0
+
+
+def _update_smoothed_ms(prev_ms: float, chunk_ms: float,
+                        chunk_seconds: float, tau_seconds: float) -> float:
+    """One-step exponential-moving-average update on a mean-square value.
+
+    Mean-square (RMS²) is what we smooth — it's additive over time, so
+    averaging samples in mean-square space yields the same result as
+    computing RMS over the whole window directly. Time-constant `tau`
+    matches a single-pole low-pass: a step input reaches ~63% of its
+    new level after `tau` seconds, ~95% after 3·tau, regardless of how
+    the underlying chunks are sized.
+
+    Edge cases:
+      * `tau_seconds <= 0` collapses to "use the latest chunk" — handy
+        for tests that want to bypass smoothing.
+      * `chunk_seconds <= 0` carries no new information (zero-length
+        frame); return prev_ms unchanged rather than unfairly weighting
+        an empty chunk.
+
+    Pulled out so unit tests can drive the math directly without
+    spinning up a recording session."""
+    if tau_seconds <= 0:
+        return chunk_ms
+    if chunk_seconds <= 0:
+        return prev_ms
+    alpha = 1.0 - math.exp(-chunk_seconds / tau_seconds)
+    return prev_ms * (1.0 - alpha) + chunk_ms * alpha
+
 
 router = APIRouter()
 
@@ -337,7 +385,7 @@ async def start_recording(req: RecordRequest):
 
     # Auto-stop on silence: any unset request field falls back to the env
     # default. silence_seconds == 0 disables the watcher entirely (the sink
-    # then skips the audioop.max call too — zero overhead on the hot path).
+    # then skips the audioop.rms call too — zero overhead on the hot path).
     auto_stop = (req.auto_stop_on_silence
                  if req.auto_stop_on_silence is not None
                  else DEFAULT_AUTO_STOP_ON_SILENCE)
@@ -354,6 +402,13 @@ async def start_recording(req: RecordRequest):
     silence_threshold_int = (_silence_threshold_int(threshold_db,
                                                     bytes_per_sample)
                              if silence_seconds > 0 else 0)
+    # Bytes/sec drives the per-chunk EMA time-step. Guarded against a
+    # zero denominator if the upstream probe somehow returned a bogus
+    # format — `_update_smoothed_ms` also short-circuits on zero, so
+    # this clamp is just defence in depth.
+    bytes_per_second = max(1, (fmt.get("sample_rate", 0) or 0)
+                              * (fmt.get("channels", 0) or 0)
+                              * bytes_per_sample)
 
     # Pre-roll: live bytes must wait until the buffered pre-roll is written
     # to ffmpeg's stdin first, otherwise the timeline is scrambled. The
@@ -368,16 +423,30 @@ async def start_recording(req: RecordRequest):
         if sess_state["paused"]:
             return
         if silence_seconds > 0:
-            # Peak-sample magnitude — same audioop primitive the upstream uses
-            # for the VU meter, so the C cost is identical-shape and cheap.
-            # Updates a few session fields the per-session watcher reads
-            # below; the GIL makes single-attribute writes atomic enough for
-            # the watcher's purpose (worst case: a one-tick delay before
-            # auto-stop fires after silence clears).
+            # Smoothed RMS rather than per-chunk peak — vinyl runout grooves
+            # produce a click every revolution (~1.8 s at 33⅓ RPM) peaking at
+            # ~-29 dBFS over a ~-55 dBFS noise floor. A peak detector keeps
+            # re-arming every click; the runout's mean energy is ~-47 dBFS
+            # RMS, well below music's ~-15 dBFS, so smoothing the RMS over
+            # ~2 s lets the detector cleanly separate the two.
+            #
+            # audioop.rms shares the C-level primitive cost shape with
+            # audioop.max (one pass over the chunk), so the hot-path cost
+            # is the same as the old peak detector. Session fields are
+            # written without a lock — the GIL makes single-attribute writes
+            # atomic enough for the watcher's purpose; worst case is a
+            # one-tick delay before auto-stop fires.
             sess = sessions.get(sid)
             if sess is not None:
-                peak = audioop.max(chunk, bytes_per_sample)
-                if peak >= silence_threshold_int:
+                chunk_rms = audioop.rms(chunk, bytes_per_sample)
+                chunk_ms = float(chunk_rms) * float(chunk_rms)
+                chunk_seconds = len(chunk) / bytes_per_second
+                sess.silence_ms_smoothed = _update_smoothed_ms(
+                    sess.silence_ms_smoothed, chunk_ms,
+                    chunk_seconds, _SILENCE_RMS_TAU_SECONDS,
+                )
+                smoothed_rms = math.sqrt(sess.silence_ms_smoothed)
+                if smoothed_rms >= silence_threshold_int:
                     sess.silence_armed = True
                     sess.silence_since = None
                 elif sess.silence_armed and sess.silence_since is None:
