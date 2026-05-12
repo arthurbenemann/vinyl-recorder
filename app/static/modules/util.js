@@ -40,8 +40,18 @@ export function fmtDateFull(unix) {
 // Compact source-format readout for library/album tables: "24b / 96 ksps",
 // "16b / 44.1 ksps". `b` = bit depth, `ksps` = kilo-samples-per-second.
 // Returns "—" when the FLAC didn't expose readable format info.
+// For album rows with `sides[]`, returns "mixed" when any side's
+// (bit_depth, sample_rate_khz) differs from the rest.
 export function fmtSourceFormat(f) {
   if (!f.bit_depth || !f.sample_rate_khz) return '—';
+  const sides = Array.isArray(f.sides) ? f.sides : null;
+  if (sides && sides.length > 1) {
+    const k = s => `${s.bit_depth || ''}|${s.sample_rate_khz || ''}`;
+    const first = k(sides[0]);
+    for (let i = 1; i < sides.length; i++) {
+      if (k(sides[i]) !== first) return 'mixed';
+    }
+  }
   const sr = Number.isInteger(f.sample_rate_khz)
     ? f.sample_rate_khz
     : f.sample_rate_khz.toFixed(1);

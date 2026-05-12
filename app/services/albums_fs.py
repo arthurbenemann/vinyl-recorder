@@ -252,22 +252,23 @@ def _summarize_album(album_id: str, manifest: dict) -> dict:
     sides = manifest.get("sides") or []
     side_entries: list[dict] = []
     side_paths: list[Path] = []
+    side_fmts: list[dict] = []
     for s in sides:
         p = d / s
         if not p.exists():
             continue
         side_paths.append(p)
+        sf = flac_format(p)
+        side_fmts.append(sf)
         side_entries.append({
             "filename":         s,
             "duration_seconds": flac_duration_seconds(p),
+            "bit_depth":        sf.get("bit_depth"),
+            "sample_rate_khz":  sf.get("sample_rate_khz"),
         })
     total_dur = sum((e["duration_seconds"] or 0.0) for e in side_entries) or None
-    fmt: dict = {}
-    size_bytes = 0
-    for p in side_paths:
-        size_bytes += p.stat().st_size
-        if not fmt:
-            fmt = flac_format(p)
+    fmt: dict = side_fmts[0] if side_fmts else {}
+    size_bytes = sum(p.stat().st_size for p in side_paths)
     plan = manifest.get("plan")
     kept_tracks = [t for t in (plan or {}).get("tracks", []) if not t.get("skip")]
     tags = manifest.get("tags") or {}
