@@ -81,8 +81,13 @@ def test_record_then_stop_creates_library_row(stack, page):
     )
 
     # Library may already have rows from earlier tests in the session;
-    # use a count delta rather than an absolute number.
-    initial_rows = page.locator("#lib-tbody tr").count()
+    # use a count delta rather than an absolute number. The selector targets
+    # real file rows only — `refreshLibRender` paints a single placeholder
+    # `<tr>` ("No recordings yet…") when the library is empty, which would
+    # otherwise inflate the initial count to 1 and mask the +1 from the new
+    # recording (placeholder gets replaced, not added to).
+    row_locator = page.locator("#lib-tbody tr.row-untagged")
+    initial_rows = row_locator.count()
 
     page.locator("#recbtn").click()
 
@@ -97,7 +102,7 @@ def test_record_then_stop_creates_library_row(stack, page):
 
     # The library refresh is async; allow a few seconds for the WS event
     # + GET /api/recordings round-trip.
-    expect(page.locator("#lib-tbody tr")).to_have_count(
+    expect(row_locator).to_have_count(
         initial_rows + 1, timeout=15_000,
     )
     expect(page.locator("#stext")).to_have_text("connected", timeout=5_000)
