@@ -8,33 +8,18 @@ auto-fill metadata + embed cover art from the Cover Art Archive.
 ## Features
 
 - One-click record / stop with live VU meters and a duration timer
-- Three-stage library view (collapsible) that mirrors the workflow:
-  **Raw** (just recorded) → **In-progress** (tagged + combined) →
-  **Music** (split into per-track FLACs ready for Jellyfin)
-- Output layout under `./output/`:
-  - `raw/` — fresh side recordings (FLAC, no tags). Drop your own files in
-    here too.
-  - `in-progress/{album_id}/` — one folder per album. Holds the original
-    side FLACs untouched plus an `album.json` manifest with tags, side
-    order, optional split plan, and an optional `cover.jpg`. Editing tags
-    in the UI patches the manifest, not the audio. Demote moves the sides
-    back into `raw/`.
-  - `music/` — final tracks in `Artist/Album (Year)/NN - Title.flac` shape
-    that Jellyfin scans natively. Tags + cover are embedded *only* at this
-    step; you can also drop pre-tagged folders here directly.
-- Direct MusicBrainz lookup, enriched with Discogs (catalog #, country,
-  format, matrix/runout) when MB has linked the release. No tokens or
-  setup — uses both services' public APIs.
-- Configurable default stream URL and optional auto-connect on page load
-- The Jellyfin output directory can be relocated via the
-  `MUSIC_OUTPUT_DIR` environment variable (e.g. to a network share)
+- Three-stage library: **Raw** (just recorded) → **In-progress**
+  (tagged + combined) → **Music** (per-track FLACs, ready for Jellyfin)
+- MusicBrainz tag lookup, enriched with Discogs (catalog #, country,
+  matrix/runout) — no tokens, uses both services' public APIs
+- Wave editor splits a combined LP into per-track FLACs with auto-detected
+  silences as seed cuts
 
 ## Screenshots
 
 ![Library view — raw sides, in-progress albums, finished music](images/library.png)
 *Library: raw side recordings on top, in-progress albums under tagging in
-the middle, the finished Jellyfin tree on the bottom — collapsible so the
-stage you're working on stays in view.*
+the middle, the finished Jellyfin tree on the bottom.*
 
 ![Combine modal — bulk-select raw sides into one album](images/album-combine.png)
 *Combining: bulk-select raw side recordings into a single album, then tag
@@ -42,8 +27,7 @@ once instead of per-side.*
 
 ![Wave editor — split a combined LP into per-track FLACs](images/split-editor.png)
 *Wave editor: auto-detected silences seed track splits; nudge the markers
-and label each track before exporting per-track FLACs into the Jellyfin
-tree.*
+and label each track before exporting.*
 
 ## Run it
 
@@ -54,57 +38,30 @@ Requires Docker or Podman with `compose` support.
 docker compose up -d
 ```
 
-Then open <http://localhost:8080>. Recordings persist in
-`./output/` on the host.
+Then open <http://localhost:8080>. Recordings persist under `./output/`
+(`raw/` → `in-progress/` → `music/`) on the host.
 
-To override settings without editing the tracked compose file, drop a
-`docker-compose.override.yml` next to it — `docker compose` auto-merges it.
-
-## Configuration
-
-Every runtime option has a sensible default; the most common one to change
-is `DEFAULT_STREAM_URL` (your Pi or other audio source). To override, copy
-[.env.example](.env.example) to `.env` next to `docker-compose.yml`,
-uncomment the lines you want, and recreate the container:
-
-```bash
-cp .env.example .env
-$EDITOR .env
-docker compose up -d
-```
-
-The example file is the full menu — every var with inline docs explaining
-what it does and the accepted values.
+To override settings, copy [.env.example](.env.example) to `.env` and
+recreate the container — every var is documented inline. For one-off
+compose tweaks, drop a `docker-compose.override.yml` next to
+`docker-compose.yml`.
 
 ## Pi capture service ([pi/](pi/))
 
-For a turntable rig, a Raspberry Pi with a HiFiBerry DAC-ADC Pro hat acts as
-the network audio source. [pi/server.py](pi/server.py) is a tiny stdlib-only
-HTTP service that:
-
-- streams 96 kHz / 24-bit stereo WAV from the HiFiBerry ADC at `GET /stream`
-- exposes `GET /info` and `POST /gain` so the recorder UI can drive the
-  HiFiBerry's analog PGA (−12 to +40 dB) from a slider in the browser
-- enforces RCA (single-ended) input + Mic Bias off + 0 dB digital trim on
-  every start, so the wiring assumptions stay correct after reboots
-
-### Install on the Pi
-
-The Pi only needs network access and SSH — the deploy installs `python3`
-+ `alsa-utils` itself via `apt`, so a stripped-down Pi OS Lite image
-works as well as the default Pi OS.
+For a turntable rig, a Raspberry Pi with a HiFiBerry DAC-ADC Pro hat acts
+as the network audio source. [pi/server.py](pi/server.py) streams 96 kHz /
+24-bit stereo WAV at `GET /stream`, and exposes the HiFiBerry's analog PGA
+gain to the recorder UI.
 
 Open the **⋮** menu in the recorder header → **deploy to pi…**, fill in
-host / username / password, hit deploy. Host + username persist in
-`localStorage`; the password is used per-request and never stored.
-SSH port is fixed at 22; for a custom port or a fully manual install,
-see [CONTRIBUTING.md](CONTRIBUTING.md#pi-capture-service--manual-deploy).
+host / username / password, hit deploy. Host + username persist locally;
+the password is used per-request and never stored. SSH port is fixed at
+22; for a custom port or a fully manual install see
+[CONTRIBUTING.md](CONTRIBUTING.md#pi-capture-service--manual-deploy).
 
-The default `DEFAULT_STREAM_URL` in `docker-compose.yml` already points
-at `http://pi-recorder:8000/stream`, so once the deploy reports active,
-hit **connect** in the recorder. The HiFiBerry gain slider auto-appears
-in the sidebar; non-Pi streams (e.g. SomaFM) work the same way — the
-slider stays hidden when `/info` isn't reachable.
+The default `DEFAULT_STREAM_URL` already points at
+`http://pi-recorder:8000/stream`, so once the deploy reports active, hit
+**connect** in the recorder. Non-Pi streams (e.g. SomaFM) work the same way.
 
 ## Network / trust model
 
@@ -114,7 +71,6 @@ behind your own auth layer (reverse-proxy basic-auth, SSO, etc.).
 
 ## Contributing
 
-Local-dev setup (build from source, the synthetic test-streams stack), PR
-title conventions, and the release flow all live in
-[CONTRIBUTING.md](CONTRIBUTING.md).
-
+Local-dev setup, the synthetic test-streams stack, PR conventions, and the
+release flow all live in [CONTRIBUTING.md](CONTRIBUTING.md).
+The deeper system overview is in [Architecture.md](Architecture.md).
