@@ -1880,7 +1880,7 @@ function formatMeasured(d) {
 
 // ── Library row inline track expansion ────────────────────────────────────
 async function toggleTracks(fname) {
-  const row = document.querySelector(`tr[data-album='${fname}']`);
+  const row = document.querySelector(`tr[data-album-id='${fname}']`);
   if (!row) return;
   const next = row.nextElementSibling;
   if (next && next.classList.contains('tracks-sub')) { next.remove(); return; }

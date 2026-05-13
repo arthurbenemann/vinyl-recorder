@@ -383,7 +383,7 @@ textarea:focus-visible,
 .lib-table col.c-size     { width: 80px; }
 .lib-table col.c-fmt      { width: 70px; }
 .lib-table col.c-status   { width: 110px; }
-.lib-table col.c-actions  { width: 150px; }
+.lib-table col.c-actions  { width: 180px; }
 .lib-table th, .lib-table td { overflow: hidden; text-overflow: ellipsis; }
 /* Action cells host icon buttons that must stay fully visible. */
 .lib-table th:last-child, .lib-table td:last-child { overflow: visible; }
@@ -550,11 +550,12 @@ textarea:focus-visible,
   cursor: help;
 }
 .tracks-sub { background: var(--surface); }
-.tracks-sub td { padding: 6px 12px 6px 28px; font-size: 11px; color: var(--muted); border-bottom: 0.5px solid var(--border); }
-.tracks-sub .track-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.tracks-sub td { padding: 6px 12px 8px 28px; font-size: 11px; color: var(--muted); border-bottom: 0.5px solid var(--border); }
+.tracks-sub .track-row { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 4px; }
+.tracks-sub .track-row:hover { background: var(--surface2); }
 .tracks-sub .tnum { display: inline-block; width: 24px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .tracks-sub .ttitle { color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tracks-sub .tdur { font-variant-numeric: tabular-nums; }
+.tracks-sub .tdur { font-variant-numeric: tabular-nums; min-width: 48px; text-align: right; }
 .tracks-sub .tsize { font-variant-numeric: tabular-nums; min-width: 60px; text-align: right; }
 
 /* Pi deployment modal — single-column form + scrolling log readout. */

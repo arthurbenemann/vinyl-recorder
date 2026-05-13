@@ -539,3 +539,115 @@ def test_split_with_cuts_across_side_boundaries(stack, page):
         for p in sides:
             try: p.unlink(missing_ok=True)
             except Exception: pass
+
+
+# ── Music row "N tracks" link expands an inline track list ───────────────
+def test_music_row_expands_into_track_list(stack, page):
+    """Clicking the `N tracks` link in the Music section toggles an inline
+    subrow under the album showing each track's title, duration, size,
+    plus a ▶ preview and ↓ download button. Click again to collapse.
+
+    Pins the data-attribute contract between the rendered row
+    (`tr[data-album-id]`) and `toggleTracks`' query selector — they
+    diverged once already (`data-album` vs `data-album-id`), which
+    silently broke the expansion since `querySelector` returned null
+    and the handler early-returned with no toast or console error."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        album_id = _combine_then_open_editor(
+            page, sides, artist="ExpandArtist", album="ExpandAlbum"
+        )
+        # Add a cut so the split produces 2 tracks. Wait for the debounced
+        # /plan POST so the editor isn't racing the next API call.
+        with page.expect_response(
+            lambda r: "/api/album/" in r.url and r.url.endswith("/plan")
+                      and r.request.method == "POST" and r.ok,
+            timeout=10_000,
+        ):
+            page.evaluate(
+                """
+                () => {
+                    weAddCutAtTime(4.0);
+                    weSetTitle(0, 'First Track');
+                    weSetTitle(1, 'Second Track');
+                }
+                """
+            )
+        # Split via API + refresh albums so the row moves into the Music
+        # section. Then close the editor so the modal isn't capturing
+        # focus when we click on the table beneath it.
+        page.evaluate(
+            f"""
+            async () => {{
+                const r = await fetch('/api/album/split', {{
+                    method: 'POST',
+                    headers: {{'Content-Type': 'application/json'}},
+                    body: JSON.stringify({{
+                        album_id: '{album_id}',
+                        tracks: [
+                            {{title: 'First Track',  duration_seconds: 4.0, skip: false}},
+                            {{title: 'Second Track', duration_seconds: 4.0, skip: false}},
+                        ],
+                        normalize: false,
+                        target_peak_db: -1.0,
+                        bit_depth: 0,
+                    }}),
+                }});
+                if (!r.ok) throw new Error('split failed: ' + r.status + ' ' + (await r.text()));
+                await refreshAlbums();
+                closeWaveEditor();
+            }}
+            """
+        )
+        # The row's `N tracks` link only renders once `a.split && a.track_count`
+        # is true on the server side — wait for the post-split refresh to land.
+        link_sel = f'tr[data-album-id="{album_id}"] a.track-count-link'
+        page.wait_for_selector(link_sel, timeout=10_000)
+
+        # Expand: click the link, expect a sibling `tr.tracks-sub` to appear
+        # carrying one `.track-row` per emitted track, each with the play /
+        # download affordances wired up.
+        page.click(link_sel)
+        sub_sel = f'tr[data-album-id="{album_id}"] + tr.tracks-sub'
+        page.wait_for_selector(sub_sel, timeout=5_000)
+        details = page.evaluate(
+            f"""
+            () => {{
+                const sub = document.querySelector('{sub_sel}');
+                const rows = Array.from(sub.querySelectorAll('.track-row'));
+                return {{
+                    count: rows.length,
+                    titles: rows.map(r => r.querySelector('.ttitle').textContent),
+                    hasPreviewBtns: rows.every(r =>
+                        r.querySelector('button.preview-btn[data-kind="track"]')),
+                    hasDownloadLinks: rows.every(r =>
+                        r.querySelector('a.icon-btn[href*="/track/"]')),
+                }};
+            }}
+            """
+        )
+        assert details['count'] == 2, f"expected 2 track rows, got {details}"
+        assert details['titles'] == ['First Track', 'Second Track'], details
+        assert details['hasPreviewBtns'], details
+        assert details['hasDownloadLinks'], details
+
+        # Collapse: click the link again, expect the subrow to be removed.
+        # `sub_sel` carries its own double quotes (the `data-album-id`
+        # attribute value), so build the selector in JS from the album_id
+        # via Playwright's `arg=` rather than f-string-substituting the whole
+        # selector — escaping the inner quotes would land us in syntax-error
+        # territory exactly the way an earlier revision of this test did.
+        page.click(link_sel)
+        page.wait_for_function(
+            "id => !document.querySelector("
+            "  `tr[data-album-id=\"${id}\"] + tr.tracks-sub`)",
+            arg=album_id,
+            timeout=5_000,
+        )
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
