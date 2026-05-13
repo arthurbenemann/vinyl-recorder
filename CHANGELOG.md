@@ -1,3 +1,13 @@
+## v1.2.0 — 2026-05-13
+
+### Features
+- **albums:** Delete originals for finished albums to free disk (#10)
+- **record:** Smoothed-RMS silence detector for vinyl runouts (#9)
+
+### Bug Fixes
+- **albums:** Strip non-tag keys from manifest.tags on write (#11)
+- **albums:** Expand Music row track list + fit 5-button actions cell (#12)
+
 ## v1.1.1 — 2026-05-12
 
 ### Features
