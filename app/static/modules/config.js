@@ -52,15 +52,27 @@ export async function applyConfig() {
     // threshold (dBFS) is server-side only (SILENCE_THRESHOLD_DB) so
     // there's nothing to seed for it. When the env feature flag is off
     // (default_auto_stop_on_silence=false), seed the dropdown to "0"
-    // (∞ disabled) — explicit `0` value matches the <option value="0">.
+    // (∞ disabled). When it's on but SILENCE_SECONDS doesn't match a
+    // dropdown option exactly (the env can be any positive int but the
+    // dropdown carries a quantised set of 10/20/30/60), snap to the
+    // closest non-zero option rather than fall back to the HTML default.
     const silSel = document.getElementById('silence-sel');
     if (silSel && localStorage.getItem('autoStopSilenceSeconds') === null) {
-      let v = '0';
-      if (c.default_auto_stop_on_silence === true
-          && typeof c.default_silence_seconds === 'number') {
-        v = String(c.default_silence_seconds);
+      if (c.default_auto_stop_on_silence !== true) {
+        silSel.value = '0';
+      } else if (typeof c.default_silence_seconds === 'number') {
+        const target = c.default_silence_seconds;
+        const opts = [...silSel.options]
+          .map(o => parseInt(o.value, 10))
+          .filter(n => Number.isFinite(n) && n > 0);
+        if (opts.length) {
+          let best = opts[0];
+          for (const n of opts) {
+            if (Math.abs(n - target) < Math.abs(best - target)) best = n;
+          }
+          silSel.value = String(best);
+        }
       }
-      if ([...silSel.options].some(o => o.value === v)) silSel.value = v;
     }
     // auto_connect is now handled server-side at app startup; nothing to do
     // here besides letting the WS hello replay tell us the current state.
