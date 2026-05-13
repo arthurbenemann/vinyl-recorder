@@ -898,6 +898,61 @@ function _weRemapForSides(oldSides, newSides, plan) {
 // sandbox in tests/unit/wave_editor_remap.test.js stubs it the same way.
 if (typeof window !== 'undefined') window._weRemapForSides = _weRemapForSides;
 
+// ── Per-region sleeve-style labels (A1, A2, B1, …) ───────────────────────
+// Two sources:
+//   1. Discogs `position` per track, stashed in `we.positions` when a
+//      tracklist is applied (Discogs path).
+//   2. Auto-derived from `we.sides` + the current cut layout — the region's
+//      start time picks its side letter, and a per-side counter assigns
+//      the track index (manual-cut path). Skipped / unfit regions are
+//      excluded from the per-side numbering, mirroring how the output
+//      tracklist actually exports.
+//
+// _weEffectivePositions returns whichever is active so render code stays
+// agnostic. Single-side records skip derivation — letters wouldn't add
+// information over the plain sequential number.
+function _weDerivedPositions() {
+  const sides = we.sides || [];
+  const need = Math.max(1, we.cuts.length + 1);
+  if (sides.length < 2 || !we.cuts.length) {
+    return new Array(need).fill('');
+  }
+  const sideEnds = [];
+  let acc = 0;
+  for (const s of sides) {
+    acc += Number(s.duration_seconds) || 0;
+    sideEnds.push(acc);
+  }
+  const boundaries = [0, ...we.cuts, we.total];
+  const out = new Array(need).fill('');
+  const perSideCount = new Array(sides.length).fill(0);
+  for (let i = 0; i < need; i++) {
+    if (we.skipped && we.skipped[i]) continue;
+    const start = boundaries[i];
+    const end   = boundaries[i + 1] != null ? boundaries[i + 1] : we.total;
+    if (end - start < 0.5) continue;  // matches renderTracks's "unfit" gate
+    // First side whose end is strictly past `start` — i.e. the side the
+    // region begins on. Falls back to the last side for the album-end
+    // edge case (start === total).
+    let sideIdx = sideEnds.findIndex(e => start < e - 0.001);
+    if (sideIdx < 0) sideIdx = sideEnds.length - 1;
+    perSideCount[sideIdx] += 1;
+    out[i] = String.fromCharCode(65 + sideIdx) + perSideCount[sideIdx];
+  }
+  return out;
+}
+
+function _weEffectivePositions() {
+  const havePositions = (we.positions || []).some(p => p);
+  if (havePositions) return we.positions.slice();
+  return _weDerivedPositions();
+}
+
+if (typeof window !== 'undefined') {
+  window._weDerivedPositions  = _weDerivedPositions;
+  window._weEffectivePositions = _weEffectivePositions;
+}
+
 // ── Minimap viewport rect + cut markers ───────────────────────────────────
 function renderMinimapOverlay() {
   const wrap = document.getElementById('we-minimap-wrap');
@@ -1298,18 +1353,19 @@ function renderWaveformOverlay() {
     }
   }
 
-  // Cut handles. When a Discogs tracklist is applied, each region carries a
-  // `position` (A1, B2, …). The handle just before region i+1 gets that
-  // region's position as a small badge — the same string also appears in the
-  // track list, so the visual link between sleeve, waveform and list is
-  // unbroken.
+  // Cut handles. The handle just before region i+1 gets that region's
+  // sleeve-style position (A1, B2, …) as a small badge — either from a
+  // Discogs tracklist when one is applied, or auto-derived from the side
+  // layout + cut order on a manual split. The same string appears in the
+  // track list, so the link between sleeve, waveform and list is unbroken.
+  const effPositions = _weEffectivePositions();
   we.cuts.forEach((t, i) => {
     const pct = _timeToPctView(t);
     if (pct == null) return;
     const el = document.createElement('div');
     el.className = 'wave-cut';
     el.style.left = pct + '%';
-    const pos = (we.positions && we.positions[i + 1]) || '';
+    const pos = effPositions[i + 1] || '';
     el.title = pos
       ? `Cut at ${fmtMMSS(t)} — ${pos} starts here. Drag to nudge, shift-drag to also shift later cuts, right-click to delete.`
       : `Cut at ${fmtMMSS(t)} — drag to nudge, shift-drag to also shift later cuts, right-click to delete`;
@@ -1358,12 +1414,12 @@ function renderTracks() {
   // visibility but excluded from the output numbering and not exported.
   let outNum = 0;
   let exportable = 0;
-  // Pick which identifier the `pn` column shows. When a Discogs tracklist
-  // is applied, the per-region `position` (A1, B2, …) is more useful than
-  // a re-flowed sequential number — it ties the on-screen row to the
-  // physical sleeve and to the matching cut handle's badge. Sequential
-  // numbers are kept as a fallback (manual splits, MB-only releases).
-  const havePositions = (we.positions || []).some(p => p);
+  // The `pn` column shows the region's sleeve-style position (A1, B2, …)
+  // when available — either from a Discogs tracklist or auto-derived from
+  // the side layout + cut order on a manual split. Sequential numbers
+  // remain the fallback for single-side records and the no-cuts case.
+  const effPositions  = _weEffectivePositions();
+  const havePositions = effPositions.some(p => p);
   host.innerHTML = boundaries.slice(0, -1).map((start, i) => {
     const end = boundaries[i + 1];
     const isFirst = i === 0;
@@ -1371,7 +1427,7 @@ function renderTracks() {
     const unfit   = (end - start) < 0.5;
     if (!skipped && !unfit) { outNum += 1; exportable += 1; }
     const playing = we.playingTrack === i ? 'playing' : '';
-    const pos = (we.positions && we.positions[i]) || '';
+    const pos = effPositions[i] || '';
     const num = (skipped || unfit)
       ? '—'
       : (havePositions && pos ? pos : `${outNum}.`);
