@@ -26,7 +26,7 @@ import {
   wireSectionCollapse, previewIs,
 } from './modules/library.js';
 import {
-  refreshAlbums,
+  refreshAlbums, scanAndRefreshAlbums,
   toggleAlbumRow, toggleMusicRow, toggleAllAlbums, toggleAllMusic,
   clearAlbumsSelection, clearMusicSelection,
   bulkDeleteAlbums, bulkDeleteMusic,
@@ -80,6 +80,11 @@ window.togglePause = togglePause;
 // library / albums
 window.refreshLib = refreshLib;
 window.refreshAlbums = refreshAlbums;
+window.scanAndRefreshAlbums = scanAndRefreshAlbums;
+// The "↻ refresh" action runs the music/ orphan scan + reloads both
+// sections. The 15 s poll deliberately skips the scan (it's a user-driven
+// concern, not something that needs to happen on every tick).
+window.refreshAll = () => { scanAndRefreshAlbums(); refreshLib(); };
 window.togglePreview = togglePreview;
 window.togglePreviewTrack = togglePreviewTrack;
 window.deleteFile = deleteFile;
@@ -188,7 +193,9 @@ document.addEventListener('DOMContentLoaded', () => {
   wireLogCollapse();
   wsConnect();
   refreshLib();
-  refreshAlbums();
+  // Scan music/ for manually-added albums on first paint; subsequent polls
+  // skip the scan and just refresh the listing.
+  scanAndRefreshAlbums();
   refreshDiskFree();
 
   _startLibPoll();

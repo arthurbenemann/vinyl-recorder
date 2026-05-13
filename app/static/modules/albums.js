@@ -174,6 +174,23 @@ export async function refreshAlbums() {
   } catch (e) { console.error(e); }
 }
 
+// Trigger the backend scan of `music/` for manually-dropped albums, then
+// pull the listing. Called on first paint and on the user-driven "refresh"
+// button — NOT on the 15 s poll, where the cost of walking `music/` would
+// add up and offer little value (orphans are user-driven, not periodic).
+export async function scanAndRefreshAlbums() {
+  try {
+    const r = await fetch('/api/music/scan', { method: 'POST' });
+    if (r.ok) {
+      const d = await r.json();
+      if (d.imported) {
+        toast(`✓ Imported ${d.imported} album${d.imported === 1 ? '' : 's'} from music/`, 'ok');
+      }
+    }
+  } catch (e) { console.error(e); }
+  return refreshAlbums();
+}
+
 // ── Per-album failure tracking (client-only, session-scoped) ──────────────
 // Long-running album jobs (split, measure, normalize, silence-detect) only
 // surface failures via a 4 s toast today, which is easy to miss. We keep a
@@ -231,11 +248,21 @@ function _albumRowHtml(a, opts) {
         onclick="clearAlbumFailure(this.dataset.fname)">failed: ${htmlEscape(err.op)}</button>`
     : '';
   // Sources-purged pill — informs the user the album is "locked" (no source
-  // audio left, so the wave editor / demote / re-split paths are gone).
+  // audio left, so the wave editor / demote / re-split paths are gone). The
+  // label changes to "external" for albums auto-imported from a manually-
+  // dropped music/ folder so the user can tell the two cases apart at a
+  // glance — "external" never had sides; "locked" had them and dropped them.
   const lockedPill = a.sources_purged
-    ? ` <span class="locked-pill" title="Originals deleted — splits and encoding are locked in. The wave editor can no longer re-split or re-encode this album." aria-label="Originals deleted — locked">🔒 locked</span>`
+    ? (a.external
+        ? ` <span class="locked-pill" title="Imported from music/ — no in-progress source audio. Tag-edit and delete-album still work; re-split is not possible." aria-label="Imported from music/">📥 external</span>`
+        : ` <span class="locked-pill" title="Originals deleted — splits and encoding are locked in. The wave editor can no longer re-split or re-encode this album." aria-label="Originals deleted — locked">🔒 locked</span>`)
     : '';
-  const countCell = `${baseCount}${failPill}${lockedPill}`;
+  // Tag-source warning — set on import when the FLAC's embedded tags
+  // disagree with what the folder name claims. Hover for the per-field diff.
+  const tagWarnPill = a.tag_warning
+    ? ` <span class="tag-warn-pill" title="${htmlEscape('Tags vs folder name disagree — ' + a.tag_warning)}" aria-label="${htmlEscape('Tag mismatch: ' + a.tag_warning)}">ⓘ tag mismatch</span>`
+    : '';
+  const countCell = `${baseCount}${failPill}${lockedPill}${tagWarnPill}`;
   const splitTitle = a.split ? 'Re-edit splits' : 'Split into tracks';
   // Demote button is offered on every album; for split albums the dialog
   // warns that music/ stays put.

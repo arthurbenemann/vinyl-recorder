@@ -209,6 +209,48 @@ def test_purge_sources_split_album_clears_sides(monkeypatch):
         _cleanup_album(aid)
 
 
+# ── /api/music/scan ──────────────────────────────────────────────────────
+def test_music_scan_imports_orphan_dir(monkeypatch):
+    """A manually-dropped folder under music/ shows up as a locked external
+    album after a scan call, with the music_relpath the importer parsed
+    from the path."""
+    from services import albums_fs, ffmpeg as ffmpeg_mod
+    from state import MUSIC_DIR
+    monkeypatch.setattr(ffmpeg_mod, "flac_duration_seconds", lambda p: 0.0)
+    # Avoid hitting metaflac in CI — let the importer fall back to path tags.
+    monkeypatch.setattr(albums_fs, "read_tags", lambda p: {})
+    monkeypatch.setattr(albums_fs, "extract_cover_to_album",
+                        lambda aid, src: None)
+
+    relpath = "Test Artist API/Test Album (2023)"
+    d = MUSIC_DIR / relpath
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "01 - Track.flac").write_bytes(b"")
+    try:
+        r = _client().post("/api/music/scan")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["imported"] >= 1
+        # The orphan now appears in the listing as an external locked album.
+        rows = _client().get("/api/albums").json()["albums"]
+        match = next(r for r in rows if r.get("music_relpath") == relpath)
+        assert match["external"] is True
+        assert match["sources_purged"] is True
+        assert match["split"] is True
+        assert match["artist"] == "Test Artist API"
+        assert match["album"]  == "Test Album"
+        assert match["year"]   == "2023"
+        # Subsequent scan is idempotent.
+        r2 = _client().post("/api/music/scan").json()
+        assert r2["imported"] == 0
+    finally:
+        for aid in body.get("album_ids", []):
+            _cleanup_album(aid)
+        # Best-effort cleanup of the music/ tree we created.
+        import shutil
+        shutil.rmtree(MUSIC_DIR / "Test Artist API", ignore_errors=True)
+
+
 # ── /api/album/{album_id}/plan ───────────────────────────────────────────
 def test_update_plan_unknown_album_returns_404():
     r = _client().post("/api/album/not-real/plan", json={"tracks": []})

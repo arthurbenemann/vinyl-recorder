@@ -32,7 +32,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from services.ffmpeg import flac_duration_seconds, flac_format, safe_path_component
+from services.ffmpeg import flac_duration_seconds, flac_format, read_tags, safe_path_component
 from state import IN_PROGRESS_DIR, MUSIC_DIR, RAW_DIR
 
 # Album dir basenames are restricted to lowercase hex / dashes / underscores
@@ -304,6 +304,8 @@ def _summarize_album(album_id: str, manifest: dict) -> dict:
         "music_relpath":    music_relpath,
         "track_count":      len(kept_tracks),
         "sources_purged":   bool(manifest.get("sources_purged")),
+        "external":         bool(manifest.get("external")),
+        "tag_warning":      manifest.get("tag_warning") or None,
     }
 
 
@@ -498,6 +500,218 @@ def cover_path(album_id: str) -> Optional[Path]:
         return None
     p = d / rel
     return p if p.exists() else None
+
+
+# Audio extensions used by `import_external_music` to recognise an album
+# folder. Kept in sync with `_AUDIO_EXTS` over in split_orchestrator — same
+# set the split path emits — without a cross-module import (this layer must
+# not depend on the orchestrator, which imports albums_fs).
+_IMPORT_AUDIO_EXTS = (".flac", ".wav", ".mp3", ".ogg", ".m4a")
+
+# `Artist/Album (Year)` is the Jellyfin shape `music_dir_for` writes. We
+# accept either form on import — most user libraries have a year suffix,
+# but not all.
+_YEAR_SUFFIX_RE = re.compile(r"^(.*?)\s*\(([0-9]{4})\)\s*$")
+
+
+def _parse_relpath_tags(relpath: str) -> dict:
+    """Parse `Artist/Album (Year)` (or `Artist/Album`) into `{artist, album,
+    year}`. Returns whatever fields can be confidently inferred from the
+    path; missing parts come back absent rather than blank.
+
+    Two-level paths only — anything else (single segment, nested deeper)
+    yields an empty dict so the caller falls back to FLAC tags."""
+    parts = [p for p in relpath.replace("\\", "/").split("/") if p]
+    if len(parts) != 2:
+        return {}
+    artist, album_seg = parts
+    out = {"artist": artist}
+    m = _YEAR_SUFFIX_RE.match(album_seg)
+    if m:
+        out["album"] = m.group(1).strip()
+        out["year"]  = m.group(2)
+    else:
+        out["album"] = album_seg
+    return out
+
+
+def _tag_warning(flac_tags: dict, path_tags: dict) -> Optional[str]:
+    """Human-readable note when the FLAC's embedded Vorbis tags disagree
+    with what the directory layout claims. Returned verbatim to the UI as
+    a small "ⓘ" pill next to the row's locked indicator. None when there
+    is nothing to flag."""
+    if not flac_tags or not path_tags:
+        return None
+    diffs = []
+    for k in ("artist", "album", "year"):
+        a = (flac_tags.get(k) or "").strip()
+        b = (path_tags.get(k) or "").strip()
+        if a and b and a != b:
+            diffs.append(f"{k}: tag={a!r}, folder={b!r}")
+    return "; ".join(diffs) or None
+
+
+def _read_album_tags_from_flac(audio_files: list[Path]) -> dict:
+    """Walk `audio_files` until one yields a usable Vorbis tag set; only
+    FLACs respond to `metaflac --export-tags-to`. The first hit wins —
+    every track in an album is expected to share artist/album/year/genre
+    tags, so probing further isn't worth the subprocess cost."""
+    for f in audio_files:
+        if f.suffix.lower() != ".flac":
+            continue
+        raw = read_tags(f)
+        if not raw:
+            continue
+        # `read_tags` returns the on-disk Vorbis case ("ARTIST", "DATE"); the
+        # manifest uses lowercase keys ("artist", "year"). Map them here.
+        out: dict = {}
+        if raw.get("ARTIST"):         out["artist"] = raw["ARTIST"]
+        if raw.get("ALBUM"):          out["album"]  = raw["ALBUM"]
+        if raw.get("DATE"):           out["year"]   = raw["DATE"]
+        if raw.get("GENRE"):          out["genre"]  = raw["GENRE"]
+        if raw.get("LABEL"):          out["label"]  = raw["LABEL"]
+        if raw.get("CATALOGNUMBER"):  out["catalog_number"] = raw["CATALOGNUMBER"]
+        if raw.get("RELEASECOUNTRY"): out["country"] = raw["RELEASECOUNTRY"]
+        if raw.get("COMPOSER"):       out["composer"] = raw["COMPOSER"]
+        if raw.get("CONDUCTOR"):      out["conductor"] = raw["CONDUCTOR"]
+        if out:
+            return out
+    return {}
+
+
+def _existing_music_relpaths() -> set[str]:
+    """The set of `music_relpath` strings already claimed by an
+    in-progress/{album_id}/album.json. Used by the importer to skip dirs
+    that are already represented in the listing — both the normal split-
+    emitted case AND a prior import."""
+    out: set[str] = set()
+    for aid in list_album_ids():
+        m = read_manifest(aid)
+        rel = m.get("music_relpath")
+        if rel:
+            out.add(rel)
+    return out
+
+
+def _scan_music_for_orphans() -> list[tuple[str, Path]]:
+    """Walk `music/` two levels deep (`<Artist>/<Album>/`) and yield every
+    album dir that holds at least one audio file. Returned as
+    `(relpath, abspath)` pairs so the caller can keep both forms without
+    re-deriving."""
+    if not MUSIC_DIR.is_dir():
+        return []
+    out: list[tuple[str, Path]] = []
+    for artist_dir in sorted(MUSIC_DIR.iterdir()):
+        if not artist_dir.is_dir() or artist_dir.name.startswith("."):
+            continue
+        for album_dir_ in sorted(artist_dir.iterdir()):
+            if not album_dir_.is_dir() or album_dir_.name.startswith("."):
+                continue
+            has_audio = any(
+                p.suffix.lower() in _IMPORT_AUDIO_EXTS and p.is_file()
+                for p in album_dir_.iterdir()
+            )
+            if not has_audio:
+                continue
+            relpath = f"{artist_dir.name}/{album_dir_.name}"
+            out.append((relpath, album_dir_))
+    return out
+
+
+def import_external_music() -> list[str]:
+    """Surface manually-added albums in `music/` as locked rows in the UI.
+
+    Walks `music/<Artist>/<Album (Year)>/`, and for each dir without a
+    matching in-progress manifest, creates a stub `album.json` carrying:
+      - tags from the FLAC's Vorbis tags AND/OR parsed from the folder
+        name (FLAC wins on conflicts; `tag_warning` records the diff)
+      - `music_relpath`           pointing back at the music dir
+      - `sources_purged: True`    so the row paints as "locked"
+      - `external: True`          a marker so a future re-scan recognises
+                                  this as an auto-imported row (not a
+                                  genuine in-progress workspace)
+      - `cover: cover.jpg`        if either a sidecar `cover.jpg`/`folder.jpg`
+                                  exists or one of the FLACs has embedded art
+      - `plan.tracks`             one entry per non-skipped audio file, so
+                                  the row's "N tracks" count + size_mb add up
+                                  even though there are no sides on disk
+
+    Returns the newly-created album_ids. Idempotent: re-running picks up
+    any new orphans and skips dirs that already have a matching manifest."""
+    claimed = _existing_music_relpaths()
+    created: list[str] = []
+    for relpath, abspath in _scan_music_for_orphans():
+        if relpath in claimed:
+            continue
+
+        audio_files = sorted(
+            p for p in abspath.iterdir()
+            if p.is_file() and p.suffix.lower() in _IMPORT_AUDIO_EXTS
+        )
+        flac_tags = _read_album_tags_from_flac(audio_files)
+        path_tags = _parse_relpath_tags(relpath)
+        merged: dict = {**path_tags, **flac_tags}  # FLAC wins on conflict
+        warning = _tag_warning(flac_tags, path_tags)
+
+        # Synthesize a track list from the on-disk files so the row reports
+        # something meaningful. Titles come from the filename stem with any
+        # leading "NN - " stripped, which matches the orchestrator's emit
+        # pattern.
+        track_entries: list[dict] = []
+        track_strip_re = re.compile(r"^\d+\s*[-_.]\s*")
+        for f in audio_files:
+            title = track_strip_re.sub("", f.stem) or f.stem
+            dur = flac_duration_seconds(f) if f.suffix.lower() == ".flac" else None
+            track_entries.append({
+                "title": title,
+                "duration_seconds": float(dur or 0.0),
+                "skip": False,
+            })
+
+        # Allocate a fresh album_id. Re-roll on the (vanishingly rare)
+        # collision the same way create_album does.
+        for _ in range(8):
+            aid = new_album_id()
+            if not album_dir(aid).exists():
+                album_dir(aid).mkdir(parents=True)
+                break
+        else:
+            continue  # pathological — skip and move on
+
+        # Bring across album art so the row's thumbnail isn't blank. Prefer
+        # a sidecar image if present (most ripping tools drop one); fall back
+        # to extracting from the first FLAC's PICTURE block.
+        cover_field: Optional[str] = None
+        for cand_name in ("cover.jpg", "cover.png", "folder.jpg", "folder.png"):
+            cand = abspath / cand_name
+            if cand.is_file():
+                try:
+                    (album_dir(aid) / "cover.jpg").write_bytes(cand.read_bytes())
+                    cover_field = "cover.jpg"
+                    break
+                except OSError:
+                    pass
+        if cover_field is None:
+            for f in audio_files:
+                if f.suffix.lower() != ".flac":
+                    continue
+                if extract_cover_to_album(aid, f) is not None:
+                    cover_field = "cover.jpg"
+                    break
+
+        manifest = _stub_manifest()
+        manifest["tags"]           = merged
+        manifest["sides"]          = []
+        manifest["cover"]          = cover_field
+        manifest["plan"]           = {"tracks": track_entries}
+        manifest["music_relpath"]  = relpath
+        manifest["sources_purged"] = True
+        manifest["external"]       = True
+        if warning:
+            manifest["tag_warning"] = warning
+        write_manifest(aid, manifest)
+        created.append(aid)
+    return created
 
 
 def extract_cover_to_album(album_id: str, src_flac: Path) -> Optional[Path]:

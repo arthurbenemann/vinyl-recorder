@@ -163,7 +163,7 @@
   <!-- MAIN: library -->
   <div class="content">
     <div class="action-row">
-      <button class="btn" onclick="refreshLib()">↻ refresh</button>
+      <button class="btn" onclick="refreshAll()" title="Reload Raw + albums; also scans music/ for manually-added albums.">↻ refresh</button>
       <input id="lib-search" class="lib-search" placeholder="search artist / album / year / label / genre …"
              oninput="onLibSearchInput(this.value)" />
       <button class="btn-small" id="lib-filter-clear" onclick="clearLibFilter()" hidden>clear</button>

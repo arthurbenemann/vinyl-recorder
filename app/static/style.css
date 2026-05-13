@@ -521,7 +521,9 @@ textarea:focus-visible,
 }
 /* "Originals deleted" pill — non-interactive, indicates the album's source
    sides have been purged so re-edit / demote are no longer possible. Uses
-   the muted palette to avoid implying a problem (it's a finished state). */
+   the muted palette to avoid implying a problem (it's a finished state).
+   The `tag-warn-pill` variant is for the auto-import mismatch note —
+   yellow-ish to draw the eye without the red of fail-pill. */
 .locked-pill {
   display: inline-block;
   margin-left: 6px;
@@ -533,6 +535,19 @@ textarea:focus-visible,
   border-radius: 3px;
   vertical-align: middle;
   white-space: nowrap;
+}
+.tag-warn-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.05em;
+  color: #c69400;
+  background: rgba(218,165,32,0.10);
+  border: 0.5px solid rgba(218,165,32,0.5);
+  border-radius: 3px;
+  vertical-align: middle;
+  white-space: nowrap;
+  cursor: help;
 }
 .tracks-sub { background: var(--surface); }
 .tracks-sub td { padding: 6px 12px 6px 28px; font-size: 11px; color: var(--muted); border-bottom: 0.5px solid var(--border); }

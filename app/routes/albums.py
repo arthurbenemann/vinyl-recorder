@@ -55,6 +55,23 @@ async def get_albums():
     return {"albums": albums_fs.list_albums()}
 
 
+@router.post("/api/music/scan")
+async def scan_music():
+    """Surface manually-dropped albums under `music/` as locked rows.
+
+    Walks `music/<Artist>/<Album>/`, and for each dir without a matching
+    `in-progress/{album_id}/album.json`, creates a stub manifest tagged
+    `sources_purged: true` + `external: true` so the row paints as locked
+    (no re-split / demote actions). Tags come from the FLAC's Vorbis tags
+    first, falling back to / cross-checked against the folder name —
+    mismatches are reported per-row via `tag_warning`.
+
+    The frontend calls this on initial page load and on the user-driven
+    refresh button so the 15 s poll stays a cheap listing read."""
+    created = await asyncio.to_thread(albums_fs.import_external_music)
+    return {"imported": len(created), "album_ids": created}
+
+
 @router.post("/api/combine")
 async def combine_album(req: CombineRequest):
     """Promote N raw sides into a new in-progress album. Metadata-only —
