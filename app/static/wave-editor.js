@@ -979,6 +979,26 @@ function weHoverMove(e) {
     we.cuts[we.dragging.i] = t;
     we.cuts.sort((a, b) => a - b);
     we.dragging.i = we.cuts.indexOf(t);
+    we.dirty = true;
+    renderWaveformOverlay();
+    renderMinimapOverlay();
+    renderTracks();
+    return;
+  }
+  if (we.dragging?.kind === 'cutGroup') {
+    // Rigid translation of the grabbed cut and every cut after it. Snap
+    // the leading cut to silence, then translate the tail by that same
+    // delta so relative spacing stays exact. Clamp at both ends so the
+    // lead can't cross the cut before it and the trailing tail can't run
+    // past we.total — the group stays sorted automatically.
+    const { i, orig } = we.dragging;
+    const tLead = _snapToSilence(_xToTime(we.hoverX));
+    const minLead = i > 0 ? orig[i - 1] : 0;
+    const maxLead = orig[i] + (we.total - orig[orig.length - 1]);
+    const newLead = Math.max(minLead, Math.min(maxLead, tLead));
+    const delta = newLead - orig[i];
+    for (let j = i; j < orig.length; j++) we.cuts[j] = orig[j] + delta;
+    we.dirty = true;
     renderWaveformOverlay();
     renderMinimapOverlay();
     renderTracks();
@@ -1161,7 +1181,17 @@ function weKeyDown(e) {
 function weStartDrag(i, e) {
   e.preventDefault();
   e.stopPropagation();
-  we.dragging = { kind: 'cut', i };
+  // Shift+drag rigidly translates this cut and every cut after it. Useful
+  // when one early cut is off by a constant and the rest of the album has
+  // shifted in lockstep — common after a re-detect or a side-flip nudge.
+  // Snapshot the original cut positions so each mousemove computes the
+  // delta from the start, not from the previous frame (otherwise snap
+  // jitter on the lead would compound into drift on the tail).
+  if (e.shiftKey) {
+    we.dragging = { kind: 'cutGroup', i, orig: we.cuts.slice() };
+  } else {
+    we.dragging = { kind: 'cut', i };
+  }
   const onMove = ev => weHoverMove(ev);
   const onUp   = () => {
     we.dragging = null;
@@ -1225,7 +1255,7 @@ function renderWaveformOverlay() {
     const el = document.createElement('div');
     el.className = 'wave-cut';
     el.style.left = pct + '%';
-    el.title = `Cut at ${fmtMMSS(t)} — drag to nudge, right-click to delete`;
+    el.title = `Cut at ${fmtMMSS(t)} — drag to nudge, shift-drag to also shift later cuts, right-click to delete`;
     el.addEventListener('mousedown',   ev => weStartDrag(i, ev));
     el.addEventListener('contextmenu', ev => weDeleteCut(i, ev));
     const grip = document.createElement('div');
