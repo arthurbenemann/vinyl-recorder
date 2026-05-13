@@ -1374,6 +1374,10 @@ function renderTracks() {
     const lengthTitle = unfit
       ? 'Track from Discogs is longer than the recording — not exported'
       : `Track length ${fmtMMSS(end - start)}`;
+    // Prefix the duration with "↦ " so the value reads unambiguously as a
+    // length running from the marker onward, not as a stop-time companion
+    // to the marker location to its left.
+    const lengthDisplay = unfit ? lengthText : `<span class="len-tag">↦</span> ${lengthText}`;
     const rowClass = ['wave-track'];
     if (skipped) rowClass.push('skip');
     if (unfit)   rowClass.push('unfit');
@@ -1390,7 +1394,7 @@ function renderTracks() {
                title="${htmlEscape(markerTitle)}"
                aria-label="${htmlEscape(markerAria)}"
                onchange="weSetCutAt(${i}, parseMMSS(this.value))">
-        <span class="range" title="${htmlEscape(lengthTitle)}" aria-label="${htmlEscape('Length ' + lengthText)}">${lengthText}</span>
+        <span class="range" title="${htmlEscape(lengthTitle)}" aria-label="${htmlEscape('Length ' + lengthText)}">${lengthDisplay}</span>
         <button class="skip-btn ${skipped ? 'on' : ''}"
                 title="${skipped ? 'Restore region as a track' : 'Skip — drop region from output and measurement'}"
                 aria-label="${htmlEscape((skipped ? 'Restore track ' : 'Skip track ') + ctx)}"

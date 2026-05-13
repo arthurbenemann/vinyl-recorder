@@ -677,7 +677,7 @@ textarea:focus-visible,
 
 /* Wave editor — track list */
 .wave-tracks { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; padding-right: 2px; margin-top: 8px; }
-.wave-track { display: grid; grid-template-columns: 28px 28px 1fr 110px 70px 24px 24px; gap: 6px; align-items: center; padding: 6px 10px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; }
+.wave-track { display: grid; grid-template-columns: 28px 28px 1fr 110px 84px 24px 24px; gap: 6px; align-items: center; padding: 6px 10px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; }
 .wave-track .pn { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
 .wave-track .play-track { width: 22px; height: 22px; padding: 0; border-radius: 4px; background: var(--surface2); border: 0.5px solid var(--border2); color: var(--text); font-size: 11px; cursor: pointer; line-height: 1; }
 .wave-track .play-track:hover { background: var(--bg); }
@@ -685,6 +685,7 @@ textarea:focus-visible,
 .wave-track input { background: var(--surface2); border: 0.5px solid var(--border2); border-radius: 4px; color: var(--text); font-family: var(--mono); font-size: 11px; padding: 4px 6px; outline: none; min-width: 0; }
 .wave-track .start-input { font-variant-numeric: tabular-nums; text-align: right; }
 .wave-track .range { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.wave-track .range .len-tag { display: inline-block; margin-right: 2px; color: var(--muted); opacity: 0.7; font-size: 10px; }
 .wave-track .del { width: 22px; height: 22px; padding: 0; border-radius: 4px; background: transparent; border: 0.5px solid var(--border2); color: var(--muted); cursor: pointer; line-height: 1; font-size: 12px; }
 .wave-track .del:hover { color: var(--accent); border-color: rgba(226,75,74,0.35); }
 .wave-track .del[disabled] { opacity: 0.3; cursor: default; }
