@@ -95,9 +95,9 @@ try:
 except ValueError:
     DEFAULT_SILENCE_THRESHOLD_DB = -40.0
 try:
-    DEFAULT_SILENCE_SECONDS = max(1, int(_silence_sec_env.strip() or "20"))
+    DEFAULT_SILENCE_SECONDS = max(1, int(_silence_sec_env.strip() or "10"))
 except ValueError:
-    DEFAULT_SILENCE_SECONDS = 20
+    DEFAULT_SILENCE_SECONDS = 10
 
 # Discogs collection-aware tagging. When set, the auto-tag candidate panel
 # surfaces matches from the user's Discogs collection in a separate section
@@ -278,7 +278,7 @@ class RecordRequest(BaseModel):
     # env-default as fallback so an unsent field falls back to ops policy.
     auto_stop_on_silence: bool  = False
     silence_threshold_db: float = -40.0
-    silence_seconds:      int   = 20
+    silence_seconds:      int   = 10
 
 
 class DurationEditRequest(BaseModel):
