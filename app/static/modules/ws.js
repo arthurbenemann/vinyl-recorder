@@ -6,7 +6,7 @@
 import { state } from './state.js';
 import { setClipBadge, updateMeter, decayMeters } from './meter.js';
 import { applyUpstreamState, applyHealthState, probeGain } from './upstream.js';
-import { applyRecordState, applyDurationChange, getRecDurationSec, getRecStartTimeMs } from './recording.js';
+import { applyRecordState, applyDurationChange, applySilenceProgress, getRecDurationSec, getRecStartTimeMs } from './recording.js';
 import { renderLog } from './log.js';
 import { refreshLib, refreshDiskFree } from './library.js';
 import { refreshAlbums } from './albums.js';
@@ -183,6 +183,12 @@ function handleWsEvent(m) {
         // event is what triggers the visible UI update).
         applyDurationChange(m.duration, m.elapsed);
       }
+      break;
+    case 'silence':
+      // Watcher-tick snapshot of the silence-countdown state. Drives the
+      // small "auto-stop in Ns" bar under the recording progress so the
+      // user can see how close the recording is to finalising itself.
+      applySilenceProgress(m);
       break;
     case 'log':
       renderLog(m.msg, m.level);

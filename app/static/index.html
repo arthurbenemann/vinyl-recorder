@@ -102,6 +102,15 @@
       <div class="prog-wrap" style="margin-top:10px">
         <div class="prog-fill" id="prog" style="width:0%"></div>
       </div>
+      <!-- Auto-stop-on-silence countdown. Hidden until the server tells
+           us silence is accumulating (smoothed RMS below threshold while
+           the detector is armed); fills to 100% at the moment the
+           recording finalises itself. -->
+      <div class="silence-prog-wrap" id="silence-prog-wrap" hidden
+           title="Smoothed RMS has stayed below the silence threshold long enough that auto-stop is approaching. Resumes audio to drain the bar.">
+        <div class="silence-prog-fill" id="silence-prog" style="width:0%"></div>
+        <span class="silence-prog-label" id="silence-prog-label"></span>
+      </div>
     </div>
 
     <!-- Stop conditions: configuration that decides when an in-flight

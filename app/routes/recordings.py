@@ -848,6 +848,33 @@ def _duration_cap_reached(s, now: float) -> bool:
     return (end - s.start_time) >= s.duration
 
 
+def _silence_progress_payload(s, now: float):
+    """Snapshot of the silence-countdown state the watcher publishes each
+    tick so the UI can fill a progress bar without re-implementing the
+    arming + silence_since state machine.
+
+    Returns None when auto-stop is disabled (silence_seconds == 0) — the
+    watcher then skips the publish entirely so idle WS traffic stays low.
+
+    Mirrors `_silence_should_autostop`'s gates: paused / not armed /
+    silence_since None all pin `elapsed_seconds` at 0 so the bar drains
+    back to empty the moment audio comes back above threshold. Progress
+    is `elapsed / cap`, clamped to [0, 1]. Pulled out so unit tests can
+    drive the truth table without spinning ffmpeg."""
+    if s.silence_seconds <= 0:
+        return None
+    cap = s.silence_seconds
+    elapsed = 0.0
+    if (not s.paused) and s.silence_armed and (s.silence_since is not None):
+        elapsed = max(0.0, now - s.silence_since)
+    return {
+        "armed":           bool(s.silence_armed),
+        "elapsed_seconds": elapsed,
+        "cap_seconds":     cap,
+        "progress":        min(1.0, elapsed / cap) if cap else 0.0,
+    }
+
+
 def _watch_session(sid: str) -> None:
     """One thread per recording session — polls every ~500 ms for any
     finalize trigger: a self-exited ffmpeg (crash, kill -9, upstream
@@ -879,6 +906,15 @@ def _watch_session(sid: str) -> None:
             # user-stop / disconnect finalized us between ticks
             return
         now = time.monotonic()
+        # Surface the silence-countdown for the UI to render a progress
+        # bar that fills as silence accumulates toward the auto-stop
+        # threshold. Emitted every tick (~2 Hz) so the bar moves with the
+        # watcher; CSS transition on the receiving end smooths the steps.
+        # When auto-stop is off (silence_seconds == 0) the helper returns
+        # None and we skip the publish so idle WS traffic stays low.
+        sp = _silence_progress_payload(live, now)
+        if sp is not None:
+            bus.publish({"type": "silence", "session_id": sid, **sp})
         # Order matters only for the log line — both triggers route into
         # the same _finalize_session(sid, "auto") call site. Duration is
         # checked first so the user-visible reason "duration cap" wins

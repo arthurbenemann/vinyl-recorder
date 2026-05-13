@@ -257,6 +257,17 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .prog-wrap { height: 3px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
 .prog-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.5s linear; }
 
+/* Auto-stop-on-silence countdown — sits under the duration prog bar and
+   only appears when silence is actively accumulating. Amber instead of
+   the accent red so it reads as a warning ("about to finalize") rather
+   than the recording-active red. Linear transition matches the 500 ms
+   watcher tick so the bar visually slides between server updates. */
+.silence-prog-wrap { position: relative; margin-top: 6px; height: 3px; background: var(--surface2); border-radius: 2px; overflow: hidden; }
+.silence-prog-wrap[hidden] { display: none; }
+.silence-prog-fill { height: 100%; background: var(--amber); border-radius: 2px; transition: width 0.5s linear; width: 0%; }
+.silence-prog-label { position: absolute; right: 0; top: 6px; font-size: 10px; color: var(--amber); font-family: var(--mono); letter-spacing: 0.02em; pointer-events: none; white-space: nowrap; }
+.main[data-collapsed] .silence-prog-wrap { display: none; }
+
 /* Auto-stop on silence — collapsible options panel under the transport. */
 .autostop { margin-top: 10px; font-size: 11px; color: var(--muted); }
 .autostop-summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; user-select: none; }

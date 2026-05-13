@@ -185,8 +185,42 @@ export function applyRecordState({ active, paused: isPaused, sid, durationSec, e
     hint.textContent = 'click ● to start recording';
     prog.style.width = '0%';
     document.getElementById('timer').textContent = fmt(0);
+    // No active recording → no silence-countdown either. Reset and hide
+    // so a leftover bar from a previous recording isn't visible.
+    applySilenceProgress({ progress: 0, elapsed_seconds: 0,
+                           cap_seconds: 0, armed: false });
   }
   updateSdot();
+}
+
+// Mirror of the duration progress bar for the auto-stop-on-silence
+// countdown. Server emits this every ~500 ms while a recording is
+// armed; the CSS transition smooths the steps so the bar looks like
+// a continuous fill from 0 → silence_seconds. When audio comes back
+// above threshold the server reports progress=0 and the bar drains
+// to empty. Pinned to the existing #prog-wrap layout so visually it
+// reads as a second progress dimension on the same recording.
+export function applySilenceProgress({ progress, elapsed_seconds,
+                                       cap_seconds, armed }) {
+  const wrap = document.getElementById('silence-prog-wrap');
+  const fill = document.getElementById('silence-prog');
+  const label = document.getElementById('silence-prog-label');
+  if (!wrap || !fill) return;
+  const p = Number(progress) || 0;
+  // Hide unless the watcher is armed AND silence is actively accumulating.
+  // Lead-in silence (not armed) and post-arming audio (progress=0) both
+  // render as hidden so the bar only appears when it carries information.
+  const visible = !!state.recording && !!armed && (cap_seconds > 0) && p > 0;
+  wrap.hidden = !visible;
+  fill.style.width = Math.min(100, p * 100) + '%';
+  if (label) {
+    if (visible) {
+      const remaining = Math.max(0, (cap_seconds || 0) - (elapsed_seconds || 0));
+      label.textContent = `auto-stop in ${Math.ceil(remaining)}s`;
+    } else {
+      label.textContent = '';
+    }
+  }
 }
 
 // Wire the duration dropdown so that while a recording is live, changing
