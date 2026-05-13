@@ -141,7 +141,7 @@ async def release_detail_discogs(release_id: int):
     tracks: list[str] = []
     track_details: list[dict] = []
 
-    def _walk(tr: dict) -> None:
+    def _walk(tr: dict, parent_position: str = "") -> None:
         # Discogs uses a hierarchical tracklist for multi-part / classical
         # works: a parent row with type_="index" (and a movement title) holds
         # the actual playable parts in `sub_tracks`. Recurse into sub_tracks
@@ -151,8 +151,12 @@ async def release_detail_discogs(release_id: int):
         if tr.get("type_") == "heading":
             return
         if tr.get("sub_tracks"):
+            # Movement parent — sub-tracks often inherit their position from
+            # the parent (e.g. parent "A1", subs labelled "i", "ii"). Pass
+            # the parent down so each leaf carries the side+track key.
+            pos = _str(tr, "position") or parent_position
             for sub in tr["sub_tracks"]:
-                _walk(sub)
+                _walk(sub, pos)
             return
         t = _str(tr, "title")
         if not t:
@@ -166,7 +170,15 @@ async def release_detail_discogs(release_id: int):
                 secs = int(mm) * 60 + int(ss)
             except ValueError:
                 secs = None
-        track_details.append({"title": t, "duration_seconds": secs})
+        # `position` is the side+track identifier (e.g. "A1", "B2", "1-01" for
+        # multi-disc). The wave editor surfaces it on each cut handle and in
+        # the track list so on-screen labels match the physical sleeve.
+        position = _str(tr, "position") or parent_position
+        track_details.append({
+            "title": t,
+            "duration_seconds": secs,
+            "position": position,
+        })
 
     for tr in (d.get("tracklist") or []):
         _walk(tr)
@@ -235,6 +247,7 @@ async def release_detail(mbid: str):
             track_details.append({
                 "title":            t,
                 "duration_seconds": (length_ms / 1000.0) if length_ms else None,
+                "position":         "",
             })
 
     discogs_id = extract_discogs_id(mb)
@@ -263,17 +276,23 @@ async def release_detail(mbid: str):
             composer = _discogs_extra_artists(d, ("composed by", "composer"))
             if not conductor:
                 conductor = _discogs_extra_artists(d, ("conductor",))
-            # Backfill missing track durations from Discogs's "M:SS" strings.
+            # Backfill missing track durations from Discogs's "M:SS" strings,
+            # and pull `position` (A1, B2, …) across so the wave editor can
+            # label each cut handle with the matching sleeve track.
             d_tracks = [t for t in (d.get("tracklist") or []) if not t.get("type_") or t.get("type_") == "track"]
             for i, td in enumerate(track_details):
-                if td["duration_seconds"] is None and i < len(d_tracks):
-                    dur = _str(d_tracks[i], "duration")
-                    if dur:
-                        try:
-                            mm, ss = dur.split(":")
-                            td["duration_seconds"] = int(mm) * 60 + int(ss)
-                        except ValueError:
-                            pass
+                if i < len(d_tracks):
+                    if td["duration_seconds"] is None:
+                        dur = _str(d_tracks[i], "duration")
+                        if dur:
+                            try:
+                                mm, ss = dur.split(":")
+                                td["duration_seconds"] = int(mm) * 60 + int(ss)
+                            except ValueError:
+                                pass
+                    pos = _str(d_tracks[i], "position")
+                    if pos:
+                        td["position"] = pos
 
     return {
         "mbid":           mbid,
