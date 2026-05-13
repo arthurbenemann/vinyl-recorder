@@ -200,6 +200,50 @@ def test_apply_unknown_album_id_returns_404():
     assert r.status_code == 404
 
 
+def test_apply_strips_tracks_from_manifest_tags(monkeypatch):
+    """The release tracklist arrives on `fields.tracks` (vestigial TagEdit
+    field used by the editor's UI), but it must NOT land in `tags` on
+    album.json. If it did, a later wave-editor save would produce TWO
+    track listings in the manifest — `tags.tracks` (strings) alongside
+    `plan.tracks` (cut objects)."""
+    import json
+
+    from routes import tagging as tg
+    from state import IN_PROGRESS_DIR
+    monkeypatch.setattr(tg, "caa_front", lambda mbid: None)
+
+    # Seed an existing in-progress album so we exercise the album_id branch.
+    album_id = "ttagsclean1"
+    d = IN_PROGRESS_DIR / album_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "side1.flac").write_bytes(b"")
+    (d / "album.json").write_text(json.dumps({
+        "schema_version": 2,
+        "tags": {"artist": "Old"},
+        "sides": ["side1.flac"],
+        "cover": None,
+        "plan": None,
+        "music_relpath": None,
+    }))
+    try:
+        r = _client().post("/api/apply", json={
+            "album_id": album_id,
+            "fields": {
+                "artist": "X", "album": "Y",
+                "tracks": ["Side A track 1", "Side A track 2"],
+            },
+        })
+        assert r.status_code == 200
+        manifest = json.loads((d / "album.json").read_text())
+        assert manifest["tags"]["artist"] == "X"
+        assert "tracks" not in manifest["tags"], (
+            f"tags polluted with tracklist: {manifest['tags']!r}"
+        )
+    finally:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_apply_missing_raw_side_returns_404(monkeypatch):
     """The promote-style apply (single filename → new album) must surface
     a missing source as 404, not as a generic 500."""

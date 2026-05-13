@@ -42,6 +42,19 @@ from state import IN_PROGRESS_DIR, MUSIC_DIR, RAW_DIR
 ALBUM_ID_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 SCHEMA_VERSION = 2
 
+# Canonical manifest tag keys (matches the schema docstring above). The
+# write path filters `manifest["tags"]` against this set so vestigial
+# fields on TagEdit — notably `tracks`, which the apply flow forwards as
+# the release tracklist for the editor's UI — never land in album.json
+# alongside the wave-editor's own `plan.tracks`. Without the filter, an
+# Apply-tags-then-edit-cuts sequence would produce TWO track listings in
+# the manifest (`tags.tracks` strings AND `plan.tracks` cut objects).
+_TAG_KEYS: frozenset[str] = frozenset((
+    "artist", "album", "year", "genre", "label",
+    "catalog_number", "country", "composer", "conductor",
+    "musicbrainz_albumid", "discogs_release_id",
+))
+
 
 def _stub_manifest() -> dict:
     return {
@@ -116,6 +129,11 @@ def read_manifest(album_id: str) -> dict:
 def write_manifest(album_id: str, manifest: dict) -> None:
     p = manifest_path(album_id)
     p.parent.mkdir(parents=True, exist_ok=True)
+    tags = manifest.get("tags")
+    if isinstance(tags, dict):
+        filtered = {k: v for k, v in tags.items() if k in _TAG_KEYS}
+        if filtered != tags:
+            manifest = {**manifest, "tags": filtered}
     p.write_text(json.dumps(manifest, indent=2))
 
 
