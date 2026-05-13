@@ -50,6 +50,7 @@ def test_read_manifest_returns_stub_when_missing(tmp_path, monkeypatch):
         "cover":          None,
         "plan":           None,
         "music_relpath":  None,
+        "sources_purged": False,
     }
 
 
@@ -345,6 +346,223 @@ def test_has_draft_flag_matrix(tmp_path, monkeypatch,
     row = rows[0]
     assert row["split"] is expected_split
     assert row["has_draft"] is expected_has_draft
+
+
+# ── purge_sources ────────────────────────────────────────────────────────
+def test_purge_sources_refuses_unsplit_album(tmp_path, monkeypatch):
+    """Without a music/ fallback there's nothing to keep — refuse rather
+    than silently delete the only copy of the audio."""
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
+    monkeypatch.setattr(albums_fs, "MUSIC_DIR", tmp_path / "music")
+    album_id = "abcd0123"
+    _seed_album(tmp_path, album_id,
+                sides_in_manifest=["a.flac"],
+                sides_on_disk=["a.flac"])
+    with pytest.raises(ValueError):
+        albums_fs.purge_sources(album_id)
+
+
+def test_purge_sources_drops_sides_and_cache(tmp_path, monkeypatch):
+    """Split album → sides + .cache/ are removed; album.json stays put with
+    `sources_purged: true` and an empty `sides[]`."""
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
+    monkeypatch.setattr(albums_fs, "MUSIC_DIR", tmp_path / "music")
+    album_id = "abcd0123"
+    d = tmp_path / album_id
+    d.mkdir()
+    (d / "a.flac").write_bytes(b"x" * 1000)
+    (d / "b.flac").write_bytes(b"y" * 2000)
+    (d / "cover.jpg").write_bytes(b"keepme")
+    cache = d / ".cache" / "peaks"
+    cache.mkdir(parents=True)
+    (cache / "a.dat").write_bytes(b"z" * 500)
+    import json as _json
+    (d / "album.json").write_text(_json.dumps({
+        "schema_version": 2, "tags": {"artist": "X", "album": "Y"},
+        "sides": ["a.flac", "b.flac"],
+        "cover": "cover.jpg", "plan": {"tracks": []},
+        "music_relpath": "X/Y",
+    }))
+
+    res = albums_fs.purge_sources(album_id)
+
+    assert res["bytes_freed"] == 1000 + 2000 + 500
+    assert res["files_removed"] == 3
+    assert not (d / "a.flac").exists()
+    assert not (d / "b.flac").exists()
+    assert not (d / ".cache").exists()
+    # album.json + cover.jpg survive so the row still has tags + thumbnail.
+    assert (d / "album.json").exists()
+    assert (d / "cover.jpg").read_bytes() == b"keepme"
+    m = albums_fs.read_manifest(album_id)
+    assert m["sides"] == []
+    assert m["sources_purged"] is True
+    assert m["music_relpath"] == "X/Y"
+
+
+def test_purge_sources_summary_exposes_locked_state(tmp_path, monkeypatch):
+    """The /api/albums summary surfaces `sources_purged` so the UI can paint
+    the locked pill and hide re-edit / demote actions."""
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
+    monkeypatch.setattr(albums_fs, "MUSIC_DIR", tmp_path / "music")
+    monkeypatch.setattr(albums_fs, "flac_format", lambda p: {})
+    monkeypatch.setattr(albums_fs, "flac_duration_seconds", lambda p: 0.0)
+    album_id = "abcd0123"
+    d = tmp_path / album_id
+    d.mkdir()
+    import json as _json
+    (d / "album.json").write_text(_json.dumps({
+        "schema_version": 2, "tags": {},
+        "sides": [], "cover": None, "plan": {"tracks": []},
+        "music_relpath": "X/Y", "sources_purged": True,
+    }))
+    [row] = albums_fs.list_albums()
+    assert row["split"] is True
+    assert row["sources_purged"] is True
+    assert row["side_count"] == 0
+
+
+# ── _parse_relpath_tags (auto-import path parsing) ───────────────────────
+@pytest.mark.parametrize("relpath, expected", [
+    ("Miles Davis/Kind of Blue (1959)",
+     {"artist": "Miles Davis", "album": "Kind of Blue", "year": "1959"}),
+    ("Bjork/Vespertine",
+     {"artist": "Bjork", "album": "Vespertine"}),
+    ("Artist/Album Title (2001) ",
+     {"artist": "Artist", "album": "Album Title", "year": "2001"}),
+    # Single-segment / deeper paths can't be parsed — caller falls back to
+    # FLAC tags.
+    ("Lonely", {}),
+    ("A/B/C", {}),
+])
+def test_parse_relpath_tags(relpath, expected):
+    assert albums_fs._parse_relpath_tags(relpath) == expected
+
+
+# ── import_external_music ────────────────────────────────────────────────
+def _seed_music_dir(music: Path, artist: str, album_folder: str, tracks: list[str]) -> Path:
+    """Drop a folder full of audio files into music/. The bytes don't have
+    to be real FLACs — the importer only stats `.flac`/`.wav`/... files."""
+    d = music / artist / album_folder
+    d.mkdir(parents=True, exist_ok=True)
+    for t in tracks:
+        (d / t).write_bytes(b"")
+    return d
+
+
+def test_import_external_music_creates_stub_for_orphan(tmp_path, monkeypatch):
+    """A music/ folder with no matching in-progress manifest gets a stub
+    album.json with sources_purged + external set so the row paints as
+    locked, the music_relpath round-trips, and the orphan is skipped on
+    re-scan (idempotent)."""
+    inp = tmp_path / "in-progress"
+    music = tmp_path / "music"
+    inp.mkdir(); music.mkdir()
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", inp)
+    monkeypatch.setattr(albums_fs, "MUSIC_DIR", music)
+    # No FLAC tag reads — we test the path-parsing fallback here.
+    monkeypatch.setattr(albums_fs, "read_tags", lambda p: {})
+    monkeypatch.setattr(albums_fs, "flac_duration_seconds", lambda p: 0.0)
+    monkeypatch.setattr(
+        albums_fs, "extract_cover_to_album", lambda aid, src: None,
+    )
+
+    _seed_music_dir(music, "Miles Davis", "Kind of Blue (1959)",
+                    ["01 - So What.flac", "02 - Freddie Freeloader.flac"])
+
+    created = albums_fs.import_external_music()
+    assert len(created) == 1
+    aid = created[0]
+    m = albums_fs.read_manifest(aid)
+    assert m["music_relpath"] == "Miles Davis/Kind of Blue (1959)"
+    assert m["sources_purged"] is True
+    assert m["external"] is True
+    assert m["tags"]["artist"] == "Miles Davis"
+    assert m["tags"]["album"]  == "Kind of Blue"
+    assert m["tags"]["year"]   == "1959"
+    assert len(m["plan"]["tracks"]) == 2
+    # Re-running picks up no new orphans — the music_relpath is now claimed.
+    assert albums_fs.import_external_music() == []
+
+
+def test_import_external_music_skips_already_claimed_relpath(tmp_path, monkeypatch):
+    """A music/ folder that's already pointed to by a real (split) album
+    must not be auto-imported as an external row — the listing would show
+    duplicates."""
+    inp = tmp_path / "in-progress"
+    music = tmp_path / "music"
+    inp.mkdir(); music.mkdir()
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", inp)
+    monkeypatch.setattr(albums_fs, "MUSIC_DIR", music)
+    monkeypatch.setattr(albums_fs, "read_tags", lambda p: {})
+    monkeypatch.setattr(albums_fs, "flac_duration_seconds", lambda p: 0.0)
+
+    # Pre-claim "X/Y (1999)" via a normal in-progress album.
+    aid_existing = "abcd0123"
+    (inp / aid_existing).mkdir()
+    import json as _json
+    (inp / aid_existing / "album.json").write_text(_json.dumps({
+        "schema_version": 2, "tags": {},
+        "sides": ["s.flac"], "cover": None, "plan": None,
+        "music_relpath": "X/Y (1999)",
+    }))
+    _seed_music_dir(music, "X", "Y (1999)", ["01 - a.flac"])
+
+    created = albums_fs.import_external_music()
+    assert created == []
+
+
+def test_import_external_music_flags_tag_path_mismatch(tmp_path, monkeypatch):
+    """When the FLAC's embedded tags disagree with the folder name, the
+    import records the diff in `tag_warning` so the UI can flag the row.
+    FLAC tags win on conflicts (they're authoritative); the folder name
+    is just the user's filing convention."""
+    inp = tmp_path / "in-progress"
+    music = tmp_path / "music"
+    inp.mkdir(); music.mkdir()
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", inp)
+    monkeypatch.setattr(albums_fs, "MUSIC_DIR", music)
+    monkeypatch.setattr(albums_fs, "flac_duration_seconds", lambda p: 0.0)
+    monkeypatch.setattr(
+        albums_fs, "extract_cover_to_album", lambda aid, src: None,
+    )
+    # Fake metaflac response: FLAC says "Real Album / 2010", folder says
+    # "Different Album (1999)".
+    monkeypatch.setattr(albums_fs, "read_tags", lambda p: {
+        "ARTIST": "Real Artist",
+        "ALBUM":  "Real Album",
+        "DATE":   "2010",
+    })
+    _seed_music_dir(music, "Folder Artist", "Different Album (1999)",
+                    ["01 - track.flac"])
+
+    [aid] = albums_fs.import_external_music()
+    m = albums_fs.read_manifest(aid)
+    # FLAC values win on the merged tag set.
+    assert m["tags"]["artist"] == "Real Artist"
+    assert m["tags"]["album"]  == "Real Album"
+    assert m["tags"]["year"]   == "2010"
+    # All three diffs are recorded.
+    assert "artist" in m["tag_warning"]
+    assert "album"  in m["tag_warning"]
+    assert "year"   in m["tag_warning"]
+
+
+def test_import_external_music_skips_empty_dirs(tmp_path, monkeypatch):
+    """A music/ subdir with no audio files isn't an album — skip it. The
+    importer looks for .flac/.wav/.mp3/.ogg/.m4a; a stray cover.jpg-only
+    dir wouldn't qualify."""
+    inp = tmp_path / "in-progress"
+    music = tmp_path / "music"
+    inp.mkdir(); music.mkdir()
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", inp)
+    monkeypatch.setattr(albums_fs, "MUSIC_DIR", music)
+
+    # Has a cover but no audio.
+    empty_album = music / "Artist" / "No Audio Album"
+    empty_album.mkdir(parents=True)
+    (empty_album / "cover.jpg").write_bytes(b"")
+    assert albums_fs.import_external_music() == []
 
 
 # ── per-side source_format on summary ────────────────────────────────────

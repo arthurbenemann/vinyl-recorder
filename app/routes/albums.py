@@ -55,6 +55,23 @@ async def get_albums():
     return {"albums": albums_fs.list_albums()}
 
 
+@router.post("/api/music/scan")
+async def scan_music():
+    """Surface manually-dropped albums under `music/` as locked rows.
+
+    Walks `music/<Artist>/<Album>/`, and for each dir without a matching
+    `in-progress/{album_id}/album.json`, creates a stub manifest tagged
+    `sources_purged: true` + `external: true` so the row paints as locked
+    (no re-split / demote actions). Tags come from the FLAC's Vorbis tags
+    first, falling back to / cross-checked against the folder name —
+    mismatches are reported per-row via `tag_warning`.
+
+    The frontend calls this on initial page load and on the user-driven
+    refresh button so the 15 s poll stays a cheap listing read."""
+    created = await asyncio.to_thread(albums_fs.import_external_music)
+    return {"imported": len(created), "album_ids": created}
+
+
 @router.post("/api/combine")
 async def combine_album(req: CombineRequest):
     """Promote N raw sides into a new in-progress album. Metadata-only —
@@ -109,6 +126,20 @@ async def delete_album(album_id: str):
         raise HTTPException(404)
     albums_fs.delete_album(album_id)
     return {}
+
+
+@router.post("/api/album/{album_id}/purge-sources")
+async def purge_sources(album_id: str):
+    """Delete the in-progress side FLACs (and peaks cache) for a split album
+    to free disk, while keeping `album.json`/`cover.jpg` so the album row
+    stays visible in the Music section. Refuses on unsplit albums — that
+    would be a silent data loss with no music/ fallback. Returns the bytes
+    freed so the UI can confirm what happened."""
+    _require_album(album_id)
+    try:
+        return albums_fs.purge_sources(album_id)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
 
 
 @router.post("/api/album/{album_id}/demote")
