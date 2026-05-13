@@ -614,6 +614,8 @@ textarea:focus-visible,
 .we-minimap-vp:active { cursor: grabbing; }
 .we-minimap-cuts { position: absolute; inset: 0; pointer-events: none; }
 .we-minimap-cuts .mc { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); opacity: 0.7; }
+.we-minimap-cuts .ms { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--blue); opacity: 0.7; pointer-events: none; }
+.we-minimap-cuts .ds { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dotted var(--accent2); opacity: 0.8; pointer-events: none; }
 .we-minimap-axis { display: flex; justify-content: space-between; padding: 2px 6px; font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .wave-wrap { position: relative; background: #0a0e16; border: 0.5px solid var(--border); border-radius: 6px; overflow: hidden; user-select: none; margin-top: 8px; }
@@ -631,6 +633,9 @@ textarea:focus-visible,
 .wave-cut .grip { position: absolute; top: -6px; left: -6px; width: 14px; height: 14px; background: var(--accent); border-radius: 2px; border: 1px solid #fff; }
 .wave-cut .grip:hover { background: #ff7c7b; }
 .wave-silence { position: absolute; top: 0; bottom: 0; background: rgba(186,117,23,0.18); pointer-events: none; }
+.wave-side-switch { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1.5px dashed rgba(55,138,221,0.7); pointer-events: none; }
+.wave-side-badge { position: absolute; top: 2px; left: 3px; padding: 1px 5px; font-size: 9px; color: rgba(170,210,255,0.95); background: rgba(0,0,0,0.55); border: 0.5px solid rgba(55,138,221,0.55); border-radius: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+.wave-discogs-side { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1.5px dotted rgba(200,121,65,0.75); pointer-events: none; }
 .wave-readout { position: absolute; top: 4px; right: 6px; padding: 2px 6px; background: rgba(0,0,0,0.6); border-radius: 3px; font-size: 10px; color: var(--text); pointer-events: none; font-variant-numeric: tabular-nums; }
 .wave-axis { display: flex; justify-content: space-between; padding: 4px 6px; font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; background: var(--surface); border-top: 0.5px solid var(--border); }
 .wave-help { font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
