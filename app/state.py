@@ -291,6 +291,19 @@ class DurationEditRequest(BaseModel):
     duration: int
 
 
+class SilenceEditRequest(BaseModel):
+    """PATCH-style edit of a live recording's silence-auto-stop cap.
+
+    0 = ∞ disabled; positive = seconds of continuous below-threshold
+    smoothed RMS that triggers finalize. Unlike the duration cap there's
+    no slack guard — reducing the cap mid-recording can at most finalize
+    the recording the moment silence is already accumulating, which is
+    exactly what the user is asking for by editing the dropdown. The
+    detection threshold (dBFS) is intentionally NOT editable here — it
+    stays an ops/calibration knob set via SILENCE_THRESHOLD_DB."""
+    silence_seconds: int
+
+
 # Slack required when reducing a live recording's duration cap. A new cap
 # that lands within this many seconds of `now` would auto-stop the
 # recording on the next watcher tick — and a clumsy click on the dropdown

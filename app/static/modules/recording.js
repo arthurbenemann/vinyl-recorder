@@ -38,6 +38,29 @@ function readSilenceSel() {
 }
 
 
+// Snap an arbitrary positive seconds value (e.g. from a sibling tab
+// that runs an older dropdown set, or from a future server-side cap
+// edit endpoint that accepts arbitrary ints) to the closest non-zero
+// option in the dropdown. Returns the matched option string, or null
+// if no positive options exist. Exposed so applySilenceSecondsChange
+// can re-anchor the dropdown across tabs that disagree on the option
+// set.
+function snapSilenceSecondsToOption(target) {
+  const sel = document.getElementById('silence-sel');
+  if (!sel) return null;
+  if (target <= 0) return '0';
+  const opts = [...sel.options]
+    .map(o => parseInt(o.value, 10))
+    .filter(n => Number.isFinite(n) && n > 0);
+  if (!opts.length) return null;
+  let best = opts[0];
+  for (const n of opts) {
+    if (Math.abs(n - target) < Math.abs(best - target)) best = n;
+  }
+  return String(best);
+}
+
+
 export function wireSilenceSel() {
   const sel = document.getElementById('silence-sel');
   if (!sel) return;
@@ -47,9 +70,56 @@ export function wireSilenceSel() {
   if (ls !== null && [...sel.options].some(o => o.value === ls)) {
     sel.value = ls;
   }
-  sel.addEventListener('change', () => {
+  // Track the value at focus time so we can revert on a server reject
+  // without racing the user's next click. focus fires before change.
+  let lastValue = sel.value;
+  sel.addEventListener('focus', () => { lastValue = sel.value; });
+  sel.addEventListener('change', async () => {
     try { localStorage.setItem(LS_AS_SECONDS, String(sel.value)); } catch (e) {}
+    // Idle: nothing to push. The next start_recording POST reads the
+    // dropdown value directly.
+    if (!state.recording || !state.sessionId) {
+      lastValue = sel.value;
+      return;
+    }
+    // Mid-recording: POST the new cap so the server-side watcher picks
+    // it up on its next tick. WS broadcasts the cap to every tab via
+    // `record:silence` so sibling tabs stay in sync.
+    const prev = lastValue;
+    const next = parseInt(sel.value, 10);
+    try {
+      const r = await fetch(`/api/record/silence/${state.sessionId}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ silence_seconds: next }),
+      });
+      if (!r.ok) {
+        sel.value = prev;
+        toast('✗ ' + await parseError(r), 'err');
+        return;
+      }
+      lastValue = sel.value;
+    } catch (e) {
+      sel.value = prev;
+      toast('✗ ' + e.message, 'err');
+    }
   });
+}
+
+// Apply a server-broadcast silence-cap change to this tab's dropdown.
+// Snaps to the closest dropdown option because the server can carry
+// arbitrary positive ints (env-set defaults, future API consumers)
+// while the dropdown is a quantised set; mirrors what config.js does
+// at boot for the same value. localStorage is also updated so a future
+// page-load before applyConfig fires keeps the user's last seen value.
+export function applySilenceSecondsChange(newSeconds) {
+  const sel = document.getElementById('silence-sel');
+  if (!sel) return;
+  const matched = snapSilenceSecondsToOption(Number(newSeconds) || 0);
+  if (matched !== null && [...sel.options].some(o => o.value === matched)) {
+    sel.value = matched;
+    try { localStorage.setItem(LS_AS_SECONDS, matched); } catch (e) {}
+  }
 }
 
 // The pause/resume WS branches use the duration that was current at the

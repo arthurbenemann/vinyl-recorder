@@ -6,7 +6,7 @@
 import { state } from './state.js';
 import { setClipBadge, updateMeter, decayMeters } from './meter.js';
 import { applyUpstreamState, applyHealthState, probeGain } from './upstream.js';
-import { applyRecordState, applyDurationChange, applySilenceProgress, getRecDurationSec, getRecStartTimeMs } from './recording.js';
+import { applyRecordState, applyDurationChange, applySilenceProgress, applySilenceSecondsChange, getRecDurationSec, getRecStartTimeMs } from './recording.js';
 import { renderLog } from './log.js';
 import { refreshLib, refreshDiskFree } from './library.js';
 import { refreshAlbums } from './albums.js';
@@ -182,6 +182,12 @@ function handleWsEvent(m) {
         // that originated the edit (the POST response says 200 but the WS
         // event is what triggers the visible UI update).
         applyDurationChange(m.duration, m.elapsed);
+      } else if (m.event === 'silence') {
+        // Server-driven silence-cap change — same shape as `duration`
+        // but the bar itself is server-authoritative (every `silence`
+        // event carries the live cap), so we just need to re-anchor
+        // the dropdown across tabs so every tab shows the same value.
+        applySilenceSecondsChange(m.silence_seconds);
       }
       break;
     case 'silence':

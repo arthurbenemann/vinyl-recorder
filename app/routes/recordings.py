@@ -33,7 +33,7 @@ from state import (
     BulkDelete, DEFAULT_AUTO_STOP_ON_SILENCE, DEFAULT_SILENCE_SECONDS,
     DEFAULT_SILENCE_THRESHOLD_DB, DURATION_EDIT_MIN_SLACK_SECONDS,
     DurationEditRequest, LOG_DIR, RAW_DIR, RecordRequest, RenameRequest,
-    sessions, upstream,
+    SilenceEditRequest, sessions, upstream,
 )
 
 
@@ -399,9 +399,15 @@ async def start_recording(req: RecordRequest):
                     if req.silence_threshold_db is not None
                     else DEFAULT_SILENCE_THRESHOLD_DB)
     bytes_per_sample = 3 if sample_format == "s24le" else 2
-    silence_threshold_int = (_silence_threshold_int(threshold_db,
-                                                    bytes_per_sample)
-                             if silence_seconds > 0 else 0)
+    # Always compute the threshold even when silence-auto-stop is off
+    # at start-of-recording. The watcher's silence_seconds==0 short
+    # circuit keeps the feature disabled, but storing a valid cutoff
+    # means a mid-recording edit that ENABLES auto-stop has a working
+    # threshold to compare against immediately — without it the field
+    # would be 0 and the sink would treat every chunk as above
+    # threshold, latching silence_armed=True with no way to ever fire.
+    silence_threshold_int = _silence_threshold_int(threshold_db,
+                                                   bytes_per_sample)
     # Bytes/sec drives the per-chunk EMA time-step. Guarded against a
     # zero denominator if the upstream probe somehow returned a bogus
     # format — `_update_smoothed_ms` also short-circuits on zero, so
@@ -422,35 +428,34 @@ async def start_recording(req: RecordRequest):
         preroll_done.wait()
         if sess_state["paused"]:
             return
-        if silence_seconds > 0:
-            # Smoothed RMS rather than per-chunk peak — vinyl runout grooves
-            # produce a click every revolution (~1.8 s at 33⅓ RPM) peaking at
-            # ~-29 dBFS over a ~-55 dBFS noise floor. A peak detector keeps
-            # re-arming every click; the runout's mean energy is ~-47 dBFS
-            # RMS, well below music's ~-15 dBFS, so smoothing the RMS over
-            # ~2 s lets the detector cleanly separate the two.
-            #
-            # audioop.rms shares the C-level primitive cost shape with
-            # audioop.max (one pass over the chunk), so the hot-path cost
-            # is the same as the old peak detector. Session fields are
-            # written without a lock — the GIL makes single-attribute writes
-            # atomic enough for the watcher's purpose; worst case is a
-            # one-tick delay before auto-stop fires.
-            sess = sessions.get(sid)
-            if sess is not None:
-                chunk_rms = audioop.rms(chunk, bytes_per_sample)
-                chunk_ms = float(chunk_rms) * float(chunk_rms)
-                chunk_seconds = len(chunk) / bytes_per_second
-                sess.silence_ms_smoothed = _update_smoothed_ms(
-                    sess.silence_ms_smoothed, chunk_ms,
-                    chunk_seconds, _SILENCE_RMS_TAU_SECONDS,
-                )
-                smoothed_rms = math.sqrt(sess.silence_ms_smoothed)
-                if smoothed_rms >= silence_threshold_int:
-                    sess.silence_armed = True
-                    sess.silence_since = None
-                elif sess.silence_armed and sess.silence_since is None:
-                    sess.silence_since = time.monotonic()
+        sess = sessions.get(sid)
+        # Read silence_seconds LIVE off the session so a mid-recording
+        # POST /api/record/silence/{sid} takes effect on the very next
+        # chunk. silence_threshold_int doesn't need the same treatment —
+        # the dB threshold is env-only, can't change while a session is
+        # in flight. Smoothed RMS rather than per-chunk peak: vinyl
+        # runout grooves produce a click every revolution (~1.8 s at
+        # 33⅓ RPM) peaking at ~-29 dBFS over a ~-55 dBFS noise floor. A
+        # peak detector keeps re-arming every click; the runout's mean
+        # energy is ~-47 dBFS RMS, well below music's ~-15 dBFS, so
+        # smoothing the RMS over ~2 s lets the detector cleanly separate
+        # the two. Session fields are written without a lock — the GIL
+        # makes single-attribute writes atomic enough for the watcher's
+        # purpose; worst case is a one-tick delay before auto-stop fires.
+        if sess is not None and sess.silence_seconds > 0:
+            chunk_rms = audioop.rms(chunk, bytes_per_sample)
+            chunk_ms = float(chunk_rms) * float(chunk_rms)
+            chunk_seconds = len(chunk) / bytes_per_second
+            sess.silence_ms_smoothed = _update_smoothed_ms(
+                sess.silence_ms_smoothed, chunk_ms,
+                chunk_seconds, _SILENCE_RMS_TAU_SECONDS,
+            )
+            smoothed_rms = math.sqrt(sess.silence_ms_smoothed)
+            if smoothed_rms >= silence_threshold_int:
+                sess.silence_armed = True
+                sess.silence_since = None
+            elif sess.silence_armed and sess.silence_since is None:
+                sess.silence_since = time.monotonic()
         proc.stdin.write(chunk)
 
     def _on_sub_close() -> None:
@@ -772,6 +777,75 @@ async def edit_duration(session_id: str, req: DurationEditRequest):
         "elapsed":    int(_elapsed_seconds(s)),
     })
     return {"duration": new_duration}
+
+
+@router.post("/api/record/silence/{session_id}")
+async def edit_silence(session_id: str, req: SilenceEditRequest):
+    """Edit the silence-auto-stop cap of a live recording.
+
+    Mirrors `edit_duration`: mutates session.silence_seconds and emits a
+    `record:silence` event so every tab's dropdown re-anchors. The
+    per-session watcher reads silence_seconds on its ~500 ms tick; the
+    sink reads it live too (every chunk), so the new cap takes effect
+    within milliseconds.
+
+    No slack guard (unlike duration). The worst a reduction can do is
+    finalize "now" if silence is already accumulating — that's exactly
+    what the user is asking for when they shrink the cap mid-recording,
+    so there's no surprise to guard against. The detection threshold
+    (dBFS) is intentionally not editable here; it stays an
+    ops/calibration knob set via SILENCE_THRESHOLD_DB.
+
+    Transitioning 0 → positive resets the smoothing state. The sink
+    skips audioop.rms while silence_seconds==0, so silence_ms_smoothed,
+    silence_armed, and silence_since carry stale values from either
+    start-of-recording or a previous enable/disable cycle. Resetting
+    means the freshly-enabled detector arms cleanly against the next
+    chunks instead of immediately firing on stale state."""
+    s = sessions.get(session_id)
+    if not s:
+        raise HTTPException(404, "Session not found")
+    if req.silence_seconds < 0:
+        raise HTTPException(400,
+            "silence_seconds must be 0 (disabled) or a positive number of seconds")
+
+    new_secs = int(req.silence_seconds)
+    lock = s.finalize_lock or threading.Lock()
+    with lock:
+        if s.finalized:
+            raise HTTPException(409, "Session already finalized")
+        old_secs = s.silence_seconds
+        # No-op edits return 200 unchanged — keeps the dropdown's
+        # optimistic "set then POST" flow idempotent across tabs that
+        # might race the same value.
+        if new_secs == old_secs:
+            return {"silence_seconds": new_secs}
+        if old_secs == 0 and new_secs > 0:
+            # Re-enabling auto-stop: drop any stale smoothing carried
+            # over from when the feature was off (the sink wasn't
+            # updating these fields). Forces a fresh arming cycle.
+            s.silence_ms_smoothed = 0.0
+            s.silence_armed = False
+            s.silence_since = None
+        s.silence_seconds = new_secs
+        label = '∞ disabled' if new_secs == 0 else f'{new_secs}s'
+        s.log_lines.append(f"⏱ Silence cap → {label}")
+    bus.log(
+        f"⏱ Recording {session_id}: silence cap "
+        f"{('disabled' if new_secs == 0 else f'{new_secs}s')}",
+        "info",
+    )
+    # WS broadcast so every other tab's silence-sel dropdown re-anchors
+    # to the new cap (matching the duration sync). The silence-progress
+    # bar itself already follows the watcher-emitted `silence` events,
+    # so no separate progress reset is needed here.
+    bus.publish({
+        "type":            "record",
+        "event":           "silence",
+        "session_id":      session_id,
+        "silence_seconds": new_secs,
+    })
+    return {"silence_seconds": new_secs}
 
 
 def _classify_exit(s) -> str:
