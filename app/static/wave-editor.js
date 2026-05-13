@@ -1684,31 +1684,130 @@ async function weRunSearch() {
 // produces zero-length trailing regions — surfaced in the track list as
 // "doesn't fit" so the user can see what was truncated rather than having
 // titles silently dropped. weApplySplit filters those out before exporting.
+//
+// When the recording has multiple sides AND the Discogs tracklist carries
+// per-track positions spanning ≥2 sides (A1/A2/B1/…), we anchor cumulative
+// durations to each side's album-time start instead of carrying one global
+// cursor across the whole album. At each side transition we emit two cuts —
+// end of the previous side's last track and start of the next side's first
+// track — with a skipped "gap" region between them. That gap is the runout
+// of the leaving side plus the lead-in needle-drop on the new side; the
+// side-start cut is a regular cut, so the user can drag it to where the
+// new side's first track actually catches.
+function _wePosLetter(pos) {
+  // Discogs `position` looks like "A1", "B2", or "1-01" / "2-03" on
+  // multi-disc releases. The leading alphabetic prefix (or leading "N-"
+  // disc number) identifies the side / disc. Returns '' when nothing
+  // recognisable is at the start.
+  const s = String(pos || '').trim();
+  const m = s.match(/^([A-Za-z]+|\d+(?=-))/);
+  return m ? m[0].toUpperCase() : '';
+}
+
+function _weCutsFromTracklist(td, sides, total) {
+  const sideStarts = [0];
+  let acc = 0;
+  for (const s of sides) {
+    acc += Number(s && s.duration_seconds) || 0;
+    sideStarts.push(acc);
+  }
+  // Map first-seen Discogs side letter → recording side index. Letters past
+  // the last recording side clamp onto the last side (so a Discogs C/D
+  // release on a 2-side recording stacks onto side B rather than crashing).
+  const seen = new Map();
+  for (const t of td) {
+    const L = _wePosLetter(t.position);
+    if (L && !seen.has(L)) seen.set(L, Math.min(sides.length - 1, seen.size));
+  }
+  const usePerSide = sides.length >= 2 && seen.size >= 2;
+
+  const cuts      = [];
+  const titles    = [];
+  const skipped   = [];
+  const positions = [];
+  let overflow = 0;
+
+  if (!usePerSide) {
+    // Global cumulative — original behaviour. One region per Discogs track.
+    let cursor = 0;
+    for (let j = 0; j < td.length; j++) {
+      titles.push(td[j].title);
+      skipped.push(false);
+      positions.push(String(td[j].position || '').trim());
+      if (j === td.length - 1) continue;
+      cursor += Number(td[j].duration_seconds) || 0;
+      if (cursor >= total)   { cuts.push(total); overflow += 1; }
+      else if (cursor > 0)   { cuts.push(cursor); }
+    }
+    return { cuts, titles, skipped, positions, overflow };
+  }
+
+  let curSide = -1;
+  let cursor  = 0;
+  for (let j = 0; j < td.length; j++) {
+    const Lcur = _wePosLetter(td[j].position);
+    const sCur = (Lcur && seen.has(Lcur))
+      ? seen.get(Lcur)
+      : (curSide >= 0 ? curSide : 0);
+    if (sCur !== curSide) {
+      if (curSide >= 0) {
+        // End-of-prev-side cut. Clamp the cumulative to the side boundary
+        // so the previous side's last track can't bleed into the next
+        // recorded side; if clamping happens, count overflow.
+        const prevSideEnd = sideStarts[curSide + 1];
+        const endCur = Math.min(cursor, prevSideEnd);
+        if (cursor > prevSideEnd + 0.001) overflow += 1;
+        if (endCur > 0 && endCur < total) cuts.push(endCur);
+        // Side-start cut. If it lands strictly past the end-cut, insert a
+        // skipped gap region between them — that's the runout + needle-
+        // drop dead time. If they coincide (no slack on the previous side),
+        // skip the gap and let the side change be a single cut.
+        const sideStart = sideStarts[sCur];
+        if (sideStart > endCur + 0.001 && sideStart < total) {
+          cuts.push(sideStart);
+          titles.push('');
+          skipped.push(true);
+          positions.push('');
+        }
+      }
+      curSide = sCur;
+      cursor  = sideStarts[curSide];
+    }
+    titles.push(td[j].title);
+    skipped.push(false);
+    positions.push(String(td[j].position || '').trim());
+    cursor += Number(td[j].duration_seconds) || 0;
+    if (j === td.length - 1) continue;
+    // Don't emit a within-side cut here if the next track lives on a new
+    // side — the side-change branch above will emit the boundary cuts.
+    const Lnext = _wePosLetter(td[j + 1].position);
+    const sNext = (Lnext && seen.has(Lnext)) ? seen.get(Lnext) : curSide;
+    if (sNext !== curSide) continue;
+    if (cursor >= total)   { cuts.push(total); overflow += 1; }
+    else if (cursor > 0)   { cuts.push(cursor); }
+  }
+  return { cuts, titles, skipped, positions, overflow };
+}
+
+if (typeof window !== 'undefined') {
+  window._wePosLetter        = _wePosLetter;
+  window._weCutsFromTracklist = _weCutsFromTracklist;
+}
+
 function _weApplyTracklist(track_details, sourceLabel) {
   const td = (track_details || []).filter(t => t && t.title);
   if (!td.length) {
     document.getElementById('we-search-status').textContent = 'no tracklist on this candidate';
     return false;
   }
-  const newCuts = [];
-  let cursor = 0;
-  let overflow = 0;
-  for (let j = 0; j < td.length - 1; j++) {
-    cursor += (td[j].duration_seconds || 0);
-    if (cursor >= we.total) {
-      newCuts.push(we.total);
-      overflow += 1;
-    } else if (cursor > 0) {
-      newCuts.push(cursor);
-    }
-  }
-  we.cuts      = newCuts;
-  we.titles    = td.map(t => t.title);
-  we.skipped   = we.titles.map(() => false);
-  we.positions = td.map(t => String(t.position || '').trim());
+  const r = _weCutsFromTracklist(td, we.sides || [], we.total);
+  we.cuts      = r.cuts;
+  we.titles    = r.titles;
+  we.skipped   = r.skipped;
+  we.positions = r.positions;
   invalidateMeasure();
-  document.getElementById('we-search-status').textContent = overflow
-    ? `${td.length} tracks · ${sourceLabel} · ${overflow} don't fit recording`
+  document.getElementById('we-search-status').textContent = r.overflow
+    ? `${td.length} tracks · ${sourceLabel} · ${r.overflow} don't fit recording`
     : `${td.length} tracks · ${sourceLabel}`;
   drawAll();
   return true;
