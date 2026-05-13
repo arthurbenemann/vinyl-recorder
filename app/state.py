@@ -49,14 +49,18 @@ try:
 except ValueError:
     PRE_ROLL_SECONDS = 5
 
-# Auto-stop on silence: when the upstream stays below `silence_threshold_db`
-# for `silence_seconds` continuous seconds, finalize the recording with
-# reason="auto". The session must have seen at least one above-threshold
-# chunk first — lead-in silence (cueing the needle, pre-roll, dead air
-# before the first track) can never trigger an auto-stop. These env vars
-# pre-fill the per-recording defaults; each `POST /api/record/start` can
-# override them via `auto_stop_on_silence` / `silence_threshold_db` /
-# `silence_seconds`.
+# Auto-stop on silence: when the upstream's smoothed RMS stays below
+# `silence_threshold_db` for `silence_seconds` continuous seconds, finalize
+# the recording with reason="auto". The session must have seen at least
+# one above-threshold chunk first — lead-in silence (cueing the needle,
+# pre-roll, dead air before the first track) can never trigger an
+# auto-stop. The detector uses a ~2 s EMA on the per-chunk RMS so vinyl
+# runout-groove clicks (~-29 dBFS peaks every revolution at 33⅓ RPM)
+# can't keep re-arming it — the mean RMS of the runout sits ~-47 dBFS,
+# well separated from music (~-15 dBFS RMS) by the default -40 dBFS
+# threshold. These env vars pre-fill the per-recording defaults; each
+# `POST /api/record/start` can override them via `auto_stop_on_silence`
+# / `silence_threshold_db` / `silence_seconds`.
 def _infer_auto_stop_on_silence(auto_stop_env: str, threshold_env: str,
                                 seconds_env: str) -> bool:
     """Decide whether auto-stop-on-silence defaults to on.
@@ -87,13 +91,13 @@ DEFAULT_AUTO_STOP_ON_SILENCE = _infer_auto_stop_on_silence(
     _silence_db_env, _silence_sec_env,
 )
 try:
-    DEFAULT_SILENCE_THRESHOLD_DB = float(_silence_db_env.strip() or "-50.0")
+    DEFAULT_SILENCE_THRESHOLD_DB = float(_silence_db_env.strip() or "-40.0")
 except ValueError:
-    DEFAULT_SILENCE_THRESHOLD_DB = -50.0
+    DEFAULT_SILENCE_THRESHOLD_DB = -40.0
 try:
-    DEFAULT_SILENCE_SECONDS = max(1, int(_silence_sec_env.strip() or "20"))
+    DEFAULT_SILENCE_SECONDS = max(1, int(_silence_sec_env.strip() or "10"))
 except ValueError:
-    DEFAULT_SILENCE_SECONDS = 20
+    DEFAULT_SILENCE_SECONDS = 10
 
 # Discogs collection-aware tagging. When set, the auto-tag candidate panel
 # surfaces matches from the user's Discogs collection in a separate section
@@ -154,14 +158,19 @@ class Session:
     log_path:       Optional[str]   = None               # ffmpeg stderr log file
     # Auto-stop on silence (per-session config, set by start_recording).
     # silence_seconds == 0 disables. silence_threshold_int is the integer
-    # peak-sample cutoff matching the upstream's sample_format (full_scale
-    # × 10**(threshold_db/20)). silence_armed flips true the first time the
-    # sink sees a chunk above the threshold — pre-arming silence (lead-in,
-    # cueing the needle) is ignored. silence_since is the monotonic clock
-    # at which the current run of silent chunks started, or None when the
-    # most recent chunk was above threshold.
+    # RMS cutoff matching the upstream's sample_format (full_scale ×
+    # 10**(threshold_db/20)). silence_ms_smoothed is the EMA-smoothed
+    # mean-square (RMS²) the sink maintains across chunks so a single
+    # ~-29 dBFS runout click can't re-arm the detector — see the
+    # `_update_smoothed_ms` and `_sink` comments in routes.recordings.
+    # silence_armed flips true the first time the smoothed RMS rises
+    # above the threshold — pre-arming silence (lead-in, cueing the
+    # needle) is ignored. silence_since is the monotonic clock at which
+    # the current run of below-threshold smoothed RMS started, or None
+    # when the most recent value was above threshold.
     silence_seconds:      int   = 0
     silence_threshold_int: int  = 0
+    silence_ms_smoothed:  float = 0.0
     silence_armed:        bool  = False
     silence_since:        Optional[float] = None
 
@@ -268,8 +277,8 @@ class RecordRequest(BaseModel):
     # DEFAULT_SILENCE_SECONDS); start_recording reads each field with the
     # env-default as fallback so an unsent field falls back to ops policy.
     auto_stop_on_silence: bool  = False
-    silence_threshold_db: float = -50.0
-    silence_seconds:      int   = 20
+    silence_threshold_db: float = -40.0
+    silence_seconds:      int   = 10
 
 
 class DurationEditRequest(BaseModel):
@@ -280,6 +289,19 @@ class DurationEditRequest(BaseModel):
     so a user clicking the dropdown by accident can't terminate a
     recording with no warning."""
     duration: int
+
+
+class SilenceEditRequest(BaseModel):
+    """PATCH-style edit of a live recording's silence-auto-stop cap.
+
+    0 = ∞ disabled; positive = seconds of continuous below-threshold
+    smoothed RMS that triggers finalize. Unlike the duration cap there's
+    no slack guard — reducing the cap mid-recording can at most finalize
+    the recording the moment silence is already accumulating, which is
+    exactly what the user is asking for by editing the dropdown. The
+    detection threshold (dBFS) is intentionally NOT editable here — it
+    stays an ops/calibration knob set via SILENCE_THRESHOLD_DB."""
+    silence_seconds: int
 
 
 # Slack required when reducing a live recording's duration cap. A new cap

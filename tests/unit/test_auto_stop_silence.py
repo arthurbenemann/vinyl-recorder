@@ -3,7 +3,11 @@
 The watcher logic itself runs in a background thread fed by ffmpeg; here we
 exercise just the two pure functions it relies on:
 
-  * `_silence_threshold_int(db, bps)` — dB → integer peak-sample cutoff.
+  * `_silence_threshold_int(db, bps)` — dB → integer RMS / peak cutoff.
+    The math is the same in both interpretations (full_scale × 10**(db/20));
+    only the integer is reused, with the live sink comparing it against a
+    smoothed RMS rather than a per-chunk peak. See `test_silence_rms.py`
+    for the EMA-smoothed detector itself.
   * `_silence_should_autostop(session, now)` — whether to finalize.
 
 A full lifecycle (start_recording → silent stream → finalize) is covered
@@ -53,7 +57,7 @@ def test_threshold_minus_50db_clamped_at_one_floor():
 
 def test_threshold_very_negative_db_floors_at_one():
     """An absurdly low dB value (-300 dB → amp ~0) must still produce
-    a cutoff of at least 1, otherwise audioop.max would compare ≥0 and
+    a cutoff of at least 1, otherwise audioop.rms would compare ≥0 and
     *every* chunk would register as silent → instant auto-stop the moment
     the watcher arms. The floor is what keeps the feature safe."""
     from routes.recordings import _silence_threshold_int
@@ -62,7 +66,7 @@ def test_threshold_very_negative_db_floors_at_one():
 
 
 def test_threshold_positive_db_clamps_to_zero():
-    """Positive dB makes no physical sense for a peak threshold (above
+    """Positive dB makes no physical sense for an RMS threshold (above
     full scale). The helper clamps to 0 dBFS — anything looser would
     never trigger silence anyway. This protects against a hand-crafted
     POST that tries to slip silence_threshold_db=+99 in."""
@@ -70,7 +74,7 @@ def test_threshold_positive_db_clamps_to_zero():
     assert _silence_threshold_int(99.0, 2) == 0x7FFF
 
 
-# ── _silence_should_autostop ─────────────────────────────────────────────
+# ── _silence_should_autostop + _silence_progress_payload ────────────────
 @dataclass
 class _FakeSession:
     silence_seconds: int = 0
@@ -146,6 +150,90 @@ def test_should_autostop_well_past_threshold():
     s = _FakeSession(silence_seconds=5, silence_armed=True,
                      silence_since=now - 60.0)
     assert _silence_should_autostop(s, now) is True
+
+
+# ── _silence_progress_payload (UI countdown bar) ─────────────────────────
+# The payload mirrors _silence_should_autostop's gates so the bar drains
+# back to empty the moment any of (paused / not armed / silence_since
+# cleared) becomes true. Pure helper → unit tests can drive every branch
+# without spinning a real watcher thread.
+def test_progress_payload_returns_none_when_feature_disabled():
+    """silence_seconds == 0 means the user opted out — no event at all,
+    so a feature-off recording doesn't emit watcher-tick traffic."""
+    from routes.recordings import _silence_progress_payload
+    s = _FakeSession(silence_seconds=0, silence_armed=True,
+                     silence_since=1.0)
+    assert _silence_progress_payload(s, now=1000.0) is None
+
+
+def test_progress_payload_zero_when_not_armed():
+    """Lead-in silence (sink hasn't seen audio above threshold yet) must
+    render as an empty bar — the user mustn't see a progress bar fill
+    before the needle even touches a groove."""
+    from routes.recordings import _silence_progress_payload
+    s = _FakeSession(silence_seconds=20, silence_armed=False,
+                     silence_since=None)
+    payload = _silence_progress_payload(s, now=10.0)
+    assert payload == {"armed": False, "elapsed_seconds": 0.0,
+                       "cap_seconds": 20, "progress": 0.0}
+
+
+def test_progress_payload_zero_when_silence_since_none():
+    """Detector is armed but most-recent chunk was above threshold —
+    silence_since cleared, bar drains. This is the music-is-back case;
+    the UI mustn't keep the bar half-filled across an audio gap."""
+    from routes.recordings import _silence_progress_payload
+    s = _FakeSession(silence_seconds=20, silence_armed=True,
+                     silence_since=None)
+    payload = _silence_progress_payload(s, now=10.0)
+    assert payload["armed"] is True
+    assert payload["elapsed_seconds"] == 0.0
+    assert payload["progress"] == 0.0
+    assert payload["cap_seconds"] == 20
+
+
+def test_progress_payload_zero_while_paused():
+    """While paused, silence accumulation freezes — same contract as
+    _silence_should_autostop. The bar must NOT keep filling for a
+    recording the user has deliberately frozen."""
+    from routes.recordings import _silence_progress_payload
+    now = 1_000.0
+    s = _FakeSession(silence_seconds=20, silence_armed=True,
+                     silence_since=now - 5.0, paused=True)
+    payload = _silence_progress_payload(s, now)
+    assert payload["elapsed_seconds"] == 0.0
+    assert payload["progress"] == 0.0
+
+
+def test_progress_payload_half_full_partway_through_silence():
+    """Armed, not paused, silence_since set 10 s ago with a 20 s cap →
+    bar should read 50% full. This is the canonical "silence is
+    accumulating" path the UI renders during a typical side-out."""
+    from routes.recordings import _silence_progress_payload
+    now = 1_000.0
+    s = _FakeSession(silence_seconds=20, silence_armed=True,
+                     silence_since=now - 10.0)
+    payload = _silence_progress_payload(s, now)
+    assert payload["armed"] is True
+    assert payload["elapsed_seconds"] == 10.0
+    assert payload["cap_seconds"] == 20
+    assert payload["progress"] == 0.5
+
+
+def test_progress_payload_clamps_to_one_when_past_cap():
+    """The watcher races between "publish progress" and "_finalize_session"
+    — a tick may see silence_since older than the cap by a few ms. Clamp
+    to 1.0 so the bar visually settles at 100% rather than overshooting
+    (which the CSS would render as "wider than the track")."""
+    from routes.recordings import _silence_progress_payload
+    now = 1_000.0
+    s = _FakeSession(silence_seconds=20, silence_armed=True,
+                     silence_since=now - 60.0)
+    payload = _silence_progress_payload(s, now)
+    assert payload["progress"] == 1.0
+    # Raw elapsed is still surfaced so the UI's "auto-stop in Ns" label
+    # reads sensibly even at the clamp boundary.
+    assert payload["elapsed_seconds"] == 60.0
 
 
 # ── _infer_auto_stop_on_silence ──────────────────────────────────────────

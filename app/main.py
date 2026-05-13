@@ -21,7 +21,7 @@ from services.upstream import (
 )
 from state import (
     AUTO_CONNECT, ConnectRequest, DEFAULT_AUTO_STOP_ON_SILENCE,
-    DEFAULT_GAIN_DB, DEFAULT_SILENCE_SECONDS, DEFAULT_SILENCE_THRESHOLD_DB,
+    DEFAULT_GAIN_DB, DEFAULT_SILENCE_SECONDS,
     DEFAULT_SPLIT_BIT_DEPTH, DEFAULT_SPLIT_NORMALIZE,
     DEFAULT_SPLIT_TARGET_PEAK_DB, DEFAULT_STREAM_URL, DISCOGS_USERNAME,
     PRE_ROLL_SECONDS, sessions, upstream,
@@ -132,8 +132,12 @@ async def get_config():
         "upstream_idle_grace_seconds":  UPSTREAM_IDLE_GRACE_SECONDS,
         "upstream_min_uptime_seconds":  UPSTREAM_MIN_UPTIME_SECONDS,
         "default_auto_stop_on_silence": DEFAULT_AUTO_STOP_ON_SILENCE,
-        "default_silence_threshold_db": DEFAULT_SILENCE_THRESHOLD_DB,
         "default_silence_seconds":      DEFAULT_SILENCE_SECONDS,
+        # `default_silence_threshold_db` is intentionally not surfaced
+        # to the browser — the threshold is an ops/calibration knob set
+        # via SILENCE_THRESHOLD_DB. The UI only carries the duration
+        # dropdown; the server picks up DEFAULT_SILENCE_THRESHOLD_DB
+        # for every recording that doesn't override it via the API.
         # Boolean flag only — never leak the actual username/token to the
         # frontend; the UI just needs to know whether to show the section.
         "discogs_collection_enabled":   bool(DISCOGS_USERNAME),
