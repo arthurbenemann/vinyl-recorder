@@ -111,6 +111,20 @@ async def delete_album(album_id: str):
     return {}
 
 
+@router.post("/api/album/{album_id}/purge-sources")
+async def purge_sources(album_id: str):
+    """Delete the in-progress side FLACs (and peaks cache) for a split album
+    to free disk, while keeping `album.json`/`cover.jpg` so the album row
+    stays visible in the Music section. Refuses on unsplit albums — that
+    would be a silent data loss with no music/ fallback. Returns the bytes
+    freed so the UI can confirm what happened."""
+    _require_album(album_id)
+    try:
+        return albums_fs.purge_sources(album_id)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
 @router.post("/api/album/{album_id}/demote")
 async def demote_album(album_id: str):
     """Move every side back to `raw/` and remove the album dir. The music

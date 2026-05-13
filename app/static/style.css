@@ -519,6 +519,21 @@ textarea:focus-visible,
   background: rgba(226,75,74,0.18);
   border-color: var(--accent);
 }
+/* "Originals deleted" pill — non-interactive, indicates the album's source
+   sides have been purged so re-edit / demote are no longer possible. Uses
+   the muted palette to avoid implying a problem (it's a finished state). */
+.locked-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.05em;
+  color: var(--muted);
+  background: var(--surface2);
+  border: 0.5px solid var(--border2);
+  border-radius: 3px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
 .tracks-sub { background: var(--surface); }
 .tracks-sub td { padding: 6px 12px 6px 28px; font-size: 11px; color: var(--muted); border-bottom: 0.5px solid var(--border); }
 .tracks-sub .track-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; }

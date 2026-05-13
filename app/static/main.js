@@ -31,6 +31,7 @@ import {
   clearAlbumsSelection, clearMusicSelection,
   bulkDeleteAlbums, bulkDeleteMusic,
   deleteAlbum, demoteAlbumKeepMusic, demoteAlbumDrop,
+  purgeAlbumSources, bulkPurgeMusic,
   recordAlbumFailure, clearAlbumFailure, noteAlbumSuccess,
 } from './modules/albums.js';
 import {
@@ -98,6 +99,8 @@ window.bulkDeleteMusic = bulkDeleteMusic;
 window.deleteAlbum = deleteAlbum;
 window.demoteAlbumKeepMusic = demoteAlbumKeepMusic;
 window.demoteAlbumDrop = demoteAlbumDrop;
+window.purgeAlbumSources = purgeAlbumSources;
+window.bulkPurgeMusic = bulkPurgeMusic;
 window.clearAlbumFailure = clearAlbumFailure;
 // Wave-editor calls these via `typeof noteAlbumSuccess === 'function'` /
 // `typeof recordAlbumFailure === 'function'` — keep the global names.

@@ -254,6 +254,8 @@
           <span><span id="music-bulk-count">0</span> selected</span>
           <span class="grow"></span>
           <button class="btn-small" onclick="clearMusicSelection()">clear</button>
+          <button class="btn-small" onclick="bulkPurgeMusic()"
+                  title="Delete the in-progress side FLACs for selected albums to free disk space. Locks in the current splits and encoding; music/ tracks are kept.">delete originals</button>
           <button class="btn-small danger" onclick="bulkDeleteMusic()">delete selected</button>
         </div>
         <table class="lib-table">

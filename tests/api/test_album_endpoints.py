@@ -145,6 +145,70 @@ def test_demote_moves_sides_back_to_raw(monkeypatch):
     (RAW_DIR / name).unlink(missing_ok=True)
 
 
+# ── /api/album/{album_id}/purge-sources ──────────────────────────────────
+def test_purge_sources_unknown_returns_404():
+    r = _client().post("/api/album/not-a-real-id/purge-sources")
+    assert r.status_code == 404
+
+
+def test_purge_sources_unsplit_album_returns_409(monkeypatch):
+    """Without music_relpath set there's nothing to fall back on — the
+    endpoint refuses with 409 rather than silently deleting the only copy
+    of the source audio."""
+    from services import ffmpeg as ffmpeg_mod
+    monkeypatch.setattr(ffmpeg_mod, "flac_duration_seconds", lambda p: 0.0)
+    name = _make_raw_side("purge_unsplit_src.flac")
+    body = _client().post("/api/combine", json={
+        "filenames": [name], "album": {"artist": "X", "album": "Y"},
+    }).json()
+    aid = body["album_id"]
+    try:
+        r = _client().post(f"/api/album/{aid}/purge-sources")
+        assert r.status_code == 409
+    finally:
+        _cleanup_album(aid)
+
+
+def test_purge_sources_split_album_clears_sides(monkeypatch):
+    """For a split album, purge-sources removes the side FLAC, sets
+    sources_purged on the manifest, and the album row stays in the listing."""
+    from services import albums_fs, ffmpeg as ffmpeg_mod
+    monkeypatch.setattr(ffmpeg_mod, "flac_duration_seconds", lambda p: 0.0)
+
+    name = _make_raw_side("purge_split_src.flac")
+    body = _client().post("/api/combine", json={
+        "filenames": [name], "album": {"artist": "X", "album": "Y"},
+    }).json()
+    aid = body["album_id"]
+    try:
+        # Fake a successful split by patching music_relpath into the manifest.
+        m = albums_fs.read_manifest(aid)
+        m["music_relpath"] = "X/Y"
+        albums_fs.write_manifest(aid, m)
+
+        side_path = albums_fs.album_dir(aid) / name
+        assert side_path.exists()
+
+        r = _client().post(f"/api/album/{aid}/purge-sources")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["files_removed"] >= 1
+        assert body["bytes_freed"] >= 0
+
+        assert not side_path.exists()
+        m = albums_fs.read_manifest(aid)
+        assert m["sides"] == []
+        assert m["sources_purged"] is True
+
+        # Album row still present in the listing, flagged as locked.
+        rows = _client().get("/api/albums").json()["albums"]
+        row = next(r for r in rows if r["album_id"] == aid)
+        assert row["sources_purged"] is True
+        assert row["split"] is True
+    finally:
+        _cleanup_album(aid)
+
+
 # ── /api/album/{album_id}/plan ───────────────────────────────────────────
 def test_update_plan_unknown_album_returns_404():
     r = _client().post("/api/album/not-real/plan", json={"tracks": []})

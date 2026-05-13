@@ -96,6 +96,64 @@ export async function bulkDeleteMusic() {
   refreshAlbums();
 }
 
+// ── Delete originals (sides + cache) for split albums ─────────────────────
+// "Locks in" the splits/encoding by removing the source audio, while keeping
+// album.json so the row stays visible in the Music section.
+
+function _fmtMb(mb) {
+  if (mb == null) return '0 MB';
+  if (mb >= 1024) return (mb / 1024).toFixed(2) + ' GB';
+  return mb.toFixed(1) + ' MB';
+}
+
+async function _purgeOriginalsForIds(ids) {
+  // Filter to split albums that still have originals on disk — the backend
+  // would 409 the others, but it's nicer to drop them before confirming so
+  // the freed-size estimate matches reality.
+  const purgeable = ids
+    .map(id => state.albumsByName[id])
+    .filter(a => a && a.split && !a.sources_purged);
+  if (!purgeable.length) {
+    toast('Nothing to delete — originals already removed.', 'info');
+    return 0;
+  }
+  const totalMb = purgeable.reduce((s, a) => s + (a.size_mb || 0), 0);
+  const noun = purgeable.length === 1 ? 'album' : 'albums';
+  const msg = `Delete originals for ${purgeable.length} ${noun}?\n\n` +
+    `This frees ~${_fmtMb(totalMb)} of disk.\n\n` +
+    `Locks in the current splits and encoding — the wave editor will no ` +
+    `longer be able to re-split or re-encode these albums. The music/ ` +
+    `tracks already on disk are kept.`;
+  if (!confirm(msg)) return 0;
+  let okCount = 0;
+  let freedBytes = 0;
+  for (const a of purgeable) {
+    try {
+      const r = await fetch(`/api/album/${a.album_id}/purge-sources`, { method: 'POST' });
+      if (r.ok) {
+        const d = await r.json();
+        freedBytes += d.bytes_freed || 0;
+        okCount++;
+      }
+    } catch (e) { console.error(e); }
+  }
+  const freedMb = freedBytes / 1e6;
+  toast(`✓ Deleted originals for ${okCount} ${okCount === 1 ? 'album' : 'albums'} — freed ${_fmtMb(freedMb)}`, 'ok');
+  return okCount;
+}
+
+export async function bulkPurgeMusic() {
+  const names = [...state.musicSelected];
+  await _purgeOriginalsForIds(names);
+  state.musicSelected.clear();
+  refreshAlbums();
+}
+
+export async function purgeAlbumSources(album_id) {
+  await _purgeOriginalsForIds([album_id]);
+  refreshAlbums();
+}
+
 export async function refreshAlbums() {
   try {
     const r = await fetch('/api/albums');
@@ -172,7 +230,12 @@ function _albumRowHtml(a, opts) {
         aria-label="${htmlEscape('Failed: ' + err.op + ' — click to dismiss')}"
         onclick="clearAlbumFailure(this.dataset.fname)">failed: ${htmlEscape(err.op)}</button>`
     : '';
-  const countCell = `${baseCount}${failPill}`;
+  // Sources-purged pill — informs the user the album is "locked" (no source
+  // audio left, so the wave editor / demote / re-split paths are gone).
+  const lockedPill = a.sources_purged
+    ? ` <span class="locked-pill" title="Originals deleted — splits and encoding are locked in. The wave editor can no longer re-split or re-encode this album." aria-label="Originals deleted — locked">🔒 locked</span>`
+    : '';
+  const countCell = `${baseCount}${failPill}${lockedPill}`;
   const splitTitle = a.split ? 'Re-edit splits' : 'Split into tracks';
   // Demote button is offered on every album; for split albums the dialog
   // warns that music/ stays put.
@@ -187,8 +250,25 @@ function _albumRowHtml(a, opts) {
     ? `Move ${ctx} sides back to raw — music files preserved`
     : `Move ${ctx} sides back to raw`;
   const tagBtn = actionBtn('openTagAlbum', a.album_id, {label: 'Edit tags', ariaLabel: 'Edit tags for ' + ctx, glyph: '✎'});
-  const splitBtn = actionBtn('openWaveEditor', a.album_id, {label: splitTitle, ariaLabel: splitTitle + ' for ' + ctx, glyph: '✂'});
-  const demBtn = actionBtn(demoteHandler, a.album_id, {label: demoteLabel, ariaLabel: demoteAria, glyph: '⤺'});
+  // Wave-editor + demote depend on the side FLACs still being on disk. Once
+  // the user has purged the originals the row is "locked" — only tag-edit
+  // and delete (and on split albums, no purge button either) remain.
+  const splitBtn = a.sources_purged
+    ? ''
+    : actionBtn('openWaveEditor', a.album_id, {label: splitTitle, ariaLabel: splitTitle + ' for ' + ctx, glyph: '✂'});
+  const demBtn = a.sources_purged
+    ? ''
+    : actionBtn(demoteHandler, a.album_id, {label: demoteLabel, ariaLabel: demoteAria, glyph: '⤺'});
+  // Only split albums with originals still present get the "delete sources"
+  // affordance. Sized in MB so the user can weigh the cost-of-freeing before
+  // committing.
+  const purgeBtn = (a.split && !a.sources_purged)
+    ? actionBtn('purgeAlbumSources', a.album_id, {
+        label: `Delete originals (~${a.size_mb || 0} MB)`,
+        ariaLabel: `Delete original sides for ${ctx} — frees about ${a.size_mb || 0} MB and locks in splits`,
+        glyph: '🗜',
+      })
+    : '';
   const delBtn = actionBtn('deleteAlbum', a.album_id, {label: 'Delete album', ariaLabel: 'Delete album ' + ctx, glyph: '✕', danger: true});
   const checkboxAria = htmlEscape('Select ' + ctx + ' for bulk action');
   return `
@@ -208,7 +288,7 @@ function _albumRowHtml(a, opts) {
     <td data-col="size" style="color:var(--muted)">${a.size_mb} MB</td>
     <td data-col="fmt" style="color:var(--muted);font-variant-numeric:tabular-nums" title="N-bit / M kHz">${fmtSourceFormat(a)}</td>
     <td data-col="status" style="color:var(--muted)">${countCell}</td>
-    <td data-col="actions" style="white-space:nowrap;text-align:right">${tagBtn}${splitBtn}${demBtn}${delBtn}</td>
+    <td data-col="actions" style="white-space:nowrap;text-align:right">${tagBtn}${splitBtn}${demBtn}${purgeBtn}${delBtn}</td>
   </tr>`;
 }
 

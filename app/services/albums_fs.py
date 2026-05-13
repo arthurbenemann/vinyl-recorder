@@ -51,6 +51,7 @@ def _stub_manifest() -> dict:
         "cover":          None,
         "plan":           None,
         "music_relpath":  None,
+        "sources_purged": False,
     }
 
 
@@ -302,6 +303,7 @@ def _summarize_album(album_id: str, manifest: dict) -> dict:
         "has_draft":        plan is not None and not music_relpath,
         "music_relpath":    music_relpath,
         "track_count":      len(kept_tracks),
+        "sources_purged":   bool(manifest.get("sources_purged")),
     }
 
 
@@ -349,6 +351,51 @@ def delete_album(album_id: str) -> dict:
     if d.is_dir():
         shutil.rmtree(d, ignore_errors=True)
     return manifest
+
+
+def purge_sources(album_id: str) -> dict:
+    """Free the bulk of disk used by a split album by deleting the side
+    FLACs and the `.cache/` tree, while keeping `album.json` (and any
+    `cover.jpg`) so the album row stays visible in the Music section.
+
+    Refuses to run if the album hasn't been split — without `music_relpath`
+    there are no emitted tracks to fall back on, and dropping the sides
+    would be a silent destructive operation.
+
+    Returns `{"bytes_freed": int, "files_removed": int}` so the caller can
+    report the savings."""
+    manifest = reconcile_sides(album_id)
+    if not manifest.get("music_relpath"):
+        raise ValueError(
+            "album has not been split — refusing to delete originals"
+        )
+    d = album_dir(album_id)
+    bytes_freed = 0
+    files_removed = 0
+    for fname in list(manifest.get("sides") or []):
+        p = d / fname
+        if not p.exists():
+            continue
+        try:
+            bytes_freed += p.stat().st_size
+            p.unlink()
+            files_removed += 1
+        except OSError:
+            pass
+    cache = d / ".cache"
+    if cache.is_dir():
+        for sub in cache.rglob("*"):
+            if sub.is_file():
+                try:
+                    bytes_freed += sub.stat().st_size
+                    files_removed += 1
+                except OSError:
+                    pass
+        shutil.rmtree(cache, ignore_errors=True)
+    manifest["sides"] = []
+    manifest["sources_purged"] = True
+    write_manifest(album_id, manifest)
+    return {"bytes_freed": bytes_freed, "files_removed": files_removed}
 
 
 def demote_album(album_id: str) -> dict:

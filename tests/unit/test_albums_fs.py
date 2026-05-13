@@ -50,6 +50,7 @@ def test_read_manifest_returns_stub_when_missing(tmp_path, monkeypatch):
         "cover":          None,
         "plan":           None,
         "music_relpath":  None,
+        "sources_purged": False,
     }
 
 
@@ -345,6 +346,80 @@ def test_has_draft_flag_matrix(tmp_path, monkeypatch,
     row = rows[0]
     assert row["split"] is expected_split
     assert row["has_draft"] is expected_has_draft
+
+
+# ── purge_sources ────────────────────────────────────────────────────────
+def test_purge_sources_refuses_unsplit_album(tmp_path, monkeypatch):
+    """Without a music/ fallback there's nothing to keep — refuse rather
+    than silently delete the only copy of the audio."""
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
+    monkeypatch.setattr(albums_fs, "MUSIC_DIR", tmp_path / "music")
+    album_id = "abcd0123"
+    _seed_album(tmp_path, album_id,
+                sides_in_manifest=["a.flac"],
+                sides_on_disk=["a.flac"])
+    with pytest.raises(ValueError):
+        albums_fs.purge_sources(album_id)
+
+
+def test_purge_sources_drops_sides_and_cache(tmp_path, monkeypatch):
+    """Split album → sides + .cache/ are removed; album.json stays put with
+    `sources_purged: true` and an empty `sides[]`."""
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
+    monkeypatch.setattr(albums_fs, "MUSIC_DIR", tmp_path / "music")
+    album_id = "abcd0123"
+    d = tmp_path / album_id
+    d.mkdir()
+    (d / "a.flac").write_bytes(b"x" * 1000)
+    (d / "b.flac").write_bytes(b"y" * 2000)
+    (d / "cover.jpg").write_bytes(b"keepme")
+    cache = d / ".cache" / "peaks"
+    cache.mkdir(parents=True)
+    (cache / "a.dat").write_bytes(b"z" * 500)
+    import json as _json
+    (d / "album.json").write_text(_json.dumps({
+        "schema_version": 2, "tags": {"artist": "X", "album": "Y"},
+        "sides": ["a.flac", "b.flac"],
+        "cover": "cover.jpg", "plan": {"tracks": []},
+        "music_relpath": "X/Y",
+    }))
+
+    res = albums_fs.purge_sources(album_id)
+
+    assert res["bytes_freed"] == 1000 + 2000 + 500
+    assert res["files_removed"] == 3
+    assert not (d / "a.flac").exists()
+    assert not (d / "b.flac").exists()
+    assert not (d / ".cache").exists()
+    # album.json + cover.jpg survive so the row still has tags + thumbnail.
+    assert (d / "album.json").exists()
+    assert (d / "cover.jpg").read_bytes() == b"keepme"
+    m = albums_fs.read_manifest(album_id)
+    assert m["sides"] == []
+    assert m["sources_purged"] is True
+    assert m["music_relpath"] == "X/Y"
+
+
+def test_purge_sources_summary_exposes_locked_state(tmp_path, monkeypatch):
+    """The /api/albums summary surfaces `sources_purged` so the UI can paint
+    the locked pill and hide re-edit / demote actions."""
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
+    monkeypatch.setattr(albums_fs, "MUSIC_DIR", tmp_path / "music")
+    monkeypatch.setattr(albums_fs, "flac_format", lambda p: {})
+    monkeypatch.setattr(albums_fs, "flac_duration_seconds", lambda p: 0.0)
+    album_id = "abcd0123"
+    d = tmp_path / album_id
+    d.mkdir()
+    import json as _json
+    (d / "album.json").write_text(_json.dumps({
+        "schema_version": 2, "tags": {},
+        "sides": [], "cover": None, "plan": {"tracks": []},
+        "music_relpath": "X/Y", "sources_purged": True,
+    }))
+    [row] = albums_fs.list_albums()
+    assert row["split"] is True
+    assert row["sources_purged"] is True
+    assert row["side_count"] == 0
 
 
 # ── per-side source_format on summary ────────────────────────────────────
