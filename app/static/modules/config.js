@@ -46,30 +46,22 @@ export async function applyConfig() {
       const btn = document.getElementById('t-collection-refresh');
       if (btn) btn.hidden = false;
     }
-    // Auto-stop on silence defaults. Only fill the form if the user
-    // hasn't already saved their own preferences via localStorage —
-    // ops-set env defaults shouldn't clobber a per-user override.
-    const enEl  = document.getElementById('autostop-enable');
-    const secEl = document.getElementById('autostop-seconds');
-    const thrEl = document.getElementById('autostop-threshold');
-    if (enEl && localStorage.getItem('autoStopOnSilence') === null
-        && typeof c.default_auto_stop_on_silence === 'boolean') {
-      enEl.checked = c.default_auto_stop_on_silence;
+    // Auto-stop-on-silence default. Only fill the dropdown if the user
+    // hasn't already saved their preference via localStorage — ops-set
+    // env defaults shouldn't clobber a per-user override. The detection
+    // threshold (dBFS) is server-side only (SILENCE_THRESHOLD_DB) so
+    // there's nothing to seed for it. When the env feature flag is off
+    // (default_auto_stop_on_silence=false), seed the dropdown to "0"
+    // (∞ disabled) — explicit `0` value matches the <option value="0">.
+    const silSel = document.getElementById('silence-sel');
+    if (silSel && localStorage.getItem('autoStopSilenceSeconds') === null) {
+      let v = '0';
+      if (c.default_auto_stop_on_silence === true
+          && typeof c.default_silence_seconds === 'number') {
+        v = String(c.default_silence_seconds);
+      }
+      if ([...silSel.options].some(o => o.value === v)) silSel.value = v;
     }
-    if (secEl && localStorage.getItem('autoStopSilenceSeconds') === null
-        && typeof c.default_silence_seconds === 'number') {
-      secEl.value = String(c.default_silence_seconds);
-    }
-    if (thrEl && localStorage.getItem('autoStopSilenceDb') === null
-        && typeof c.default_silence_threshold_db === 'number') {
-      thrEl.value = String(c.default_silence_threshold_db);
-    }
-    // wireAutoStopForm has already attached `change` listeners by the
-    // time we get here (applyConfig is awaited later in boot). Trigger
-    // it so the hint + collapsed-state stay in sync with whatever we
-    // just seeded — without this, the user sees stale form state until
-    // they hand-toggle an input.
-    if (enEl) enEl.dispatchEvent(new Event('change'));
     // auto_connect is now handled server-side at app startup; nothing to do
     // here besides letting the WS hello replay tell us the current state.
   } catch(e) { console.error('config fetch failed', e); }

@@ -20,75 +20,36 @@ let recTimerInterval = null;
 // the next start_recording POST).
 let _durSelLastValue = null;
 
-// Auto-stop on silence settings persist across page reloads via
-// localStorage so the user only configures them once. applyConfig (in
-// config.js) seeds these from /api/config the first time the page is
-// loaded on a fresh browser.
-const LS_AUTOSTOP   = 'autoStopOnSilence';
+// Silence auto-stop persists across page reloads via localStorage so the
+// user only configures it once. applyConfig (in config.js) seeds it from
+// /api/config the first time the page is loaded on a fresh browser.
+// The detection threshold (dBFS) is an ops/calibration knob set via
+// SILENCE_THRESHOLD_DB on the server; the UI carries only the duration
+// (matching the existing time-limit dropdown's shape).
 const LS_AS_SECONDS = 'autoStopSilenceSeconds';
-const LS_AS_DB      = 'autoStopSilenceDb';
 
-function readAutoStopForm() {
-  const en   = document.getElementById('autostop-enable');
-  const sec  = document.getElementById('autostop-seconds');
-  const thr  = document.getElementById('autostop-threshold');
-  return {
-    enabled:     !!(en && en.checked),
-    seconds:     Math.max(1, parseInt((sec && sec.value) || '20', 10)),
-    threshold_db: Math.max(-100, Math.min(0, parseFloat((thr && thr.value) || '-50'))),
-  };
+
+// Read the silence-auto-stop seconds from the dropdown. Value "0" maps
+// to "feature off" (the ∞ option) — same convention the duration cap
+// uses, so the server's auto_stop_on_silence flag is derived from it.
+function readSilenceSel() {
+  const sel = document.getElementById('silence-sel');
+  return Math.max(0, parseInt((sel && sel.value) || '0', 10));
 }
 
-function persistAutoStopForm(f) {
-  try {
-    localStorage.setItem(LS_AUTOSTOP,   f.enabled ? '1' : '0');
-    localStorage.setItem(LS_AS_SECONDS, String(f.seconds));
-    localStorage.setItem(LS_AS_DB,      String(f.threshold_db));
-  } catch (e) {}
-}
 
-// Reflect the auto-stop config on the summary line so the user can see
-// the current setting at a glance without expanding the panel.
-function updateAutoStopHint(f) {
-  const hint = document.getElementById('autostop-hint');
-  if (!hint) return;
-  if (f.enabled) {
-    hint.hidden = false;
-    hint.textContent = `${f.seconds}s · ${f.threshold_db.toFixed(0)} dB`;
-  } else {
-    hint.hidden = true;
-    hint.textContent = '';
-  }
-}
-
-export function wireAutoStopForm() {
-  const en  = document.getElementById('autostop-enable');
-  const sec = document.getElementById('autostop-seconds');
-  const thr = document.getElementById('autostop-threshold');
-  if (!en || !sec || !thr) return;
+export function wireSilenceSel() {
+  const sel = document.getElementById('silence-sel');
+  if (!sel) return;
   // Hydrate from localStorage if present; applyConfig will only fill
-  // unset keys, so a user who changed their settings keeps them.
-  const lsEn  = localStorage.getItem(LS_AUTOSTOP);
-  const lsSec = localStorage.getItem(LS_AS_SECONDS);
-  const lsDb  = localStorage.getItem(LS_AS_DB);
-  if (lsEn  !== null) en.checked  = lsEn === '1';
-  if (lsSec !== null) sec.value   = lsSec;
-  if (lsDb  !== null) thr.value   = lsDb;
-  const onChange = () => {
-    const f = readAutoStopForm();
-    persistAutoStopForm(f);
-    updateAutoStopHint(f);
-    // Open the details when enabled so the user can see the inputs;
-    // collapse otherwise to save sidebar space.
-    const det = document.getElementById('autostop-details');
-    if (det) det.open = f.enabled;
-  };
-  en.addEventListener('change', onChange);
-  sec.addEventListener('change', onChange);
-  thr.addEventListener('change', onChange);
-  updateAutoStopHint(readAutoStopForm());
-  const det = document.getElementById('autostop-details');
-  if (det) det.open = en.checked;
+  // unset keys, so a user who changed their setting keeps it.
+  const ls = localStorage.getItem(LS_AS_SECONDS);
+  if (ls !== null && [...sel.options].some(o => o.value === ls)) {
+    sel.value = ls;
+  }
+  sel.addEventListener('change', () => {
+    try { localStorage.setItem(LS_AS_SECONDS, String(sel.value)); } catch (e) {}
+  });
 }
 
 // The pause/resume WS branches use the duration that was current at the
@@ -122,16 +83,18 @@ export async function toggleRec() {
     }
     const url = document.getElementById('stream-url').value;
     const dur = parseInt(document.getElementById('dur-sel').value);
-    const as  = readAutoStopForm();
+    const silenceSec = readSilenceSel();
     try {
       const r = await fetch('/api/record/start', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
           stream_url: url, duration: dur,
-          auto_stop_on_silence: as.enabled,
-          silence_seconds:      as.seconds,
-          silence_threshold_db: as.threshold_db,
+          // 0 = ∞ disabled; positive seconds enables the watcher. The
+          // detection threshold itself is set ops-side via the
+          // SILENCE_THRESHOLD_DB env var — no per-recording override.
+          auto_stop_on_silence: silenceSec > 0,
+          silence_seconds:      silenceSec,
         }),
       });
       if (!r.ok) throw new Error(await parseError(r));
@@ -185,42 +148,29 @@ export function applyRecordState({ active, paused: isPaused, sid, durationSec, e
     hint.textContent = 'click ● to start recording';
     prog.style.width = '0%';
     document.getElementById('timer').textContent = fmt(0);
-    // No active recording → no silence-countdown either. Reset and hide
+    // No active recording → no silence countdown either. Reset and hide
     // so a leftover bar from a previous recording isn't visible.
-    applySilenceProgress({ progress: 0, elapsed_seconds: 0,
-                           cap_seconds: 0, armed: false });
+    applySilenceProgress({ progress: 0, cap_seconds: 0 });
   }
   updateSdot();
 }
 
 // Mirror of the duration progress bar for the auto-stop-on-silence
-// countdown. Server emits this every ~500 ms while a recording is
-// armed; the CSS transition smooths the steps so the bar looks like
-// a continuous fill from 0 → silence_seconds. When audio comes back
-// above threshold the server reports progress=0 and the bar drains
-// to empty. Pinned to the existing #prog-wrap layout so visually it
-// reads as a second progress dimension on the same recording.
-export function applySilenceProgress({ progress, elapsed_seconds,
-                                       cap_seconds, armed }) {
+// countdown. The server emits this every ~500 ms while a recording is
+// in flight (only when auto-stop is enabled); the CSS transition smooths
+// the half-second steps. Visible whenever the recording has auto-stop
+// configured (`cap_seconds > 0`) — the bar sits at 0% during normal
+// audio and fills as the smoothed RMS stays below threshold. Recording
+// finalises at the same instant the bar reaches 100%, mirroring the
+// duration bar's "fill = stop" semantics.
+export function applySilenceProgress({ progress, cap_seconds }) {
   const wrap = document.getElementById('silence-prog-wrap');
   const fill = document.getElementById('silence-prog');
-  const label = document.getElementById('silence-prog-label');
   if (!wrap || !fill) return;
   const p = Number(progress) || 0;
-  // Hide unless the watcher is armed AND silence is actively accumulating.
-  // Lead-in silence (not armed) and post-arming audio (progress=0) both
-  // render as hidden so the bar only appears when it carries information.
-  const visible = !!state.recording && !!armed && (cap_seconds > 0) && p > 0;
+  const visible = !!state.recording && (cap_seconds || 0) > 0;
   wrap.hidden = !visible;
   fill.style.width = Math.min(100, p * 100) + '%';
-  if (label) {
-    if (visible) {
-      const remaining = Math.max(0, (cap_seconds || 0) - (elapsed_seconds || 0));
-      label.textContent = `auto-stop in ${Math.ceil(remaining)}s`;
-    } else {
-      label.textContent = '';
-    }
-  }
 }
 
 // Wire the duration dropdown so that while a recording is live, changing

@@ -102,23 +102,23 @@
       <div class="prog-wrap" style="margin-top:10px">
         <div class="prog-fill" id="prog" style="width:0%"></div>
       </div>
-      <!-- Auto-stop-on-silence countdown. Hidden until the server tells
-           us silence is accumulating (smoothed RMS below threshold while
-           the detector is armed); fills to 100% at the moment the
-           recording finalises itself. -->
+      <!-- Auto-stop-on-silence countdown. Sits at 0% during normal
+           audio and fills as the smoothed RMS stays below threshold;
+           the recording finalises at the same instant the bar reaches
+           100%. Hidden when silence-auto-stop is disabled (∞ option
+           in the silence dropdown below) or no recording is active. -->
       <div class="silence-prog-wrap" id="silence-prog-wrap" hidden
-           title="Smoothed RMS has stayed below the silence threshold long enough that auto-stop is approaching. Resumes audio to drain the bar.">
+           title="Auto-stop-on-silence countdown — fills as the smoothed RMS stays below the silence threshold. Recording finalises when it reaches 100%.">
         <div class="silence-prog-fill" id="silence-prog" style="width:0%"></div>
-        <span class="silence-prog-label" id="silence-prog-label"></span>
       </div>
     </div>
 
     <!-- Stop conditions: configuration that decides when an in-flight
-         recording finalizes. Time limit is a hard cap (passed to the
-         server at start_recording); auto-stop on silence is a smart
-         trigger evaluated by the per-session watcher. Both write
-         reason="auto" through the same finalize path; the user picks
-         which one(s) apply per recording. -->
+         recording finalizes. Both fields drive the per-session watcher;
+         either one reaching its limit finalises the recording with
+         reason="auto". The silence detection threshold (dBFS) lives in
+         the SILENCE_THRESHOLD_DB env var — it's an ops/calibration
+         knob, not something the user adjusts per recording. -->
     <div class="sb-section sb-section-stop">
       <div class="label">Stop conditions</div>
       <div class="stop-row">
@@ -130,32 +130,17 @@
           <option value="0">∞ unlimited</option>
         </select>
       </div>
-      <!-- Auto-stop on silence: when checked, server-side watcher ends
-           the recording after N continuous seconds below the threshold.
-           Lead-in silence is ignored — the watcher only arms after the
-           first above-threshold chunk. Values persist via localStorage. -->
-      <details class="autostop" id="autostop-details">
-        <summary class="autostop-summary">
-          <input type="checkbox" id="autostop-enable" onclick="event.stopPropagation()"
-                 title="Auto-stop the recording when the upstream goes silent (after at least one above-threshold chunk).">
-          <span>auto-stop on silence</span>
-          <span class="autostop-hint" id="autostop-hint" hidden></span>
-        </summary>
-        <div class="autostop-row">
-          <label class="autostop-field" for="autostop-seconds"
-                 title="How many continuous seconds of silence trigger the auto-stop.">
-            after
-            <input type="number" id="autostop-seconds" value="20" min="1" step="1">
-            s
-          </label>
-          <label class="autostop-field" for="autostop-threshold"
-                 title="Smoothed RMS (~2 s window) below this value in dBFS is treated as silence. -40 dBFS is a reasonable default — quieter than music but well above the average energy of a vinyl runout groove, so the periodic ~1.8 s clicks can't keep re-arming the detector.">
-            below
-            <input type="number" id="autostop-threshold" value="-40" min="-100" max="0" step="1">
-            dBFS
-          </label>
-        </div>
-      </details>
+      <div class="stop-row">
+        <label class="stop-label" for="silence-sel">Silence</label>
+        <select class="dur" id="silence-sel"
+                title="Auto-stop the recording after this many continuous seconds with the smoothed RMS below the silence threshold. ∞ disables the feature. Threshold itself is set ops-side via SILENCE_THRESHOLD_DB.">
+          <option value="10">10 s</option>
+          <option value="20" selected>20 s</option>
+          <option value="30">30 s</option>
+          <option value="60">60 s</option>
+          <option value="0">∞ disabled</option>
+        </select>
+      </div>
     </div>
 
     <div class="sb-section sb-section-log">
