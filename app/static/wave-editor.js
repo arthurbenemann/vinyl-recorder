@@ -13,6 +13,9 @@ const we = {
   titles:      ['Track 1'],  // length === cuts.length + 1
   skipped:     [false],      // length === cuts.length + 1; true = drop region from output
   silences:    [],           // {start, end, duration} from /detect-silences
+  discogsSideBreaks: [],     // album-time seconds where the Discogs tracklist
+                             // transitions sides (e.g. A→B). Informational
+                             // markers — not constraints on cuts.
   candidates:  [],           // last MB+Discogs search results
   hoverX:      null,         // last mouse x in main waveform px (for + add cut at playhead)
   dragging:    null,         // { kind: 'cut'|'mini', i?, lastX? }
@@ -363,6 +366,8 @@ function openWaveEditor(fname) {
     titles:      ['Track 1'],
     skipped:     [false],
     silences:    [],   // re-detected on demand via the suggest panel
+    discogsSideBreaks: [],   // populated by _weApplyTracklist when Discogs
+                              // tracklist has `position` info on sides
     candidates:  [],
     hoverX:      null,
     isPlaying:   false,
@@ -906,10 +911,21 @@ function renderMinimapOverlay() {
     const w = ((boundaries[i + 1] - start) / Math.max(0.0001, we.total)) * 100;
     return `<div class="wave-skip" style="left:${(start / we.total) * 100}%;width:${w}%"></div>`;
   }).join('');
+  const sides = we.sides || [];
+  let sacc = 0;
+  const sideMarks = sides.length >= 2
+    ? sides.slice(0, -1).map((s, i) => {
+        sacc += Number(s.duration_seconds) || 0;
+        return `<div class="ms" style="left:${_timeToPctFull(sacc)}%" title="Side ${i + 2}"></div>`;
+      }).join('')
+    : '';
+  const discogsSideMarks = (we.discogsSideBreaks || []).map(t =>
+    `<div class="ds" style="left:${_timeToPctFull(t)}%" title="Discogs side break at ${fmtMMSS(t)}"></div>`
+  ).join('');
   const cutMarks = we.cuts.map(t =>
     `<div class="mc" style="left:${_timeToPctFull(t)}%"></div>`
   ).join('');
-  host.innerHTML = skipBands + cutMarks;
+  host.innerHTML = skipBands + sideMarks + discogsSideMarks + cutMarks;
 }
 
 function weMinimapDown(e) {
@@ -1057,6 +1073,7 @@ function weClearCuts() {
   we.cuts = [];
   we.titles = ['Track 1'];
   we.skipped = [false];
+  we.discogsSideBreaks = [];
   we.dirty = true;
   invalidateMeasure();
   renderWaveformOverlay();
@@ -1188,7 +1205,7 @@ function weDeleteCut(i, e) {
 
 function renderWaveformOverlay() {
   const overlay = document.getElementById('we-overlay');
-  overlay.querySelectorAll('.wave-cut, .wave-silence, .wave-skip, .wave-playhead').forEach(el => el.remove());
+  overlay.querySelectorAll('.wave-cut, .wave-silence, .wave-skip, .wave-side-switch, .wave-discogs-side, .wave-playhead').forEach(el => el.remove());
 
   // Silence highlights (amber bands) from the last detection.
   for (const s of we.silences) {
@@ -1217,6 +1234,42 @@ function renderWaveformOverlay() {
     el.style.width = (b - a) + '%';
     overlay.appendChild(el);
   });
+
+  // Side-switch markers — dashed verticals at album-time side boundaries.
+  // Most albums have a flip-the-record gap that's a natural cut location,
+  // so surfacing the boundary helps the user place a split there.
+  const sides = we.sides || [];
+  if (sides.length >= 2) {
+    let acc = 0;
+    for (let i = 0; i < sides.length - 1; i++) {
+      acc += Number(sides[i].duration_seconds) || 0;
+      const pct = _timeToPctView(acc);
+      if (pct == null) continue;
+      const el = document.createElement('div');
+      el.className = 'wave-side-switch';
+      el.style.left = pct + '%';
+      el.title = `Side ${i + 1} → Side ${i + 2} at ${fmtMMSS(acc)}`;
+      const badge = document.createElement('div');
+      badge.className = 'wave-side-badge';
+      badge.textContent = `Side ${i + 2}`;
+      el.appendChild(badge);
+      overlay.appendChild(el);
+    }
+  }
+
+  // Discogs side breaks — informational markers showing where the Discogs
+  // tracklist says one side ends and the next begins. Useful when the
+  // recording is one continuous side (no physical switch) but the release
+  // is a 2-sided LP, so the user knows which cut is the "side flip" point.
+  for (const t of (we.discogsSideBreaks || [])) {
+    const pct = _timeToPctView(t);
+    if (pct == null) continue;
+    const el = document.createElement('div');
+    el.className = 'wave-discogs-side';
+    el.style.left = pct + '%';
+    el.title = `Discogs side break at ${fmtMMSS(t)}`;
+    overlay.appendChild(el);
+  }
 
   // Cut handles.
   we.cuts.forEach((t, i) => {
@@ -1277,8 +1330,20 @@ function renderTracks() {
     const titleAttrs = (skipped || unfit)
       ? 'disabled'
       : `oninput="weSetTitle(${i}, this.value)"`;
-    const rangeText = unfit ? "doesn't fit" : fmtMMSS(end - start);
-    const rangeTitle = unfit ? 'Track from Discogs is longer than the recording — not exported' : '';
+    // First row has no preceding marker (album starts at 0). Show "—" so the
+    // column reads unambiguously as "cut marker location"; the duration to
+    // the right is the length of this track, not a stop time.
+    const markerVal   = isFirst ? '—' : fmtMMSS(start);
+    const markerTitle = isFirst
+      ? 'No marker — track 1 starts at album beginning'
+      : `Cut marker at ${fmtMMSS(start)} — edit to move`;
+    const markerAria  = isFirst
+      ? 'No marker — track 1 starts at album beginning'
+      : `Cut marker before track ${num} at ${fmtMMSS(start)}`;
+    const lengthText  = unfit ? "doesn't fit" : fmtMMSS(end - start);
+    const lengthTitle = unfit
+      ? 'Track from Discogs is longer than the recording — not exported'
+      : `Track length ${fmtMMSS(end - start)}`;
     const rowClass = ['wave-track'];
     if (skipped) rowClass.push('skip');
     if (unfit)   rowClass.push('unfit');
@@ -1290,11 +1355,12 @@ function renderTracks() {
         <span class="pn">${num}</span>
         <button class="play-track ${playing}" onclick="wePlayTrack(${i})" title="Play this region" aria-label="${htmlEscape('Play track ' + ctx)}" ${unfit ? 'disabled' : ''}>▶</button>
         <input type="text" value="${htmlEscape(titleVal)}" ${titleAttrs} aria-label="${htmlEscape('Title for track ' + num)}">
-        <input type="text" class="start-input" value="${fmtMMSS(start)}" placeholder="m:ss.ss"
+        <input type="text" class="start-input" value="${markerVal}" placeholder="m:ss.ss"
                ${isFirst || unfit ? 'disabled' : ''}
-               aria-label="${htmlEscape('Start time of track ' + num)}"
+               title="${htmlEscape(markerTitle)}"
+               aria-label="${htmlEscape(markerAria)}"
                onchange="weSetCutAt(${i}, parseMMSS(this.value))">
-        <span class="range" title="${rangeTitle}">${rangeText}</span>
+        <span class="range" title="${htmlEscape(lengthTitle)}" aria-label="${htmlEscape('Length ' + lengthText)}">${lengthText}</span>
         <button class="skip-btn ${skipped ? 'on' : ''}"
                 title="${skipped ? 'Restore region as a track' : 'Skip — drop region from output and measurement'}"
                 aria-label="${htmlEscape((skipped ? 'Restore track ' : 'Skip track ') + ctx)}"
@@ -1533,24 +1599,46 @@ function _weApplyTracklist(track_details, sourceLabel) {
     return false;
   }
   const newCuts = [];
+  const newSideBreaks = [];
   let cursor = 0;
   let overflow = 0;
+  // Discogs `position` is per-track (e.g. "A1", "B2", "1-01" on multi-disc).
+  // We use the leading alphabetic prefix (or, lacking one, the leading "N-"
+  // disc number) as the "side" key. A change in key between two adjacent
+  // tracks marks a side transition; the cumulative duration before the
+  // transition is the album-time of the side break.
+  const sideKey = (pos) => {
+    const s = String(pos || '').trim();
+    if (!s) return '';
+    const m = s.match(/^([A-Za-z]+|\d+(?=-))/);
+    return m ? m[0].toUpperCase() : '';
+  };
   for (let j = 0; j < td.length - 1; j++) {
     cursor += (td[j].duration_seconds || 0);
+    const cur  = sideKey(td[j].position);
+    const next = sideKey(td[j + 1].position);
+    const sideChanged = cur && next && cur !== next;
     if (cursor >= we.total) {
       newCuts.push(we.total);
       overflow += 1;
     } else if (cursor > 0) {
       newCuts.push(cursor);
     }
+    if (sideChanged && cursor > 0 && cursor < we.total) {
+      newSideBreaks.push(cursor);
+    }
   }
-  we.cuts    = newCuts;
-  we.titles  = td.map(t => t.title);
-  we.skipped = we.titles.map(() => false);
+  we.cuts               = newCuts;
+  we.titles             = td.map(t => t.title);
+  we.skipped            = we.titles.map(() => false);
+  we.discogsSideBreaks  = newSideBreaks;
   invalidateMeasure();
+  const sideNote = newSideBreaks.length
+    ? ` · ${newSideBreaks.length} side break${newSideBreaks.length === 1 ? '' : 's'}`
+    : '';
   document.getElementById('we-search-status').textContent = overflow
-    ? `${td.length} tracks · ${sourceLabel} · ${overflow} don't fit recording`
-    : `${td.length} tracks · ${sourceLabel}`;
+    ? `${td.length} tracks · ${sourceLabel} · ${overflow} don't fit recording${sideNote}`
+    : `${td.length} tracks · ${sourceLabel}${sideNote}`;
   drawAll();
   return true;
 }
