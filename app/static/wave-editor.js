@@ -1420,15 +1420,13 @@ function renderWaveformOverlay() {
       : `Cut at ${fmtMMSS(t)} — drag to nudge, shift-drag to also shift later cuts, right-click to delete`;
     el.addEventListener('mousedown',   ev => weStartDrag(i, ev));
     el.addEventListener('contextmenu', ev => weDeleteCut(i, ev));
+    // The grip doubles as the position chip: when the cut carries a
+    // sleeve position the label sits inside the red handle square itself
+    // (.grip-labeled), otherwise it's the plain small square.
     const grip = document.createElement('div');
-    grip.className = 'grip';
+    grip.className = pos ? 'grip grip-labeled' : 'grip';
+    if (pos) grip.textContent = pos;
     el.appendChild(grip);
-    if (pos) {
-      const label = document.createElement('div');
-      label.className = 'pos-label';
-      label.textContent = pos;
-      el.appendChild(label);
-    }
     overlay.appendChild(el);
   });
 
