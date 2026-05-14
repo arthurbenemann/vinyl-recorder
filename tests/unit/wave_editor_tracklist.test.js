@@ -29,11 +29,16 @@ const sandbox = {
   clearTimeout:     clearTimeout,
 };
 vm.createContext(sandbox);
-vm.runInContext(SRC, sandbox);
+// `we` is a module-level const inside wave-editor.js — expose it so the
+// _weSideBounds cases can drive the editor's side/total state directly.
+vm.runInContext(SRC + '\nif (typeof window !== "undefined") window.__we = we;', sandbox);
 
-const cutsFor = win._weCutsFromTracklist;
-const letter  = win._wePosLetter;
-if (typeof cutsFor !== 'function' || typeof letter !== 'function') {
+const cutsFor    = win._weCutsFromTracklist;
+const letter     = win._wePosLetter;
+const sideBounds = win._weSideBounds;
+const weState    = win.__we;
+if (typeof cutsFor !== 'function' || typeof letter !== 'function'
+    || typeof sideBounds !== 'function' || !weState) {
   throw new Error('helpers not exposed on window');
 }
 
@@ -129,6 +134,21 @@ check('fallback: only one side letter present → global cumulative',
     titles: ['T1','T2'],
     skipped: [false,false],
     overflow: 0 });
+
+// ── _weSideBounds — drag-clamp window for a cut at time `t`
+function bounds(sides, total, time) {
+  weState.sides = sides.map(d => ({ duration_seconds: d }));
+  weState.total = total;
+  return { b: sideBounds(time) };
+}
+check('sideBounds: 2 sides, cut inside side A',  bounds([28,30],58,24.08), { b:[0,28] });
+check('sideBounds: 2 sides, cut on the A/B boundary → side B', bounds([28,30],58,28), { b:[28,58] });
+check('sideBounds: 2 sides, cut inside side B',  bounds([28,30],58,40),    { b:[28,58] });
+check('sideBounds: 2 sides, cut at album end',   bounds([28,30],58,58),    { b:[28,58] });
+check('sideBounds: single side spans whole album', bounds([60],60,10),     { b:[0,60] });
+check('sideBounds: 3 sides, middle side',        bounds([20,20,20],60,35), { b:[20,40] });
+check('sideBounds: last side hi clamps to total when durations under-sum',
+  bounds([28,29],58,45), { b:[28,58] });
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

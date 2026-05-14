@@ -948,9 +948,29 @@ function _weEffectivePositions() {
   return _weDerivedPositions();
 }
 
+// Album-time [lo, hi] of the recorded side that contains time `t`. A
+// single-cut drag is clamped to this so a marker can't be dragged out of
+// its raw recording region into an adjacent side. The last side's `hi` is
+// `we.total` rather than the summed duration so a small rounding mismatch
+// between side durations and the album total doesn't strand the boundary.
+function _weSideBounds(t) {
+  const sides = we.sides || [];
+  if (sides.length < 2) return [0, we.total];
+  let lo = 0;
+  for (let k = 0; k < sides.length; k++) {
+    const hi = (k === sides.length - 1)
+      ? we.total
+      : lo + (Number(sides[k].duration_seconds) || 0);
+    if (t < hi || k === sides.length - 1) return [lo, hi];
+    lo = hi;
+  }
+  return [0, we.total];
+}
+
 if (typeof window !== 'undefined') {
   window._weDerivedPositions  = _weDerivedPositions;
   window._weEffectivePositions = _weEffectivePositions;
+  window._weSideBounds        = _weSideBounds;
 }
 
 // ── Minimap viewport rect + cut markers ───────────────────────────────────
@@ -1049,10 +1069,11 @@ function weHoverMove(e) {
   const r = _wrap().getBoundingClientRect();
   we.hoverX = e.clientX - r.left;
   if (we.dragging?.kind === 'cut') {
-    const t = _snapToSilence(_xToTime(we.hoverX));
-    we.cuts[we.dragging.i] = t;
-    we.cuts.sort((a, b) => a - b);
-    we.dragging.i = we.cuts.indexOf(t);
+    // Clamp to the (lo, hi) window snapshotted at drag start. Because the
+    // cut can't cross a neighbour, we.cuts stays sorted and stays aligned
+    // with we.titles / we.skipped / we.positions — no re-sort needed.
+    const { i, lo, hi } = we.dragging;
+    we.cuts[i] = Math.max(lo, Math.min(hi, _snapToSilence(_xToTime(we.hoverX))));
     we.dirty = true;
     renderWaveformOverlay();
     renderMinimapOverlay();
@@ -1269,7 +1290,16 @@ function weStartDrag(i, e) {
   if (e.shiftKey) {
     we.dragging = { kind: 'cutGroup', i, orig: we.cuts.slice() };
   } else {
-    we.dragging = { kind: 'cut', i };
+    // Constrain a single-cut drag to the raw recording side it sits in and
+    // to the gap between its neighbours — so a marker can't be dragged
+    // across a side boundary, and can't cross a sibling cut (which would
+    // desync the parallel title/skip/position arrays from we.cuts). The
+    // neighbours and side bounds are stable for the whole drag because the
+    // clamp guarantees this cut never leaves the (lo, hi) window.
+    const [sideLo, sideHi] = _weSideBounds(we.cuts[i]);
+    const lo = Math.max(sideLo, i > 0 ? we.cuts[i - 1] : 0);
+    const hi = Math.min(sideHi, i < we.cuts.length - 1 ? we.cuts[i + 1] : we.total);
+    we.dragging = { kind: 'cut', i, lo, hi };
   }
   const onMove = ev => weHoverMove(ev);
   const onUp   = () => {
