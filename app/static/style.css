@@ -631,10 +631,15 @@ textarea:focus-visible,
 .wave-cut:hover { background: #ff7c7b; }
 .wave-cut .grip { position: absolute; top: -6px; left: -6px; width: 14px; height: 14px; background: var(--accent); border-radius: 2px; border: 1px solid #fff; }
 .wave-cut .grip:hover { background: #ff7c7b; }
-.wave-cut .pos-label { position: absolute; top: -8px; left: 10px; padding: 1px 5px; font-size: 9px; line-height: 1.3; color: #fff; background: var(--accent); border-radius: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; pointer-events: none; }
+/* Sits just inside the waveform's top edge — `.wave-wrap` clips overflow,
+   so a negative `top` (like the grip uses) would chop the badge off. */
+.wave-cut .pos-label { position: absolute; top: 3px; left: 9px; padding: 1px 5px; font-size: 9px; line-height: 1.3; color: #fff; background: var(--accent); border-radius: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; pointer-events: none; }
 .wave-silence { position: absolute; top: 0; bottom: 0; background: rgba(186,117,23,0.18); pointer-events: none; }
 .wave-side-switch { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1.5px dashed rgba(55,138,221,0.7); pointer-events: none; }
-.wave-side-badge { position: absolute; top: 2px; left: 3px; padding: 1px 5px; font-size: 9px; color: rgba(170,210,255,0.95); background: rgba(0,0,0,0.55); border: 0.5px solid rgba(55,138,221,0.55); border-radius: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+/* Anchored to the bottom — after a per-side Discogs apply the side-start
+   cut sits exactly on the side-switch line, so a top-anchored badge would
+   collide with that cut's `.pos-label`. */
+.wave-side-badge { position: absolute; bottom: 2px; left: 3px; padding: 1px 5px; font-size: 9px; color: rgba(170,210,255,0.95); background: rgba(0,0,0,0.55); border: 0.5px solid rgba(55,138,221,0.55); border-radius: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
 .wave-readout { position: absolute; top: 4px; right: 6px; padding: 2px 6px; background: rgba(0,0,0,0.6); border-radius: 3px; font-size: 10px; color: var(--text); pointer-events: none; font-variant-numeric: tabular-nums; }
 .wave-axis { display: flex; justify-content: space-between; padding: 4px 6px; font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; background: var(--surface); border-top: 0.5px solid var(--border); }
 .wave-help { font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.6; }

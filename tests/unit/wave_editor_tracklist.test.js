@@ -36,9 +36,11 @@ vm.runInContext(SRC + '\nif (typeof window !== "undefined") window.__we = we;', 
 const cutsFor    = win._weCutsFromTracklist;
 const letter     = win._wePosLetter;
 const sideBounds = win._weSideBounds;
+const groupSpan  = win._weCutGroupSpan;
 const weState    = win.__we;
 if (typeof cutsFor !== 'function' || typeof letter !== 'function'
-    || typeof sideBounds !== 'function' || !weState) {
+    || typeof sideBounds !== 'function' || typeof groupSpan !== 'function'
+    || !weState) {
   throw new Error('helpers not exposed on window');
 }
 
@@ -149,6 +151,26 @@ check('sideBounds: single side spans whole album', bounds([60],60,10),     { b:[
 check('sideBounds: 3 sides, middle side',        bounds([20,20,20],60,35), { b:[20,40] });
 check('sideBounds: last side hi clamps to total when durations under-sum',
   bounds([28,29],58,45), { b:[28,58] });
+
+// ── _weCutGroupSpan — which cuts a shift+drag moves as a rigid group
+function span(sides, total, cuts, i) {
+  weState.sides = sides.map(d => ({ duration_seconds: d }));
+  weState.total = total;
+  weState.cuts  = cuts.slice();
+  const r = groupSpan(i);
+  return { i: r.i, last: r.last, sideLo: r.sideLo, sideHi: r.sideHi };
+}
+// cuts [8,18,24] on side A (0-28), [40] on side B (28-58).
+check('cutGroupSpan: grab first A-side cut → group is all A-side cuts only',
+  span([28,30], 58, [8,18,24,40], 0), { i:0, last:2, sideLo:0, sideHi:28 });
+check('cutGroupSpan: grab middle A-side cut → group is i..lastA',
+  span([28,30], 58, [8,18,24,40], 1), { i:1, last:2, sideLo:0, sideHi:28 });
+check('cutGroupSpan: grab the B-side cut → group is just that cut',
+  span([28,30], 58, [8,18,24,40], 3), { i:3, last:3, sideLo:28, sideHi:58 });
+check('cutGroupSpan: cut sitting exactly on the side boundary belongs to side B',
+  span([28,30], 58, [8,28,40], 1), { i:1, last:2, sideLo:28, sideHi:58 });
+check('cutGroupSpan: single-side album → group runs to the last cut',
+  span([58], 58, [8,18,24,40], 1), { i:1, last:3, sideLo:0, sideHi:58 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

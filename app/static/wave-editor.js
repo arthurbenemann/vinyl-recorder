@@ -967,10 +967,23 @@ function _weSideBounds(t) {
   return [0, we.total];
 }
 
+// The contiguous run of cuts a shift+drag starting on cut `i` moves as a
+// rigid group: cut `i` plus every later cut still inside the same raw
+// recording side. Cuts on later sides are excluded so the group can't be
+// pushed across a side boundary. Returns the span [i, last] and that
+// side's album-time bounds.
+function _weCutGroupSpan(i) {
+  const [sideLo, sideHi] = _weSideBounds(we.cuts[i]);
+  let last = i;
+  while (last + 1 < we.cuts.length && we.cuts[last + 1] < sideHi) last++;
+  return { i, last, sideLo, sideHi };
+}
+
 if (typeof window !== 'undefined') {
   window._weDerivedPositions  = _weDerivedPositions;
   window._weEffectivePositions = _weEffectivePositions;
   window._weSideBounds        = _weSideBounds;
+  window._weCutGroupSpan      = _weCutGroupSpan;
 }
 
 // ── Minimap viewport rect + cut markers ───────────────────────────────────
@@ -1081,18 +1094,20 @@ function weHoverMove(e) {
     return;
   }
   if (we.dragging?.kind === 'cutGroup') {
-    // Rigid translation of the grabbed cut and every cut after it. Snap
-    // the leading cut to silence, then translate the tail by that same
-    // delta so relative spacing stays exact. Clamp at both ends so the
-    // lead can't cross the cut before it and the trailing tail can't run
-    // past we.total — the group stays sorted automatically.
-    const { i, orig } = we.dragging;
+    // Rigid translation of the grabbed cut and the same-side cuts after it
+    // (indices i..last). Snap the leading cut to silence, then translate
+    // the group by that same delta so relative spacing stays exact. Clamp
+    // at both ends so the lead can't cross the cut before it or drop below
+    // the side start, and the trailing cut of the group can't pass the
+    // side end — the group stays within its raw recording region and
+    // we.cuts stays sorted automatically.
+    const { i, last, sideLo, sideHi, orig } = we.dragging;
     const tLead = _snapToSilence(_xToTime(we.hoverX));
-    const minLead = i > 0 ? orig[i - 1] : 0;
-    const maxLead = orig[i] + (we.total - orig[orig.length - 1]);
+    const minLead = Math.max(sideLo, i > 0 ? orig[i - 1] : 0);
+    const maxLead = orig[i] + (sideHi - orig[last]);
     const newLead = Math.max(minLead, Math.min(maxLead, tLead));
     const delta = newLead - orig[i];
-    for (let j = i; j < orig.length; j++) we.cuts[j] = orig[j] + delta;
+    for (let j = i; j <= last; j++) we.cuts[j] = orig[j] + delta;
     we.dirty = true;
     renderWaveformOverlay();
     renderMinimapOverlay();
@@ -1288,7 +1303,11 @@ function weStartDrag(i, e) {
   // delta from the start, not from the previous frame (otherwise snap
   // jitter on the lead would compound into drift on the tail).
   if (e.shiftKey) {
-    we.dragging = { kind: 'cutGroup', i, orig: we.cuts.slice() };
+    // Shift+drag rigidly translates this cut and the cuts after it — but
+    // only the ones sharing its raw recording side (see _weCutGroupSpan).
+    // Cuts on later sides stay put, and weHoverMove clamps the group so it
+    // can't be pushed across the side boundary.
+    we.dragging = { kind: 'cutGroup', ..._weCutGroupSpan(i), orig: we.cuts.slice() };
   } else {
     // Constrain a single-cut drag to the raw recording side it sits in and
     // to the gap between its neighbours — so a marker can't be dragged
