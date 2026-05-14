@@ -541,155 +541,137 @@ def test_split_with_cuts_across_side_boundaries(stack, page):
             except Exception: pass
 
 
-# ── Shift+drag on a cut translates that cut and every cut after it ───────
+# ── Shift+drag translates the grabbed cut + later cuts on the same side ──
 def test_shift_drag_translates_trailing_cuts(stack, page):
-    """Shift-drag is the "all later cuts move with this one" affordance:
-    grab a cut, hold Shift, drag, and every cut at-or-after that index
-    shifts rigidly by the same delta. Cuts before it stay put. Used when
-    one early cut is off by a constant and the whole tail of the album
-    has shifted in lockstep (e.g. after re-detecting silences with a
-    different threshold)."""
+    """Shift-drag rigidly translates the grabbed cut and the cuts after it
+    that share its raw recording side. Cuts before it — and cuts on later
+    sides — stay put, and the group is clamped so it can't be pushed across
+    the side boundary. Used when one early cut is off by a constant and the
+    rest of *that side* has shifted in lockstep."""
     raw = stack["raw"]
     sides = _generate_side_flacs(raw, count=3)
+    # Synthetic editor state, driven directly so the cut math is independent
+    # of the encoded FLAC durations: a 30 s album split 15 s / 15 s into two
+    # sides, with three cuts on side A (2/5/8 s) and two on side B (20/25 s),
+    # viewport at full album so pixel↔time math is trivial, and silences
+    # cleared so snap-to-silence doesn't perturb the lead cut.
+    setup = """
+        we.total     = 30;
+        we.sides     = [{duration_seconds: 15}, {duration_seconds: 15}];
+        we.cuts      = [2.0, 5.0, 8.0, 20.0, 25.0];
+        we.titles    = ['A', 'B', 'C', 'D', 'E', 'F'];
+        we.skipped   = [false, false, false, false, false, false];
+        we.positions = ['', '', '', '', '', ''];
+        we.silences  = [];
+        we.viewStart = 0;
+        we.viewEnd   = we.total;
+        drawAll();
+        const rect = document.getElementById('we-wrap').getBoundingClientRect();
+        const tToClientX = t => rect.left + (t / we.total) * rect.width;
+    """
     try:
         page.goto(RECORDER_URL)
         page.wait_for_load_state("networkidle")
         _combine_then_open_editor(
             page, sides, artist="ShiftDragArtist", album="ShiftDragAlbum"
         )
-        # Seed three cuts so we have something to translate, with the
-        # viewport at full album so pixel↔time math is trivial. Clear
-        # silences so snap-to-silence doesn't perturb the lead cut to a
-        # snap point we didn't ask for.
+        # 1. Grab the middle side-A cut (i=1, t=5) with Shift, move it +1.5 s.
+        #    cut[1] and cut[2] (both side A) shift; cut[0] (earlier) and
+        #    cut[3]/cut[4] (side B) stay put.
         result = page.evaluate(
-            """
-            () => {
-                we.cuts    = [2.0, 5.0, 8.0];
-                we.titles  = ['A', 'B', 'C', 'D'];
-                we.skipped = [false, false, false, false];
-                we.silences = [];
-                we.viewStart = 0;
-                we.viewEnd = we.total;
-                drawAll();
-
-                const rect = document.getElementById('we-wrap').getBoundingClientRect();
-                const tToClientX = t => rect.left + (t / we.total) * rect.width;
-
-                // Grab the middle cut (i=1, t=5) with Shift held.
+            "() => {" + setup + """
                 weStartDrag(1, {
-                    shiftKey: true,
-                    clientX: tToClientX(5.0),
+                    shiftKey: true, clientX: tToClientX(5.0),
                     preventDefault() {}, stopPropagation() {},
                 });
-                // Move it +1.5 s → expect cut[1] = 6.5, cut[2] = 9.5,
-                // cut[0] unchanged at 2.0.
                 weHoverMove({ clientX: tToClientX(6.5) });
-                const afterDrag = we.cuts.slice();
+                const out = we.cuts.slice();
                 window.dispatchEvent(new MouseEvent('mouseup'));
-                return { afterDrag, total: we.total };
-            }
-            """
+                return out;
+            }"""
         )
-        cuts = result["afterDrag"]
-        assert len(cuts) == 3, f"unexpected cut count: {cuts}"
-        assert abs(cuts[0] - 2.0) < 1e-6, f"cut[0] should be unchanged: {cuts}"
-        assert abs(cuts[1] - 6.5) < 1e-3, f"cut[1] should shift to 6.5: {cuts}"
-        assert abs(cuts[2] - 9.5) < 1e-3, f"cut[2] should shift to 9.5: {cuts}"
+        assert len(result) == 5, f"unexpected cut count: {result}"
+        assert abs(result[0] - 2.0) < 1e-6, f"earlier cut should not move: {result}"
+        assert abs(result[1] - 6.5) < 1e-3, f"grabbed cut should shift to 6.5: {result}"
+        assert abs(result[2] - 9.5) < 1e-3, f"same-side trailing cut should shift to 9.5: {result}"
+        assert abs(result[3] - 20.0) < 1e-6, f"side-B cut should not move: {result}"
+        assert abs(result[4] - 25.0) < 1e-6, f"side-B cut should not move: {result}"
 
-        # Now verify the clamp: shift-drag the same group far past the
-        # album's tail. The trailing cut must not exceed we.total — the
-        # group rides into the boundary and stops there with spacing
-        # preserved.
+        # 2. Shift-drag the side-A group far past the album's tail. The
+        #    trailing cut clamps at the *side* boundary (15 s), not we.total,
+        #    spacing preserved; side-B cuts untouched.
         clamped = page.evaluate(
-            """
-            () => {
-                we.cuts = [2.0, 5.0, 8.0];
-                we.silences = [];
-                we.viewStart = 0;
-                we.viewEnd = we.total;
-                drawAll();
-                const rect = document.getElementById('we-wrap').getBoundingClientRect();
-                const tToClientX = t => rect.left + (t / we.total) * rect.width;
+            "() => {" + setup + """
                 weStartDrag(1, {
-                    shiftKey: true,
-                    clientX: tToClientX(5.0),
+                    shiftKey: true, clientX: tToClientX(5.0),
                     preventDefault() {}, stopPropagation() {},
                 });
-                // Way past the end. Last cut should clamp to we.total,
-                // and the lead should land at we.total - 3 (preserved gap).
                 weHoverMove({ clientX: tToClientX(we.total + 100) });
                 const out = we.cuts.slice();
                 window.dispatchEvent(new MouseEvent('mouseup'));
-                return { cuts: out, total: we.total };
-            }
-            """
+                return out;
+            }"""
         )
-        assert abs(clamped["cuts"][0] - 2.0) < 1e-6, \
-            f"earlier cut should not move on clamp: {clamped}"
-        assert abs(clamped["cuts"][2] - clamped["total"]) < 1e-3, \
-            f"trailing cut should clamp to total: {clamped}"
-        assert abs(clamped["cuts"][1] - (clamped["total"] - 3.0)) < 1e-3, \
-            f"spacing between dragged + trailing cuts should survive clamp: {clamped}"
+        assert abs(clamped[0] - 2.0) < 1e-6, f"earlier cut should not move on clamp: {clamped}"
+        assert abs(clamped[2] - 15.0) < 1e-3, f"trailing cut should clamp at side boundary: {clamped}"
+        assert abs(clamped[1] - 12.0) < 1e-3, f"spacing should survive the clamp: {clamped}"
+        assert abs(clamped[3] - 20.0) < 1e-6 and abs(clamped[4] - 25.0) < 1e-6, \
+            f"side-B cuts should not move: {clamped}"
 
-        # And the inverse clamp: shift-drag the lead earlier than the
-        # cut before it. The lead should clamp at cut[i-1] (= 2.0) and
-        # the tail rides with it.
+        # 3. Inverse clamp: shift-drag the lead earlier than the cut before
+        #    it. The lead clamps at cut[i-1] (= 2.0); the tail rides with it.
         clamped_lo = page.evaluate(
-            """
-            () => {
-                we.cuts = [2.0, 5.0, 8.0];
-                we.silences = [];
-                we.viewStart = 0;
-                we.viewEnd = we.total;
-                drawAll();
-                const rect = document.getElementById('we-wrap').getBoundingClientRect();
-                const tToClientX = t => rect.left + (t / we.total) * rect.width;
+            "() => {" + setup + """
                 weStartDrag(1, {
-                    shiftKey: true,
-                    clientX: tToClientX(5.0),
+                    shiftKey: true, clientX: tToClientX(5.0),
                     preventDefault() {}, stopPropagation() {},
                 });
                 weHoverMove({ clientX: tToClientX(-100) });
                 const out = we.cuts.slice();
                 window.dispatchEvent(new MouseEvent('mouseup'));
                 return out;
-            }
-            """
+            }"""
         )
-        assert abs(clamped_lo[0] - 2.0) < 1e-6, \
-            f"earlier cut should still not move: {clamped_lo}"
-        assert abs(clamped_lo[1] - 2.0) < 1e-3, \
-            f"lead should clamp at previous cut: {clamped_lo}"
+        assert abs(clamped_lo[0] - 2.0) < 1e-6, f"earlier cut should still not move: {clamped_lo}"
+        assert abs(clamped_lo[1] - 2.0) < 1e-3, f"lead should clamp at previous cut: {clamped_lo}"
         assert abs(clamped_lo[2] - 5.0) < 1e-3, \
             f"trailing cut should ride down with lead (gap preserved): {clamped_lo}"
 
-        # Sanity: plain (no-shift) drag still only moves the one cut.
+        # 4. Grabbing a side-B cut moves only side-B cuts — side A untouched.
+        side_b = page.evaluate(
+            "() => {" + setup + """
+                weStartDrag(3, {
+                    shiftKey: true, clientX: tToClientX(20.0),
+                    preventDefault() {}, stopPropagation() {},
+                });
+                weHoverMove({ clientX: tToClientX(22.0) });
+                const out = we.cuts.slice();
+                window.dispatchEvent(new MouseEvent('mouseup'));
+                return out;
+            }"""
+        )
+        assert [round(c, 3) for c in side_b[:3]] == [2.0, 5.0, 8.0], \
+            f"side-A cuts should not move when a side-B cut is grabbed: {side_b}"
+        assert abs(side_b[3] - 22.0) < 1e-3 and abs(side_b[4] - 27.0) < 1e-3, \
+            f"side-B group should shift together: {side_b}"
+
+        # 5. Sanity: plain (no-shift) drag still only moves the one cut.
         single = page.evaluate(
-            """
-            () => {
-                we.cuts = [2.0, 5.0, 8.0];
-                we.silences = [];
-                we.viewStart = 0;
-                we.viewEnd = we.total;
-                drawAll();
-                const rect = document.getElementById('we-wrap').getBoundingClientRect();
-                const tToClientX = t => rect.left + (t / we.total) * rect.width;
+            "() => {" + setup + """
                 weStartDrag(1, {
-                    shiftKey: false,
-                    clientX: tToClientX(5.0),
+                    shiftKey: false, clientX: tToClientX(5.0),
                     preventDefault() {}, stopPropagation() {},
                 });
                 weHoverMove({ clientX: tToClientX(6.5) });
                 const out = we.cuts.slice();
                 window.dispatchEvent(new MouseEvent('mouseup'));
                 return out;
-            }
-            """
+            }"""
         )
-        assert abs(single[0] - 2.0) < 1e-6, single
         assert abs(single[1] - 6.5) < 1e-3, single
-        assert abs(single[2] - 8.0) < 1e-6, \
-            f"plain drag should not move trailing cuts: {single}"
+        assert (abs(single[0] - 2.0) < 1e-6 and abs(single[2] - 8.0) < 1e-6
+                and abs(single[3] - 20.0) < 1e-6 and abs(single[4] - 25.0) < 1e-6), \
+            f"plain drag should not move any other cut: {single}"
     finally:
         for p in sides:
             try: p.unlink(missing_ok=True)
