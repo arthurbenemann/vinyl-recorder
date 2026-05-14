@@ -1,3 +1,9 @@
+## v1.3.0 — 2026-05-14
+
+### Features
+- **wave-editor:** Shift-drag a cut to also shift later cuts (#13)
+- **wave-editor:** Sleeve-position labels on cut handles + per-side Discogs apply (#17)
+
 ## v1.2.0 — 2026-05-13
 
 ### Features
