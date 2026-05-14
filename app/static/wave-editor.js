@@ -12,6 +12,10 @@ const we = {
   cuts:        [],           // sorted seconds
   titles:      ['Track 1'],  // length === cuts.length + 1
   skipped:     [false],      // length === cuts.length + 1; true = drop region from output
+  positions:   [''],         // length === titles; per-region Discogs position
+                             //   (e.g. "A1", "B2", "1-01"). Empty when no
+                             //   tracklist has been applied, or for regions
+                             //   the user added by hand.
   silences:    [],           // {start, end, duration} from /detect-silences
   candidates:  [],           // last MB+Discogs search results
   hoverX:      null,         // last mouse x in main waveform px (for + add cut at playhead)
@@ -362,6 +366,7 @@ function openWaveEditor(fname) {
     cuts:        [],
     titles:      ['Track 1'],
     skipped:     [false],
+    positions:   [''],
     silences:    [],   // re-detected on demand via the suggest panel
     candidates:  [],
     hoverX:      null,
@@ -484,9 +489,13 @@ async function weLoadExistingSplit(fname) {
       cursor += ptracks[j].duration_seconds || 0;
       if (cursor > 0 && cursor < we.total) cuts.push(cursor);
     }
-    we.cuts    = cuts;
-    we.titles  = ptracks.map(t => t.title || '');
-    we.skipped = ptracks.map(t => !!t.skip);
+    we.cuts      = cuts;
+    we.titles    = ptracks.map(t => t.title || '');
+    we.skipped   = ptracks.map(t => !!t.skip);
+    // Saved plans don't carry the original Discogs `position` — the editor
+    // can re-apply a tracklist from the Discogs popover to repopulate them
+    // when needed. Until then, no per-region sleeve labels.
+    we.positions = ptracks.map(() => '');
     // Rehydrate the encoder selectors from the saved plan. Default `flac`
     // when an older plan predates the format selector, so the first reopen
     // of a legacy draft picks up "lossless" without changing anything.
@@ -889,6 +898,94 @@ function _weRemapForSides(oldSides, newSides, plan) {
 // sandbox in tests/unit/wave_editor_remap.test.js stubs it the same way.
 if (typeof window !== 'undefined') window._weRemapForSides = _weRemapForSides;
 
+// ── Per-region sleeve-style labels (A1, A2, B1, …) ───────────────────────
+// Two sources:
+//   1. Discogs `position` per track, stashed in `we.positions` when a
+//      tracklist is applied (Discogs path).
+//   2. Auto-derived from `we.sides` + the current cut layout — the region's
+//      start time picks its side letter, and a per-side counter assigns
+//      the track index (manual-cut path). Skipped / unfit regions are
+//      excluded from the per-side numbering, mirroring how the output
+//      tracklist actually exports.
+//
+// _weEffectivePositions returns whichever is active so render code stays
+// agnostic. Single-side records skip derivation — letters wouldn't add
+// information over the plain sequential number.
+function _weDerivedPositions() {
+  const sides = we.sides || [];
+  const need = Math.max(1, we.cuts.length + 1);
+  if (sides.length < 2 || !we.cuts.length) {
+    return new Array(need).fill('');
+  }
+  const sideEnds = [];
+  let acc = 0;
+  for (const s of sides) {
+    acc += Number(s.duration_seconds) || 0;
+    sideEnds.push(acc);
+  }
+  const boundaries = [0, ...we.cuts, we.total];
+  const out = new Array(need).fill('');
+  const perSideCount = new Array(sides.length).fill(0);
+  for (let i = 0; i < need; i++) {
+    if (we.skipped && we.skipped[i]) continue;
+    const start = boundaries[i];
+    const end   = boundaries[i + 1] != null ? boundaries[i + 1] : we.total;
+    if (end - start < 0.5) continue;  // matches renderTracks's "unfit" gate
+    // First side whose end is strictly past `start` — i.e. the side the
+    // region begins on. Falls back to the last side for the album-end
+    // edge case (start === total).
+    let sideIdx = sideEnds.findIndex(e => start < e - 0.001);
+    if (sideIdx < 0) sideIdx = sideEnds.length - 1;
+    perSideCount[sideIdx] += 1;
+    out[i] = String.fromCharCode(65 + sideIdx) + perSideCount[sideIdx];
+  }
+  return out;
+}
+
+function _weEffectivePositions() {
+  const havePositions = (we.positions || []).some(p => p);
+  if (havePositions) return we.positions.slice();
+  return _weDerivedPositions();
+}
+
+// Album-time [lo, hi] of the recorded side that contains time `t`. A
+// single-cut drag is clamped to this so a marker can't be dragged out of
+// its raw recording region into an adjacent side. The last side's `hi` is
+// `we.total` rather than the summed duration so a small rounding mismatch
+// between side durations and the album total doesn't strand the boundary.
+function _weSideBounds(t) {
+  const sides = we.sides || [];
+  if (sides.length < 2) return [0, we.total];
+  let lo = 0;
+  for (let k = 0; k < sides.length; k++) {
+    const hi = (k === sides.length - 1)
+      ? we.total
+      : lo + (Number(sides[k].duration_seconds) || 0);
+    if (t < hi || k === sides.length - 1) return [lo, hi];
+    lo = hi;
+  }
+  return [0, we.total];
+}
+
+// The contiguous run of cuts a shift+drag starting on cut `i` moves as a
+// rigid group: cut `i` plus every later cut still inside the same raw
+// recording side. Cuts on later sides are excluded so the group can't be
+// pushed across a side boundary. Returns the span [i, last] and that
+// side's album-time bounds.
+function _weCutGroupSpan(i) {
+  const [sideLo, sideHi] = _weSideBounds(we.cuts[i]);
+  let last = i;
+  while (last + 1 < we.cuts.length && we.cuts[last + 1] < sideHi) last++;
+  return { i, last, sideLo, sideHi };
+}
+
+if (typeof window !== 'undefined') {
+  window._weDerivedPositions  = _weDerivedPositions;
+  window._weEffectivePositions = _weEffectivePositions;
+  window._weSideBounds        = _weSideBounds;
+  window._weCutGroupSpan      = _weCutGroupSpan;
+}
+
 // ── Minimap viewport rect + cut markers ───────────────────────────────────
 function renderMinimapOverlay() {
   const wrap = document.getElementById('we-minimap-wrap');
@@ -906,10 +1003,20 @@ function renderMinimapOverlay() {
     const w = ((boundaries[i + 1] - start) / Math.max(0.0001, we.total)) * 100;
     return `<div class="wave-skip" style="left:${(start / we.total) * 100}%;width:${w}%"></div>`;
   }).join('');
+  // Recording-based side-switch ticks (dashed blue). Match the main-waveform
+  // markers so the minimap and waveform agree at a glance.
+  const sides = we.sides || [];
+  let sacc = 0;
+  const sideMarks = sides.length >= 2
+    ? sides.slice(0, -1).map((s, i) => {
+        sacc += Number(s.duration_seconds) || 0;
+        return `<div class="ms" style="left:${_timeToPctFull(sacc)}%" title="Side ${i + 2}"></div>`;
+      }).join('')
+    : '';
   const cutMarks = we.cuts.map(t =>
     `<div class="mc" style="left:${_timeToPctFull(t)}%"></div>`
   ).join('');
-  host.innerHTML = skipBands + cutMarks;
+  host.innerHTML = skipBands + sideMarks + cutMarks;
 }
 
 function weMinimapDown(e) {
@@ -975,10 +1082,11 @@ function weHoverMove(e) {
   const r = _wrap().getBoundingClientRect();
   we.hoverX = e.clientX - r.left;
   if (we.dragging?.kind === 'cut') {
-    const t = _snapToSilence(_xToTime(we.hoverX));
-    we.cuts[we.dragging.i] = t;
-    we.cuts.sort((a, b) => a - b);
-    we.dragging.i = we.cuts.indexOf(t);
+    // Clamp to the (lo, hi) window snapshotted at drag start. Because the
+    // cut can't cross a neighbour, we.cuts stays sorted and stays aligned
+    // with we.titles / we.skipped / we.positions — no re-sort needed.
+    const { i, lo, hi } = we.dragging;
+    we.cuts[i] = Math.max(lo, Math.min(hi, _snapToSilence(_xToTime(we.hoverX))));
     we.dirty = true;
     renderWaveformOverlay();
     renderMinimapOverlay();
@@ -986,18 +1094,20 @@ function weHoverMove(e) {
     return;
   }
   if (we.dragging?.kind === 'cutGroup') {
-    // Rigid translation of the grabbed cut and every cut after it. Snap
-    // the leading cut to silence, then translate the tail by that same
-    // delta so relative spacing stays exact. Clamp at both ends so the
-    // lead can't cross the cut before it and the trailing tail can't run
-    // past we.total — the group stays sorted automatically.
-    const { i, orig } = we.dragging;
+    // Rigid translation of the grabbed cut and the same-side cuts after it
+    // (indices i..last). Snap the leading cut to silence, then translate
+    // the group by that same delta so relative spacing stays exact. Clamp
+    // at both ends so the lead can't cross the cut before it or drop below
+    // the side start, and the trailing cut of the group can't pass the
+    // side end — the group stays within its raw recording region and
+    // we.cuts stays sorted automatically.
+    const { i, last, sideLo, sideHi, orig } = we.dragging;
     const tLead = _snapToSilence(_xToTime(we.hoverX));
-    const minLead = i > 0 ? orig[i - 1] : 0;
-    const maxLead = orig[i] + (we.total - orig[orig.length - 1]);
+    const minLead = Math.max(sideLo, i > 0 ? orig[i - 1] : 0);
+    const maxLead = orig[i] + (sideHi - orig[last]);
     const newLead = Math.max(minLead, Math.min(maxLead, tLead));
     const delta = newLead - orig[i];
-    for (let j = i; j < orig.length; j++) we.cuts[j] = orig[j] + delta;
+    for (let j = i; j <= last; j++) we.cuts[j] = orig[j] + delta;
     we.dirty = true;
     renderWaveformOverlay();
     renderMinimapOverlay();
@@ -1059,6 +1169,10 @@ function weAddCutAtTime(t) {
   const inheritSkip = !!we.skipped[idx - 1];
   we.titles.splice(idx, 0, `Track ${we.titles.length + 1}`);
   we.skipped.splice(idx, 0, inheritSkip);
+  // Position labels come from Discogs metadata and don't apply to manual
+  // splits — leave the new region's slot blank so the handle/list don't show
+  // a misleading sleeve label.
+  we.positions.splice(idx, 0, '');
   we.dirty = true;
   invalidateMeasure();
   renderWaveformOverlay();
@@ -1077,6 +1191,7 @@ function weClearCuts() {
   we.cuts = [];
   we.titles = ['Track 1'];
   we.skipped = [false];
+  we.positions = [''];
   we.dirty = true;
   invalidateMeasure();
   renderWaveformOverlay();
@@ -1188,9 +1303,22 @@ function weStartDrag(i, e) {
   // delta from the start, not from the previous frame (otherwise snap
   // jitter on the lead would compound into drift on the tail).
   if (e.shiftKey) {
-    we.dragging = { kind: 'cutGroup', i, orig: we.cuts.slice() };
+    // Shift+drag rigidly translates this cut and the cuts after it — but
+    // only the ones sharing its raw recording side (see _weCutGroupSpan).
+    // Cuts on later sides stay put, and weHoverMove clamps the group so it
+    // can't be pushed across the side boundary.
+    we.dragging = { kind: 'cutGroup', ..._weCutGroupSpan(i), orig: we.cuts.slice() };
   } else {
-    we.dragging = { kind: 'cut', i };
+    // Constrain a single-cut drag to the raw recording side it sits in and
+    // to the gap between its neighbours — so a marker can't be dragged
+    // across a side boundary, and can't cross a sibling cut (which would
+    // desync the parallel title/skip/position arrays from we.cuts). The
+    // neighbours and side bounds are stable for the whole drag because the
+    // clamp guarantees this cut never leaves the (lo, hi) window.
+    const [sideLo, sideHi] = _weSideBounds(we.cuts[i]);
+    const lo = Math.max(sideLo, i > 0 ? we.cuts[i - 1] : 0);
+    const hi = Math.min(sideHi, i < we.cuts.length - 1 ? we.cuts[i + 1] : we.total);
+    we.dragging = { kind: 'cut', i, lo, hi };
   }
   const onMove = ev => weHoverMove(ev);
   const onUp   = () => {
@@ -1206,9 +1334,12 @@ function weStartDrag(i, e) {
 function weDeleteCut(i, e) {
   if (e) { e.preventDefault(); e.stopPropagation(); }
   we.cuts.splice(i, 1);
-  // Drop the title + skip flag for the boundary that just disappeared.
+  // Drop the title + skip flag + position for the boundary that just
+  // disappeared. The surviving region keeps its own label; the trailing
+  // region's metadata is the one that goes.
   we.titles.splice(i + 1, 1);
   we.skipped.splice(i + 1, 1);
+  we.positions.splice(i + 1, 1);
   we.dirty = true;
   invalidateMeasure();
   renderWaveformOverlay();
@@ -1218,7 +1349,7 @@ function weDeleteCut(i, e) {
 
 function renderWaveformOverlay() {
   const overlay = document.getElementById('we-overlay');
-  overlay.querySelectorAll('.wave-cut, .wave-silence, .wave-skip, .wave-playhead').forEach(el => el.remove());
+  overlay.querySelectorAll('.wave-cut, .wave-silence, .wave-skip, .wave-side-switch, .wave-playhead').forEach(el => el.remove());
 
   // Silence highlights (amber bands) from the last detection.
   for (const s of we.silences) {
@@ -1248,18 +1379,53 @@ function renderWaveformOverlay() {
     overlay.appendChild(el);
   });
 
-  // Cut handles.
+  // Side-switch markers — dashed verticals at album-time side boundaries
+  // inferred from the per-side recording durations. Vinyl flip gaps are
+  // natural cut locations, so surfacing the boundary helps the user place a
+  // split there.
+  const sides = we.sides || [];
+  if (sides.length >= 2) {
+    let acc = 0;
+    for (let i = 0; i < sides.length - 1; i++) {
+      acc += Number(sides[i].duration_seconds) || 0;
+      const pct = _timeToPctView(acc);
+      if (pct == null) continue;
+      const el = document.createElement('div');
+      el.className = 'wave-side-switch';
+      el.style.left = pct + '%';
+      el.title = `Side ${i + 1} → Side ${i + 2} at ${fmtMMSS(acc)}`;
+      const badge = document.createElement('div');
+      badge.className = 'wave-side-badge';
+      badge.textContent = `Side ${i + 2}`;
+      el.appendChild(badge);
+      overlay.appendChild(el);
+    }
+  }
+
+  // Cut handles. The handle just before region i+1 gets that region's
+  // sleeve-style position (A1, B2, …) as a small badge — either from a
+  // Discogs tracklist when one is applied, or auto-derived from the side
+  // layout + cut order on a manual split. The same string appears in the
+  // track list, so the link between sleeve, waveform and list is unbroken.
+  const effPositions = _weEffectivePositions();
   we.cuts.forEach((t, i) => {
     const pct = _timeToPctView(t);
     if (pct == null) return;
     const el = document.createElement('div');
     el.className = 'wave-cut';
     el.style.left = pct + '%';
-    el.title = `Cut at ${fmtMMSS(t)} — drag to nudge, shift-drag to also shift later cuts, right-click to delete`;
+    const pos = effPositions[i + 1] || '';
+    el.title = pos
+      ? `Cut at ${fmtMMSS(t)} — ${pos} starts here. Drag to nudge, shift-drag to also shift later cuts, right-click to delete.`
+      : `Cut at ${fmtMMSS(t)} — drag to nudge, shift-drag to also shift later cuts, right-click to delete`;
     el.addEventListener('mousedown',   ev => weStartDrag(i, ev));
     el.addEventListener('contextmenu', ev => weDeleteCut(i, ev));
+    // The grip doubles as the position chip: when the cut carries a
+    // sleeve position the label sits inside the red handle square itself
+    // (.grip-labeled), otherwise it's the plain small square.
     const grip = document.createElement('div');
-    grip.className = 'grip';
+    grip.className = pos ? 'grip grip-labeled' : 'grip';
+    if (pos) grip.textContent = pos;
     el.appendChild(grip);
     overlay.appendChild(el);
   });
@@ -1295,6 +1461,12 @@ function renderTracks() {
   // visibility but excluded from the output numbering and not exported.
   let outNum = 0;
   let exportable = 0;
+  // The `pn` column shows the region's sleeve-style position (A1, B2, …)
+  // when available — either from a Discogs tracklist or auto-derived from
+  // the side layout + cut order on a manual split. Sequential numbers
+  // remain the fallback for single-side records and the no-cuts case.
+  const effPositions  = _weEffectivePositions();
+  const havePositions = effPositions.some(p => p);
   host.innerHTML = boundaries.slice(0, -1).map((start, i) => {
     const end = boundaries[i + 1];
     const isFirst = i === 0;
@@ -1302,7 +1474,10 @@ function renderTracks() {
     const unfit   = (end - start) < 0.5;
     if (!skipped && !unfit) { outNum += 1; exportable += 1; }
     const playing = we.playingTrack === i ? 'playing' : '';
-    const num = (skipped || unfit) ? '—' : `${outNum}.`;
+    const pos = effPositions[i] || '';
+    const num = (skipped || unfit)
+      ? '—'
+      : (havePositions && pos ? pos : `${outNum}.`);
     const titleVal = skipped ? 'skip — not exported' : (we.titles[i] || '');
     const titleAttrs = (skipped || unfit)
       ? 'disabled'
@@ -1556,30 +1731,130 @@ async function weRunSearch() {
 // produces zero-length trailing regions — surfaced in the track list as
 // "doesn't fit" so the user can see what was truncated rather than having
 // titles silently dropped. weApplySplit filters those out before exporting.
+//
+// When the recording has multiple sides AND the Discogs tracklist carries
+// per-track positions spanning ≥2 sides (A1/A2/B1/…), we anchor cumulative
+// durations to each side's album-time start instead of carrying one global
+// cursor across the whole album. At each side transition we emit two cuts —
+// end of the previous side's last track and start of the next side's first
+// track — with a skipped "gap" region between them. That gap is the runout
+// of the leaving side plus the lead-in needle-drop on the new side; the
+// side-start cut is a regular cut, so the user can drag it to where the
+// new side's first track actually catches.
+function _wePosLetter(pos) {
+  // Discogs `position` looks like "A1", "B2", or "1-01" / "2-03" on
+  // multi-disc releases. The leading alphabetic prefix (or leading "N-"
+  // disc number) identifies the side / disc. Returns '' when nothing
+  // recognisable is at the start.
+  const s = String(pos || '').trim();
+  const m = s.match(/^([A-Za-z]+|\d+(?=-))/);
+  return m ? m[0].toUpperCase() : '';
+}
+
+function _weCutsFromTracklist(td, sides, total) {
+  const sideStarts = [0];
+  let acc = 0;
+  for (const s of sides) {
+    acc += Number(s && s.duration_seconds) || 0;
+    sideStarts.push(acc);
+  }
+  // Map first-seen Discogs side letter → recording side index. Letters past
+  // the last recording side clamp onto the last side (so a Discogs C/D
+  // release on a 2-side recording stacks onto side B rather than crashing).
+  const seen = new Map();
+  for (const t of td) {
+    const L = _wePosLetter(t.position);
+    if (L && !seen.has(L)) seen.set(L, Math.min(sides.length - 1, seen.size));
+  }
+  const usePerSide = sides.length >= 2 && seen.size >= 2;
+
+  const cuts      = [];
+  const titles    = [];
+  const skipped   = [];
+  const positions = [];
+  let overflow = 0;
+
+  if (!usePerSide) {
+    // Global cumulative — original behaviour. One region per Discogs track.
+    let cursor = 0;
+    for (let j = 0; j < td.length; j++) {
+      titles.push(td[j].title);
+      skipped.push(false);
+      positions.push(String(td[j].position || '').trim());
+      if (j === td.length - 1) continue;
+      cursor += Number(td[j].duration_seconds) || 0;
+      if (cursor >= total)   { cuts.push(total); overflow += 1; }
+      else if (cursor > 0)   { cuts.push(cursor); }
+    }
+    return { cuts, titles, skipped, positions, overflow };
+  }
+
+  let curSide = -1;
+  let cursor  = 0;
+  for (let j = 0; j < td.length; j++) {
+    const Lcur = _wePosLetter(td[j].position);
+    const sCur = (Lcur && seen.has(Lcur))
+      ? seen.get(Lcur)
+      : (curSide >= 0 ? curSide : 0);
+    if (sCur !== curSide) {
+      if (curSide >= 0) {
+        // End-of-prev-side cut. Clamp the cumulative to the side boundary
+        // so the previous side's last track can't bleed into the next
+        // recorded side; if clamping happens, count overflow.
+        const prevSideEnd = sideStarts[curSide + 1];
+        const endCur = Math.min(cursor, prevSideEnd);
+        if (cursor > prevSideEnd + 0.001) overflow += 1;
+        if (endCur > 0 && endCur < total) cuts.push(endCur);
+        // Side-start cut. If it lands strictly past the end-cut, insert a
+        // skipped gap region between them — that's the runout + needle-
+        // drop dead time. If they coincide (no slack on the previous side),
+        // skip the gap and let the side change be a single cut.
+        const sideStart = sideStarts[sCur];
+        if (sideStart > endCur + 0.001 && sideStart < total) {
+          cuts.push(sideStart);
+          titles.push('');
+          skipped.push(true);
+          positions.push('');
+        }
+      }
+      curSide = sCur;
+      cursor  = sideStarts[curSide];
+    }
+    titles.push(td[j].title);
+    skipped.push(false);
+    positions.push(String(td[j].position || '').trim());
+    cursor += Number(td[j].duration_seconds) || 0;
+    if (j === td.length - 1) continue;
+    // Don't emit a within-side cut here if the next track lives on a new
+    // side — the side-change branch above will emit the boundary cuts.
+    const Lnext = _wePosLetter(td[j + 1].position);
+    const sNext = (Lnext && seen.has(Lnext)) ? seen.get(Lnext) : curSide;
+    if (sNext !== curSide) continue;
+    if (cursor >= total)   { cuts.push(total); overflow += 1; }
+    else if (cursor > 0)   { cuts.push(cursor); }
+  }
+  return { cuts, titles, skipped, positions, overflow };
+}
+
+if (typeof window !== 'undefined') {
+  window._wePosLetter        = _wePosLetter;
+  window._weCutsFromTracklist = _weCutsFromTracklist;
+}
+
 function _weApplyTracklist(track_details, sourceLabel) {
   const td = (track_details || []).filter(t => t && t.title);
   if (!td.length) {
     document.getElementById('we-search-status').textContent = 'no tracklist on this candidate';
     return false;
   }
-  const newCuts = [];
-  let cursor = 0;
-  let overflow = 0;
-  for (let j = 0; j < td.length - 1; j++) {
-    cursor += (td[j].duration_seconds || 0);
-    if (cursor >= we.total) {
-      newCuts.push(we.total);
-      overflow += 1;
-    } else if (cursor > 0) {
-      newCuts.push(cursor);
-    }
-  }
-  we.cuts    = newCuts;
-  we.titles  = td.map(t => t.title);
-  we.skipped = we.titles.map(() => false);
+  const r = _weCutsFromTracklist(td, we.sides || [], we.total);
+  we.cuts      = r.cuts;
+  we.titles    = r.titles;
+  we.skipped   = r.skipped;
+  we.positions = r.positions;
   invalidateMeasure();
-  document.getElementById('we-search-status').textContent = overflow
-    ? `${td.length} tracks · ${sourceLabel} · ${overflow} don't fit recording`
+  document.getElementById('we-search-status').textContent = r.overflow
+    ? `${td.length} tracks · ${sourceLabel} · ${r.overflow} don't fit recording`
     : `${td.length} tracks · ${sourceLabel}`;
   drawAll();
   return true;

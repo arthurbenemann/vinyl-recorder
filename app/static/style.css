@@ -614,6 +614,7 @@ textarea:focus-visible,
 .we-minimap-vp:active { cursor: grabbing; }
 .we-minimap-cuts { position: absolute; inset: 0; pointer-events: none; }
 .we-minimap-cuts .mc { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); opacity: 0.7; }
+.we-minimap-cuts .ms { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--blue); opacity: 0.7; pointer-events: none; }
 .we-minimap-axis { display: flex; justify-content: space-between; padding: 2px 6px; font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .wave-wrap { position: relative; background: #0a0e16; border: 0.5px solid var(--border); border-radius: 6px; overflow: hidden; user-select: none; margin-top: 8px; }
@@ -630,7 +631,25 @@ textarea:focus-visible,
 .wave-cut:hover { background: #ff7c7b; }
 .wave-cut .grip { position: absolute; top: -6px; left: -6px; width: 14px; height: 14px; background: var(--accent); border-radius: 2px; border: 1px solid #fff; }
 .wave-cut .grip:hover { background: #ff7c7b; }
+/* When a cut carries a sleeve position (A1, B2, …) the grip *is* the
+   label: a chip centred on the cut line, flush with the waveform's top
+   edge (no top border — it reads as a tab hanging off the edge) and a
+   uniform `min-width` so every chip is the same size regardless of the
+   label text. */
+.wave-cut .grip.grip-labeled {
+  top: 0; left: 1px; transform: translateX(-50%);
+  width: auto; min-width: 26px; height: auto; padding: 1px 5px;
+  border-top: none; border-radius: 0 0 3px 3px;
+  font-size: 9px; line-height: 1.3; color: #fff; text-align: center;
+  white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: 0.04em;
+}
+.wave-cut .grip.grip-labeled:hover { background: #ff7c7b; }
 .wave-silence { position: absolute; top: 0; bottom: 0; background: rgba(186,117,23,0.18); pointer-events: none; }
+.wave-side-switch { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1.5px dashed rgba(55,138,221,0.7); pointer-events: none; }
+/* Anchored to the bottom — after a per-side Discogs apply the side-start
+   cut sits exactly on the side-switch line, so a top-anchored badge would
+   collide with that cut's labelled grip chip. */
+.wave-side-badge { position: absolute; bottom: 2px; left: 3px; padding: 1px 5px; font-size: 9px; color: rgba(170,210,255,0.95); background: rgba(0,0,0,0.55); border: 0.5px solid rgba(55,138,221,0.55); border-radius: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
 .wave-readout { position: absolute; top: 4px; right: 6px; padding: 2px 6px; background: rgba(0,0,0,0.6); border-radius: 3px; font-size: 10px; color: var(--text); pointer-events: none; font-variant-numeric: tabular-nums; }
 .wave-axis { display: flex; justify-content: space-between; padding: 4px 6px; font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; background: var(--surface); border-top: 0.5px solid var(--border); }
 .wave-help { font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
@@ -672,8 +691,8 @@ textarea:focus-visible,
 
 /* Wave editor — track list */
 .wave-tracks { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; padding-right: 2px; margin-top: 8px; }
-.wave-track { display: grid; grid-template-columns: 28px 28px 1fr 110px 70px 24px 24px; gap: 6px; align-items: center; padding: 6px 10px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; }
-.wave-track .pn { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+.wave-track { display: grid; grid-template-columns: 36px 28px 1fr 110px 70px 24px 24px; gap: 6px; align-items: center; padding: 6px 10px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; }
+.wave-track .pn { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: clip; }
 .wave-track .play-track { width: 22px; height: 22px; padding: 0; border-radius: 4px; background: var(--surface2); border: 0.5px solid var(--border2); color: var(--text); font-size: 11px; cursor: pointer; line-height: 1; }
 .wave-track .play-track:hover { background: var(--bg); }
 .wave-track .play-track.playing { background: rgba(55,138,221,0.18); border-color: var(--blue); color: var(--blue); }
@@ -705,7 +724,7 @@ textarea:focus-visible,
    modifiers keep working untouched. */
 @media (max-width: 1080px) {
   .wave-track {
-    grid-template-columns: 28px 28px 1fr 110px 70px 24px 24px;
+    grid-template-columns: 36px 28px 1fr 110px 70px 24px 24px;
     grid-template-rows: auto auto;
     row-gap: 4px;
   }
