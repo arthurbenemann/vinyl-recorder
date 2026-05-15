@@ -9,6 +9,10 @@ services:
       - "8080:8080"
     volumes:
       - ./output:/output
+      # Inherit host timezone so recording filenames and the FLAC `date`
+      # tag (datetime.now() in routes/recordings.py) match local wallclock
+      # instead of the image's UTC default.
+      - /etc/localtime:/etc/localtime:ro
     # Every runtime option has a sensible default baked into app/state.py.
     # To override (most commonly DEFAULT_STREAM_URL — your Pi or other audio
     # source), copy .env.example → .env next to this file and uncomment what
