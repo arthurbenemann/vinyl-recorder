@@ -371,6 +371,9 @@ textarea:focus-visible,
    in submit-on-Enter contexts (tag/wave) and a decorative <svg> in the
    live-filter library context. */
 .search-wrap { position: relative; display: flex; align-items: center; flex: 1 1 220px; min-width: 0; max-width: 360px; }
+/* `display: flex` above wins over the UA `[hidden] { display: none }` rule;
+   make `hidden` actually hide the wrap so JS toggles work as expected. */
+.search-wrap[hidden] { display: none; }
 .search-wrap input { width: 100%; min-width: 0; background: var(--surface); border: 0.5px solid var(--border2); border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 7px 28px 7px 30px; outline: none; }
 .search-wrap input:focus { border-color: rgba(55,138,221,0.5); }
 .search-wrap input.active { border-color: rgba(55,138,221,0.5); background: var(--surface2); }
