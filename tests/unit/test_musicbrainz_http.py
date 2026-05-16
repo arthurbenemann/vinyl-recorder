@@ -169,6 +169,35 @@ def test_search_releases_escapes_lucene_specials(monkeypatch):
     assert "%5C%22" in url, f"quote not escaped in {url}"
 
 
+def test_search_releases_generic_q_skips_field_qualifiers(monkeypatch):
+    """In generic mode the user's `q` goes straight to MB as a bare Lucene
+    query — no `artist:"…"` / `release:"…"` wrappers — so MB scores across
+    every release field instead of demanding a precise artist+album pair."""
+    captured: list[str] = []
+    _patch_urlopen(monkeypatch, b'{"releases": []}', capture=captured)
+    mb.search_releases(q="Kind of Blue", limit=3)
+    url = captured[0]
+    # Tokens of the query reach MB url-encoded; field qualifiers don't.
+    assert "Kind" in url and "Blue" in url
+    assert "artist%3A" not in url and "release%3A" not in url
+    assert "limit=3" in url
+
+
+def test_search_releases_generic_q_escapes_specials(monkeypatch):
+    """Free-text input gets the same Lucene escape as structured fields, so
+    a colon or slash in the user's query doesn't change query semantics."""
+    captured: list[str] = []
+    _patch_urlopen(monkeypatch, b'{"releases": []}', capture=captured)
+    mb.search_releases(q='foo:bar', limit=1)
+    # `:` encodes to %3A; the escaping backslash %5C must precede it.
+    assert "%5C%3A" in captured[0]
+
+
+def test_search_releases_generic_q_empty_returns_empty():
+    """Whitespace-only `q` short-circuits before hitting the network."""
+    assert mb.search_releases(q="   ") == []
+
+
 def test_release_full_caches_within_ttl(monkeypatch):
     """Two `release_full` calls for the same MBID hit the network once —
     subsequent calls satisfy from cache."""

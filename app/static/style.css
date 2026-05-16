@@ -365,10 +365,29 @@ textarea:focus-visible,
   outline-offset: 2px;
 }
 
-/* Library search/filter controls */
-.lib-search { flex: 1 1 220px; min-width: 0; max-width: 360px; background: var(--surface); border: 0.5px solid var(--border2); border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 7px 10px; outline: none; }
-.lib-search:focus { border-color: rgba(55,138,221,0.5); }
-.lib-search.active { border-color: rgba(55,138,221,0.5); background: var(--surface2); }
+/* Search inputs (library, tag panel, wave editor). One wrapper provides
+   the visual chrome — left magnifier, right inline × clear — so all three
+   search bars share the same affordances. The magnifier is a real button
+   in submit-on-Enter contexts (tag/wave) and a decorative <svg> in the
+   live-filter library context. */
+.search-wrap { position: relative; display: flex; align-items: center; flex: 1 1 220px; min-width: 0; max-width: 360px; }
+.search-wrap input { width: 100%; min-width: 0; background: var(--surface); border: 0.5px solid var(--border2); border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 7px 28px 7px 30px; outline: none; }
+.search-wrap input:focus { border-color: rgba(55,138,221,0.5); }
+.search-wrap input.active { border-color: rgba(55,138,221,0.5); background: var(--surface2); }
+.search-wrap input::-webkit-search-cancel-button,
+.search-wrap input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+.search-icon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
+.search-icon svg { width: 100%; height: 100%; display: block; }
+button.search-icon { background: transparent; border: 0; padding: 0; cursor: pointer; pointer-events: auto; border-radius: 3px; }
+button.search-icon:hover { color: var(--text); }
+button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.search-clear { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; padding: 0; background: transparent; border: 0; border-radius: 3px; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; display: flex; align-items: center; justify-content: center; }
+.search-clear:hover { color: var(--text); background: var(--surface2); }
+.search-clear[hidden] { display: none; }
+/* Emoji icon variant used by the Discogs paste row — sits where the SVG
+   magnifier sits, but is text so no svg child styles apply. Slightly
+   smaller + nudged down a hair for visual centering. */
+.t-find-wrap .search-icon:not(svg) { font-size: 11px; line-height: 1; }
 
 /* Library */
 .lib-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
@@ -445,9 +464,8 @@ textarea:focus-visible,
 .left-fields .span2 { grid-column: 1 / -1; }
 .left-fields .field input, .left-fields .field textarea { font-size: 11px; padding: 5px 8px; }
 .left-fields .field textarea { min-height: 90px; }
-.search-row { display: flex; gap: 6px; }
-.search-row input { flex: 1; min-width: 0; background: var(--surface); border: 0.5px solid var(--border2); border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 7px 10px; outline: none; }
-.search-row input:focus { border-color: rgba(255,255,255,0.25); }
+.search-row { display: flex; gap: 6px; align-items: center; }
+.search-row .search-wrap { flex: 1; max-width: none; }
 .candidates { display: flex; flex-direction: column; gap: 6px; max-height: 380px; overflow-y: auto; padding-right: 2px; }
 .candidate { display: flex; gap: 10px; padding: 8px 10px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; cursor: pointer; transition: all 0.12s; min-width: 0; }
 .candidate:hover { background: var(--surface2); border-color: var(--border2); }

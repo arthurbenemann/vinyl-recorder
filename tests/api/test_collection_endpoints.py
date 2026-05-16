@@ -39,6 +39,53 @@ def test_search_returns_collection_candidates_field():
     assert body["collection_candidates"] == []
 
 
+def test_search_accepts_generic_q(monkeypatch):
+    """The UI's search bars now send a free-text `q` instead of an
+    artist+album pair. /api/search should route that through MB's generic
+    Lucene query and the collection's free-text fuzzy match, returning
+    the same response shape."""
+    # The route imports `search_releases` by name from services.musicbrainz,
+    # so we have to monkeypatch the name on the route module (the binding
+    # the route actually calls), not on the source module.
+    import routes.tagging as tagging_mod
+    captured: dict = {}
+
+    def fake_search(*args, q="", **kwargs):
+        captured["q"] = q
+        captured["artist"] = args[0] if args else kwargs.get("artist", "")
+        captured["album"]  = args[1] if len(args) > 1 else kwargs.get("album", "")
+        return [{"mbid": "abc", "title": "Kind of Blue", "artist": "Miles Davis",
+                 "year": "1959", "label": "", "catalog_number": "", "country": "",
+                 "format": "", "score": 100}]
+
+    monkeypatch.setattr(tagging_mod, "search_releases", fake_search)
+    r = _client().post("/api/search", json={"q": "Kind of Blue"})
+    assert r.status_code == 200
+    body = r.json()
+    assert captured["q"] == "Kind of Blue"
+    # Structured fields stay empty when `q` is the source.
+    assert captured["artist"] == "" and captured["album"] == ""
+    assert body["candidates"][0]["title"] == "Kind of Blue"
+
+
+def test_search_empty_q_and_empty_struct_short_circuits():
+    """Empty body (no q, no artist, no album) returns the empty-shape
+    response without making any network calls."""
+    r = _client().post("/api/search", json={"q": "", "artist": "", "album": ""})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["candidates"] == [] and body["collection_candidates"] == []
+
+
+# ── /api/collection (list endpoint backing the live filter) ──────────────
+def test_collection_list_without_username_returns_empty():
+    """No DISCOGS_USERNAME → empty list. The frontend uses this to decide
+    whether to even show the filter input."""
+    r = _client().get("/api/collection")
+    assert r.status_code == 200
+    assert r.json() == {"releases": []}
+
+
 # ── /api/collection/refresh guard ────────────────────────────────────────
 def test_collection_refresh_without_username_returns_409():
     """Refusing the call (rather than silently returning 0) makes the user

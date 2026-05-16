@@ -40,6 +40,7 @@ import {
 import {
   openTag, openTagAlbum, closeTag,
   runSearch, pickCandidate, pickCollectionCandidate, refreshCollection,
+  onCollectionFilterInput, onDiscogsPaste,
   applyTagPanel, wireTagDirtyTracking,
 } from './modules/tagging.js';
 import {
@@ -126,6 +127,8 @@ window.runSearch = runSearch;
 window.pickCandidate = pickCandidate;
 window.pickCollectionCandidate = pickCollectionCandidate;
 window.refreshCollection = refreshCollection;
+window.onCollectionFilterInput = onCollectionFilterInput;
+window.onDiscogsPaste = onDiscogsPaste;
 window.applyTagPanel = applyTagPanel;
 window.openCombine = openCombine;
 window.moveSide = moveSide;
