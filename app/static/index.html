@@ -496,34 +496,33 @@
       <!-- Right column: find-a-release tools + candidate matches -->
       <div class="tag-col">
         <div class="col-label">Find a release</div>
-        <div class="action-row" style="margin:0 0 8px">
-          <button class="btn-small" onclick="runSearch()" title="Search MusicBrainz using the Artist + Album fields on the left">↗ search MusicBrainz</button>
-          <button class="btn-small" id="t-collection-refresh" hidden onclick="refreshCollection()" title="Re-fetch your Discogs collection">↻ refresh collection</button>
-        </div>
-        <!-- Collection filter: live-filters the user's owned Discogs releases.
-             Hidden until /api/collection returns at least one record. -->
-        <div class="search-wrap t-find-wrap" id="t-collection-filter-wrap" hidden style="max-width:none;margin-bottom:6px">
+        <!-- Unified find-a-release bar. Auto-detects three modes:
+              · empty + Enter → search MusicBrainz using left-column fields
+              · free text     → live-filters the Discogs collection
+              · Discogs URL/id pasted → fetches that release directly
+             The subtitle below updates on every keystroke so the user
+             always knows what the next action will do. -->
+        <div class="search-wrap t-find-wrap" style="max-width:none;margin-bottom:4px">
           <svg class="search-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><line x1="10.4" y1="10.4" x2="13.5" y2="13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-          <input id="t-collection-filter" type="search" placeholder="filter your collection…"
-                 oninput="onCollectionFilterInput(this.value)" autocomplete="off"/>
-          <button class="search-clear" id="t-collection-filter-clear" type="button" hidden aria-label="clear"
-                  onclick="const i=document.getElementById('t-collection-filter');i.value='';onCollectionFilterInput('');i.focus()">×</button>
+          <input id="t-search" type="search"
+                 placeholder="filter collection · paste Discogs link · or Enter ↗ to search MusicBrainz"
+                 autocomplete="off"
+                 oninput="onFindInput(this.value)"
+                 onpaste="setTimeout(()=>onFindInput(this.value),0)"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();onFindEnter()}" />
+          <button class="search-clear" id="t-search-clear" type="button" hidden aria-label="clear"
+                  onclick="const i=document.getElementById('t-search');i.value='';onFindInput('');i.focus()">×</button>
         </div>
-        <!-- Discogs paste: detects a release URL or bare id and fetches it.
-             Persists nothing; the chosen release fills the left fields the
-             same way picking a candidate does. -->
-        <div class="search-wrap t-find-wrap" style="max-width:none;margin-bottom:6px">
-          <span class="search-icon" aria-hidden="true">🔗</span>
-          <input id="t-discogs-paste" type="text" placeholder="or paste a Discogs URL / release id…"
-                 inputmode="url" autocomplete="off"
-                 onpaste="setTimeout(()=>onDiscogsPaste(this.value),0)"
-                 onkeydown="if(event.key==='Enter')onDiscogsPaste(this.value)"/>
-          <button class="search-clear" id="t-discogs-paste-clear" type="button" hidden aria-label="clear"
-                  onclick="const i=document.getElementById('t-discogs-paste');i.value='';this.hidden=true;i.focus()">×</button>
+        <!-- Live subtitle: tells the user what Enter will do (or what the
+             current keystroke just did). Updated by onFindInput on every
+             change to the bar, the Artist field, and the Album field. -->
+        <div class="t-find-subtitle" id="t-find-subtitle">fill Artist + Album on the left to search MusicBrainz, or type to filter your collection</div>
+        <div class="action-row" style="margin:6px 0 8px">
+          <button class="btn-small" id="t-collection-refresh" hidden onclick="refreshCollection()" title="Re-fetch your Discogs collection">↻ refresh collection</button>
         </div>
         <div class="search-status" id="t-search-status"></div>
         <div class="candidates" id="t-candidates">
-          <div class="empty-results">Fill Artist + Album and hit ↗ search MusicBrainz — or filter your collection / paste a Discogs link above.</div>
+          <div class="empty-results">Type above to filter your collection, paste a Discogs link, or hit Enter to search MusicBrainz using the Artist + Album fields on the left.</div>
         </div>
       </div>
 

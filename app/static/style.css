@@ -387,10 +387,14 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .search-clear { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; padding: 0; background: transparent; border: 0; border-radius: 3px; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; display: flex; align-items: center; justify-content: center; }
 .search-clear:hover { color: var(--text); background: var(--surface2); }
 .search-clear[hidden] { display: none; }
-/* Emoji icon variant used by the Discogs paste row — sits where the SVG
-   magnifier sits, but is text so no svg child styles apply. Slightly
-   smaller + nudged down a hair for visual centering. */
-.t-find-wrap .search-icon:not(svg) { font-size: 11px; line-height: 1; }
+/* Live subtitle under the tag-panel find-a-release bar. Tells the user
+   what Enter is about to do (search MB / fetch Discogs / nothing extra).
+   The .mode-* modifiers tint the text by mode for at-a-glance feedback. */
+.t-find-subtitle { font-size: 10px; color: var(--muted); margin: 0 0 0 2px; min-height: 14px; line-height: 1.3; }
+.t-find-subtitle .t-find-emph { color: var(--text); }
+.t-find-subtitle.mode-discogs { color: #a3d864; }
+.t-find-subtitle.mode-mb      { color: rgba(55,138,221,0.95); }
+.t-find-subtitle.mode-disabled { color: var(--muted); font-style: italic; }
 
 /* Library */
 .lib-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }

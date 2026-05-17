@@ -40,7 +40,7 @@ import {
 import {
   openTag, openTagAlbum, closeTag,
   runSearch, pickCandidate, pickCollectionCandidate, refreshCollection,
-  onCollectionFilterInput, onDiscogsPaste,
+  onFindInput, onFindEnter, wireFindSubtitleLive,
   applyTagPanel, wireTagDirtyTracking,
 } from './modules/tagging.js';
 import {
@@ -127,8 +127,8 @@ window.runSearch = runSearch;
 window.pickCandidate = pickCandidate;
 window.pickCollectionCandidate = pickCollectionCandidate;
 window.refreshCollection = refreshCollection;
-window.onCollectionFilterInput = onCollectionFilterInput;
-window.onDiscogsPaste = onDiscogsPaste;
+window.onFindInput = onFindInput;
+window.onFindEnter = onFindEnter;
 window.applyTagPanel = applyTagPanel;
 window.openCombine = openCombine;
 window.moveSide = moveSide;
@@ -185,6 +185,7 @@ document.addEventListener('DOMContentLoaded', () => {
   wireGainSlider();
   restoreSidebarState();
   wireTagDirtyTracking();
+  wireFindSubtitleLive();
   wireSectionCollapse();
 
   applyConfig();
