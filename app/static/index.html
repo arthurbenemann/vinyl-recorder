@@ -513,12 +513,12 @@
           <button class="search-clear" id="t-search-clear" type="button" hidden aria-label="clear"
                   onclick="const i=document.getElementById('t-search');i.value='';onFindInput('');i.focus()">×</button>
         </div>
-        <!-- Live subtitle: tells the user what Enter will do (or what the
-             current keystroke just did). Updated by onFindInput on every
-             change to the bar, the Artist field, and the Album field. -->
-        <div class="t-find-subtitle" id="t-find-subtitle">fill Artist + Album on the left to search MusicBrainz, or type to filter your collection</div>
-        <div class="action-row" style="margin:6px 0 8px">
-          <button class="btn-small" id="t-collection-refresh" hidden onclick="refreshCollection()" title="Re-fetch your Discogs collection">↻ refresh collection</button>
+        <!-- Subtitle + (when a Discogs collection is configured) the
+             refresh button share one flex row, so there's no empty-row
+             padding between the search bar and the candidates list. -->
+        <div class="t-find-subtitle-row">
+          <div class="t-find-subtitle" id="t-find-subtitle">fill Artist + Album on the left to search MusicBrainz, or type to filter your collection</div>
+          <button class="btn-tiny" id="t-collection-refresh" hidden onclick="refreshCollection()" title="Re-fetch your Discogs collection">↻ refresh</button>
         </div>
         <div class="search-status" id="t-search-status"></div>
         <div class="candidates" id="t-candidates">

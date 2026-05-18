@@ -411,19 +411,17 @@ export async function runSearch() {
       document.getElementById('t-search-status').textContent = '';
       return;
     }
-    const status =
-      (colN ? `${colN} from your collection` : '') +
-      (colN && mbN ? ' · ' : '') +
-      (mbN ? `${mbN} from MusicBrainz` : '') +
-      ' — click to load details';
-    document.getElementById('t-search-status').textContent = status;
+    // Result counts + the click-to-load hint live in the section headers
+    // now — keeping a separate status line under the search bar would
+    // duplicate that information and waste a row.
+    document.getElementById('t-search-status').textContent = '';
     let html = '';
     if (colN) {
-      html += '<div class="cand-section-header">From your collection</div>';
+      html += `<div class="cand-section-header">From your collection · ${colN} match${colN === 1 ? '' : 'es'} · click to load</div>`;
       html += tagPanelCollectionCandidates.map(_renderCollectionCard).join('');
     }
     if (mbN) {
-      if (colN) html += '<div class="cand-section-header">MusicBrainz results</div>';
+      html += `<div class="cand-section-header">MusicBrainz · ${mbN} result${mbN === 1 ? '' : 's'} · click to load</div>`;
       html += tagPanelCandidates.map((c, i) => _renderMbCard(c, i)).join('');
     }
     list.innerHTML = html;
@@ -511,9 +509,11 @@ function _filterCollection(text) {
     document.getElementById('t-search-status').textContent = '';
     return;
   }
-  document.getElementById('t-search-status').textContent =
-    `${matches.length} from your collection${matches.length === 50 ? '+ (refine to narrow)' : ''}`;
-  list.innerHTML = '<div class="cand-section-header">From your collection</div>'
+  document.getElementById('t-search-status').textContent = '';
+  const n = matches.length;
+  const refineHint = n === 50 ? ' · refine to narrow' : '';
+  list.innerHTML =
+    `<div class="cand-section-header">From your collection · ${n} match${n === 1 ? '' : 'es'}${refineHint} · click to load</div>`
     + tagPanelCollectionCandidates.map(_renderCollectionCard).join('');
 }
 
@@ -612,7 +612,7 @@ async function _fetchDiscogsRelease(id) {
 
 // Fetch the full owned-collection list once per tag-panel open. Server
 // returns {releases: []} when no DISCOGS_USERNAME is set; the subtitle
-// adapts accordingly via _updateFindSubtitle.
+// + ↻ refresh button adapt accordingly.
 async function _loadCollectionForFilter() {
   if (tagPanelCollectionLoaded) return;
   tagPanelCollectionLoaded = true;
@@ -624,9 +624,10 @@ async function _loadCollectionForFilter() {
   } catch (e) {
     tagPanelCollectionAll = [];
   }
-  // The subtitle line picks up the new count on the next keystroke; nudge
-  // it once now so the user sees "N collection records" the moment data
-  // lands, without needing to type.
+  const refresh = document.getElementById('t-collection-refresh');
+  if (refresh) refresh.hidden = !tagPanelCollectionAll.length;
+  // Nudge the subtitle so it shows "N collection records" the moment
+  // data lands, without needing to type.
   const inp = document.getElementById('t-search');
   _updateFindSubtitle(_findMode(inp ? inp.value : ''));
 }
