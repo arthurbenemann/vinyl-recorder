@@ -387,6 +387,15 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .search-clear { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; padding: 0; background: transparent; border: 0; border-radius: 3px; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; display: flex; align-items: center; justify-content: center; }
 .search-clear:hover { color: var(--text); background: var(--surface2); }
 .search-clear[hidden] { display: none; }
+/* Tag-panel find-a-release bar: the parent .tag-col is a flex column, and
+   .search-wrap defaults to `flex: 1 1 220px` (sized for the library search
+   row's flex-row context). Inside a flex column that grows the wrap to
+   fill all remaining vertical space, dropping the input ~90px below the
+   col-label. Pin it to content height + remove the max-width so it lines
+   up with the inputs in the left column. The margin-top matches the
+   left-column field-label height + .field gap (≈ 14px label + 5px gap)
+   so the search input baselines with the Album input across columns. */
+.tag-col .t-find-wrap { flex: 0 0 auto; max-width: none; margin-top: 16px; }
 /* Live subtitle under the tag-panel find-a-release bar. Tells the user
    what Enter is about to do (search MB / fetch Discogs / nothing extra).
    The .mode-* modifiers tint the text by mode for at-a-glance feedback. */
