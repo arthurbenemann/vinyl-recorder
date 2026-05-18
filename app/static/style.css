@@ -503,6 +503,27 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .search-status { font-size: 10px; color: var(--muted); margin-top: 4px; }
 @media (max-width: 980px) { .tag-grid { grid-template-columns: 1fr; } .candidates { max-height: 280px; } }
 
+/* Tag modal: give the dialog a tall, fixed footprint so the candidates
+   panel — the bulk of the value the user reads — gets the lion's share
+   of the vertical space instead of collapsing to a 4-row strip. The
+   modal flexes top-to-bottom: header (fixed), .tag-grid (fills), and
+   inside .tag-grid the right column's .candidates expands to consume
+   whatever remains after the search bar + subtitle + status. */
+#tag-modal .modal { height: min(960px, 94vh); display: flex; flex-direction: column; }
+#tag-modal .tag-grid { flex: 1 1 auto; min-height: 0; align-items: stretch; }
+#tag-modal .tag-col { min-height: 0; }
+#tag-modal .tag-col:nth-child(2) .candidates { flex: 1 1 0; max-height: none; min-height: 200px; }
+/* Stretch the Tracks textarea so it consumes whatever vertical space is
+   left between the cover/fields block above and the apply/cancel row
+   below. Matches the right column's candidates panel growing into its
+   spare height — no big empty band under either column. */
+#tag-modal .tag-col:nth-child(1) > .field { flex: 1 1 auto; min-height: 0; }
+#tag-modal .tag-col:nth-child(1) > .field textarea { flex: 1 1 auto; min-height: 0; resize: vertical; }
+@media (max-width: 980px) {
+  #tag-modal .tag-col:nth-child(2) .candidates { flex: 0 1 auto; max-height: 280px; }
+  #tag-modal .tag-col:nth-child(1) > .field { flex: 0 1 auto; }
+}
+
 /* Tag panel — applied feedback. .field-applied is toggled briefly on inputs
    whose value just changed via a candidate pick, so users notice the form
    updated. The transition makes the blue border ease back out on removal. */
