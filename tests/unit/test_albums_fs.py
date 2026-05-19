@@ -279,6 +279,83 @@ def test_create_album_retries_on_slug_collision(tmp_path, monkeypatch):
     assert album_id == "bbbbbbbb"
 
 
+def test_create_album_cleans_up_partial_dir_on_rename_failure(
+    tmp_path, monkeypatch,
+):
+    """If one of the source files vanishes partway through the rename loop
+    (the scenario when a concurrent combine has already moved it), the
+    freshly-mkdir'd album dir must not be left behind as orphan cruft, and
+    the original FileNotFoundError must propagate to the caller."""
+    raw = tmp_path / "raw"
+    inp = tmp_path / "in-progress"
+    raw.mkdir(); inp.mkdir()
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", inp)
+    monkeypatch.setattr(albums_fs, "RAW_DIR", raw)
+    (raw / "side1.flac").write_bytes(b"a")
+    (raw / "side2.flac").write_bytes(b"b")
+    monkeypatch.setattr(albums_fs, "new_album_id", lambda: "deadbeef")
+
+    real_rename = Path.rename
+    call_state = {"n": 0}
+
+    def flaky_rename(self, target):
+        call_state["n"] += 1
+        if call_state["n"] == 2:
+            raise FileNotFoundError(f"raced out: {self}")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", flaky_rename)
+
+    with pytest.raises(FileNotFoundError, match="raced out"):
+        albums_fs.create_album(["side1.flac", "side2.flac"], {})
+
+    # No orphan empty dir lingering — the failure rolled back cleanly.
+    assert not (inp / "deadbeef").exists()
+    # And no in-progress album rows were left behind.
+    assert albums_fs.list_album_ids() == []
+
+
+def test_create_album_concurrent_overlap_yields_one_win_no_orphan(
+    tmp_path, monkeypatch,
+):
+    """Two threads call create_album with overlapping source filenames. The
+    serialisation lock + cleanup must ensure exactly one succeeds and the
+    loser raises FileNotFoundError without leaving an empty album dir."""
+    import threading
+
+    raw = tmp_path / "raw"
+    inp = tmp_path / "in-progress"
+    raw.mkdir(); inp.mkdir()
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", inp)
+    monkeypatch.setattr(albums_fs, "RAW_DIR", raw)
+    (raw / "shared.flac").write_bytes(b"a")
+    (raw / "extra-a.flac").write_bytes(b"a")
+    (raw / "extra-b.flac").write_bytes(b"b")
+
+    results: list = []
+    errors: list = []
+    barrier = threading.Barrier(2)
+
+    def attempt(other_side):
+        barrier.wait()
+        try:
+            aid, _ = albums_fs.create_album(["shared.flac", other_side], {})
+            results.append(aid)
+        except Exception as e:
+            errors.append(e)
+
+    t1 = threading.Thread(target=attempt, args=("extra-a.flac",))
+    t2 = threading.Thread(target=attempt, args=("extra-b.flac",))
+    t1.start(); t2.start()
+    t1.join();  t2.join()
+
+    assert len(results) == 1, f"expected one winner, got {results} / {errors}"
+    assert len(errors) == 1, f"expected one failure, got {results} / {errors}"
+    assert isinstance(errors[0], FileNotFoundError)
+    # The winner's album dir is the only one on disk; no orphan from the loser.
+    assert albums_fs.list_album_ids() == [results[0]]
+
+
 # ── demote-of-split preserves the music subtree ──────────────────────────
 def test_demote_album_preserves_emitted_music_subtree(tmp_path, monkeypatch):
     """When the user demotes an album that's already been split, the per-
