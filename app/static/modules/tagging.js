@@ -692,7 +692,14 @@ export async function refreshCollection() {
 export async function pickCandidate(i) {
   const c = tagPanelCandidates[i];
   if (!c) return;
-  document.querySelectorAll('.candidate').forEach((el, j) => el.classList.toggle('active', j === i));
+  // Match by data-i, not DOM-position: when both a "From your collection"
+  // and a "MusicBrainz" section are rendered, the MB cards live below the
+  // collection cards in the list, so a position-based comparison would
+  // light up the collection card at the same offset instead of the MB
+  // card the user clicked. Collection cards have no data-i, so their
+  // Number(undefined) → NaN never equals i.
+  document.querySelectorAll('.candidate').forEach(el =>
+    el.classList.toggle('active', Number(el.dataset.i) === i));
   document.getElementById('t-search-status').textContent = `loading ${c.title}…`;
   try {
     const r = await fetch(`/api/release/${c.mbid}`);
