@@ -1,9 +1,9 @@
 // Node-runnable unit tests for `_weRemapForSides`.
 //
-// wave-editor.js is browser-targeted — it pokes at `document`, an
-// `albumsByName` global, etc. We can't `require` it from Node directly,
-// but the remap helper is pure: load the file in a sandbox that stubs
-// the browser globals, then call into the exposed function. Failures
+// The remap helper now lives in `app/static/modules/timeline-state.js`
+// (a classic script — same loading pattern as the previous monolithic
+// wave-editor.js). Load it in a VM sandbox that stubs the browser
+// globals, then call into the exposed function via `window.*`. Failures
 // throw, which propagates to a non-zero exit so the pytest runner
 // surfaces them.
 'use strict';
@@ -12,7 +12,7 @@ const path = require('path');
 const vm   = require('vm');
 
 const SRC = fs.readFileSync(
-  path.join(__dirname, '..', '..', 'app', 'static', 'wave-editor.js'),
+  path.join(__dirname, '..', '..', 'app', 'static', 'modules', 'timeline-state.js'),
   'utf8',
 );
 
