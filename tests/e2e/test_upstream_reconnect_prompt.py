@@ -70,6 +70,21 @@ _WS_CAPTURE_INIT = """
 """
 
 
+def _ensure_stack_healthy() -> None:
+    """Make sure the upstream is up before driving the page. Earlier tests
+    in the e2e session (e.g. test_crash_recovery) kill test-streams as part
+    of their scenarios — we restart it here so each test in this file has
+    a known-good starting state. Defensive: if the stack is already healthy
+    this is effectively a no-op."""
+    try:
+        wait_for_upstream_configured(timeout=10)
+        return
+    except RuntimeError:
+        pass
+    compose("start", "test-streams", timeout=30)
+    wait_for_upstream_configured(timeout=30)
+
+
 def _wait_idle(page):
     """Wait for the WS hello to land and put the page in connected/idle."""
     expect(page.locator("#connect-btn")).to_have_text("disconnect", timeout=10_000)
@@ -92,6 +107,7 @@ def test_synthetic_crash_event_surfaces_reconnect_prompt(stack, page):
     """Fire a fake `record:stop reason='crash'` event through the WS,
     assert the toast appears with a Reconnect button, and that clicking
     it POSTs /api/connect with the current stream-url."""
+    _ensure_stack_healthy()
     page.add_init_script(_WS_CAPTURE_INIT)
 
     # Record /api/connect POSTs so we can assert exactly what the toast
@@ -149,6 +165,7 @@ def test_synthetic_upstream_recovery_dismisses_prompt(stack, page):
     have its toast dismissed when any tab brings the upstream back —
     drives the multi-tab idempotency story without needing two browsers.
     """
+    _ensure_stack_healthy()
     page.add_init_script(_WS_CAPTURE_INIT)
     page.goto(RECORDER_URL)
     _wait_idle(page)
@@ -177,6 +194,7 @@ def test_normal_stop_does_not_show_reconnect_prompt(stack, page):
     upstream-drop crashes; widening it would spam every stop with a
     spurious 'reconnect?' affordance.
     """
+    _ensure_stack_healthy()
     page.add_init_script(_WS_CAPTURE_INIT)
     page.goto(RECORDER_URL)
     _wait_idle(page)
