@@ -197,6 +197,36 @@ def _score(query: str, candidate: str) -> float:
     return SequenceMatcher(None, q, c).ratio()
 
 
+def match_collection_q(query: str, releases: list[dict], limit: int = 5,
+                       min_score: float = 0.55) -> list[dict]:
+    """Free-text variant of `match_collection`. Splits `query` into tokens and
+    rewards releases whose `artist + title` contains each token (so "kind of
+    blue" finds "Miles Davis · Kind of Blue" even though the artist isn't
+    in the query). Falls back to SequenceMatcher ratio for typo tolerance
+    and picks the better of the two scores."""
+    if not releases:
+        return []
+    q_norm = _normalize(query)
+    if not q_norm:
+        return []
+    tokens = q_norm.split()
+    scored: list[tuple[float, dict]] = []
+    for rel in releases:
+        hay = _normalize(f"{rel.get('artist', '')} {rel.get('title', '')}")
+        if not hay:
+            continue
+        token_score = sum(1 for t in tokens if t in hay) / len(tokens)
+        sim_score   = SequenceMatcher(None, q_norm, hay).ratio()
+        s = max(token_score, sim_score)
+        if s >= min_score:
+            scored.append((s, rel))
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [
+        {**rel, "score": int(round(s * 100)), "source": "collection"}
+        for s, rel in scored[:limit]
+    ]
+
+
 def match_collection(query_artist: str, query_album: str,
                      releases: list[dict], limit: int = 5,
                      min_score: float = 0.55) -> list[dict]:

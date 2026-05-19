@@ -82,15 +82,31 @@ def _lucene_escape(s: str) -> str:
     return _LUCENE_SPECIAL.sub(r"\\\1", s)
 
 
-def search_releases(artist: str, album: str, limit: int = 5) -> list[dict]:
-    """Return the top-N MusicBrainz release matches as compact dicts."""
-    q_parts = []
-    if artist: q_parts.append(f'artist:"{_lucene_escape(artist)}"')
-    if album:  q_parts.append(f'release:"{_lucene_escape(album)}"')
-    if not q_parts:
-        return []
-    q = " AND ".join(q_parts)
-    data = _http_json(f"{MB_BASE}/release/?query={urllib.parse.quote(q)}&limit={limit}&fmt=json")
+def search_releases(artist: str = "", album: str = "", limit: int = 5,
+                    *, q: str = "") -> list[dict]:
+    """Return the top-N MusicBrainz release matches as compact dicts.
+
+    Two query modes:
+      - structured: `artist`/`album` map to `artist:"…"` / `release:"…"`
+        Lucene clauses ANDed together (precise when both are known).
+      - generic: a free-text `q` is passed as a bare Lucene query so MB's
+        indexer scores across all release fields. Used for the UI search
+        bars, where the user might type just an album title, an
+        artist+album mash-up, a catalog number, etc.
+    """
+    if q:
+        s = q.strip()
+        if not s:
+            return []
+        query = _lucene_escape(s)
+    else:
+        q_parts = []
+        if artist: q_parts.append(f'artist:"{_lucene_escape(artist)}"')
+        if album:  q_parts.append(f'release:"{_lucene_escape(album)}"')
+        if not q_parts:
+            return []
+        query = " AND ".join(q_parts)
+    data = _http_json(f"{MB_BASE}/release/?query={urllib.parse.quote(query)}&limit={limit}&fmt=json")
     out = []
     for r in (data.get("releases") or [])[:limit]:
         label = ""

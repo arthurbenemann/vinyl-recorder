@@ -158,9 +158,12 @@
   <div class="content">
     <div class="action-row">
       <button class="btn" onclick="refreshAll()" title="Reload Raw + albums; also scans music/ for manually-added albums.">↻ refresh</button>
-      <input id="lib-search" class="lib-search" placeholder="search artist / album / year / label / genre …"
-             oninput="onLibSearchInput(this.value)" />
-      <button class="btn-small" id="lib-filter-clear" onclick="clearLibFilter()" hidden>clear</button>
+      <div class="search-wrap lib-search-wrap">
+        <svg class="search-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><line x1="10.4" y1="10.4" x2="13.5" y2="13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <input id="lib-search" class="lib-search" type="search" placeholder="search albums, artists, labels…"
+               oninput="onLibSearchInput(this.value)" />
+        <button class="search-clear" id="lib-filter-clear" type="button" onclick="clearLibFilter()" hidden aria-label="clear search">×</button>
+      </div>
     </div>
     <!-- Polite live region: announces "N results for …" to screen readers
          whenever the library filter changes. Visually hidden via .sr-only. -->
@@ -300,16 +303,12 @@
       </span>
       <span class="grow"></span>
       <div class="we-suggest">
-        <button class="btn-small" onclick="weToggleSuggest('discogs')">suggested tracklist ▾</button>
-        <div class="we-suggest-pop" id="we-pop-discogs" hidden>
-          <div class="col-label">Suggested tracklist</div>
-          <div class="search-row">
-            <input id="we-search-q" placeholder="artist + album" onkeydown="if(event.key==='Enter')weRunSearch()" />
-            <button class="btn-small" onclick="weRunSearch()">search</button>
-          </div>
-          <div class="search-status" id="we-search-status" style="margin:6px 0"></div>
-          <div class="candidates" id="we-candidates" style="max-height:220px"></div>
-        </div>
+        <button class="btn-small" id="we-load-tracklist-btn" onclick="weLoadTracklistFromTags()" title="Pull the tracklist from this album's saved Discogs / MusicBrainz id (tag the album first to set them)">↻ load tracklist</button>
+        <div class="search-status" id="we-search-status" style="margin-left:8px"></div>
+        <!-- Hidden legacy candidate slot — older auto-load paths used to
+             write status into #we-candidates; kept so any stale handler
+             writing here doesn't throw. -->
+        <div id="we-candidates" hidden></div>
       </div>
       <div class="we-suggest">
         <button class="btn-small" onclick="weToggleSuggest('silence')">suggest from silence ▾</button>
@@ -486,7 +485,11 @@
             <div class="field"><label>Conductor</label><input id="t-conductor"/></div>
           </div>
         </div>
-        <div class="field"><label>Tracks (one per line)</label><textarea id="t-tracks" rows="6"></textarea></div>
+        <!-- Tracklist is sourced verbatim from the picked candidate; the
+             textarea is read-only so users don't think edits stick. To
+             change a track title or duration, pick a different release
+             on the right. -->
+        <div class="field"><label>Tracks (from picked release)</label><textarea id="t-tracks" rows="6" readonly tabindex="-1" aria-readonly="true"></textarea></div>
         <div class="action-row">
           <button class="btn primary" id="tag-apply-btn" onclick="applyTagPanel()">apply tags</button>
           <span class="unsaved-badge" id="tag-unsaved-badge" hidden title="Form has unsaved changes">unsaved</span>
@@ -494,18 +497,36 @@
         </div>
       </div>
 
-      <!-- Right column: search + candidates -->
+      <!-- Right column: find-a-release tools + candidate matches -->
       <div class="tag-col">
-        <div class="col-label">Search MusicBrainz <span style="text-transform:none;letter-spacing:0;color:var(--muted)">— enriched with Discogs when linked</span></div>
-        <div class="search-row">
-          <input id="t-search-q" placeholder="artist + album, e.g. Miles Davis Kind of Blue"
-                 onkeydown="if(event.key==='Enter')runSearch()" />
-          <button class="btn-small" onclick="runSearch()">search</button>
-          <button class="btn-small" id="t-collection-refresh" hidden onclick="refreshCollection()" title="Re-fetch your Discogs collection">↻ collection</button>
+        <div class="col-label">Find a release</div>
+        <!-- Unified find-a-release bar. Auto-detects three modes:
+              · empty + Enter → search MusicBrainz using left-column fields
+              · free text     → live-filters the Discogs collection
+              · Discogs URL/id pasted → fetches that release directly
+             The subtitle below updates on every keystroke so the user
+             always knows what the next action will do. -->
+        <div class="search-wrap t-find-wrap" style="max-width:none;margin-bottom:4px">
+          <svg class="search-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><line x1="10.4" y1="10.4" x2="13.5" y2="13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          <input id="t-search" type="search"
+                 placeholder="filter collection · paste Discogs link · or Enter ↗ to search MusicBrainz"
+                 autocomplete="off"
+                 oninput="onFindInput(this.value)"
+                 onpaste="setTimeout(()=>onFindInput(this.value),0)"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();onFindEnter()}" />
+          <button class="search-clear" id="t-search-clear" type="button" hidden aria-label="clear"
+                  onclick="const i=document.getElementById('t-search');i.value='';onFindInput('');i.focus()">×</button>
+        </div>
+        <!-- Subtitle + (when a Discogs collection is configured) the
+             refresh button share one flex row, so there's no empty-row
+             padding between the search bar and the candidates list. -->
+        <div class="t-find-subtitle-row">
+          <div class="t-find-subtitle" id="t-find-subtitle">fill Artist + Album on the left to search MusicBrainz, or type to filter your collection</div>
+          <button class="btn-tiny" id="t-collection-refresh" hidden onclick="refreshCollection()" title="Re-fetch your Discogs collection">↻ refresh</button>
         </div>
         <div class="search-status" id="t-search-status"></div>
         <div class="candidates" id="t-candidates">
-          <div class="empty-results">Type artist + album above and hit search.</div>
+          <div class="empty-results">Type above to filter your collection, paste a Discogs link, or hit Enter to search MusicBrainz using the Artist + Album fields on the left.</div>
         </div>
       </div>
 

@@ -62,13 +62,21 @@ def _discogs_extra_artists(release: dict, role_prefixes: tuple[str, ...]) -> str
 async def search(req: SearchRequest):
     """Search MusicBrainz for release candidates, plus matches from the
     user's Discogs collection when configured. Two parallel result lists so
-    the UI can render an "From your collection" section above MB results."""
-    if not req.artist.strip() and not req.album.strip():
+    the UI can render an "From your collection" section above MB results.
+
+    Accepts either a generic free-text `q` (preferred — the UI search bars
+    send this) or a structured `artist` + `album` pair (used when the tag
+    panel's left-column fields are filled and we want a precise query)."""
+    q = req.q.strip()
+    artist = req.artist.strip()
+    album  = req.album.strip()
+    if not q and not artist and not album:
         return {"candidates": [], "collection_candidates": []}
     try:
-        candidates = await asyncio.to_thread(
-            search_releases, req.artist.strip(), req.album.strip(), 5,
-        )
+        if q:
+            candidates = await asyncio.to_thread(search_releases, limit=5, q=q)
+        else:
+            candidates = await asyncio.to_thread(search_releases, artist, album, 5)
     except Exception as e:
         raise HTTPException(502, f"MusicBrainz error: {e}")
     collection_candidates: list[dict] = []
@@ -77,10 +85,14 @@ async def search(req: SearchRequest):
             owned = await asyncio.to_thread(
                 discogs.collection_releases, DISCOGS_USERNAME, DISCOGS_TOKEN or None,
             )
-            collection_candidates = await asyncio.to_thread(
-                discogs.match_collection,
-                req.artist.strip(), req.album.strip(), owned,
-            )
+            if q:
+                collection_candidates = await asyncio.to_thread(
+                    discogs.match_collection_q, q, owned,
+                )
+            else:
+                collection_candidates = await asyncio.to_thread(
+                    discogs.match_collection, artist, album, owned,
+                )
         except Exception:
             # Non-fatal: tagging still works without collection enrichment.
             collection_candidates = []
@@ -88,6 +100,24 @@ async def search(req: SearchRequest):
         "candidates":            candidates,
         "collection_candidates": collection_candidates,
     }
+
+
+@router.get("/api/collection")
+async def collection_list():
+    """Return the user's owned Discogs releases, served from the in-process
+    cache (refresh via /api/collection/refresh). Used by the tag panel's
+    "filter your collection" input so filtering is instant + offline."""
+    if not DISCOGS_USERNAME:
+        return {"releases": []}
+    try:
+        owned = await asyncio.to_thread(
+            discogs.collection_releases, DISCOGS_USERNAME, DISCOGS_TOKEN or None,
+        )
+    except Exception:
+        # Same non-fatal posture as /api/search — the tag panel still works
+        # without collection enrichment, just without the picker.
+        owned = []
+    return {"releases": owned}
 
 
 @router.post("/api/collection/refresh")

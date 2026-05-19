@@ -325,8 +325,15 @@ class TagEdit(BaseModel):
 
 
 class SearchRequest(BaseModel):
+    # Structured: `artist` + `album` build a precise MB Lucene query. Used
+    # when the tag panel's left-column fields are already filled in.
     artist: str = ""
     album: str = ""
+    # Generic free-text alternative. When set, takes precedence: MB scores
+    # across all release fields and the Discogs collection match runs on
+    # the full string. This is what the search bars send by default — the
+    # user no longer needs to split their query into artist/album halves.
+    q: str = ""
 
 
 class ApplyRequest(BaseModel):

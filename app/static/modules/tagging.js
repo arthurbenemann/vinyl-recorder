@@ -22,8 +22,6 @@ import { renderCombineSides } from './combine.js';
 let tagPanelMbid = null;        // mbid of currently-picked candidate (drives cover embed on apply)
 let tagPanelDiscogsId = null;   // Discogs release id — persisted so the wave editor can auto-load tracks later
 let tagPanelCandidates = [];
-// Tracks the auto-populated search query so re-opens don't clobber user edits.
-let tagPanelAutoQuery = '';
 // Snapshot of left-column values when the modal opened — `formDirty` is true
 // when any current value diverges, which drives the unsaved badge + pulse.
 let tagPanelInitialFields = null;
@@ -67,9 +65,19 @@ function setLeft(fields) {
   document.getElementById('t-composer').value  = fields.composer  ?? '';
   document.getElementById('t-conductor').value = fields.conductor ?? '';
   if (fields.tracks !== undefined) {
-    const arr = Array.isArray(fields.tracks) ? fields.tracks
-      : String(fields.tracks || '').split(' / ').filter(Boolean);
-    document.getElementById('t-tracks').value = arr.join('\n');
+    // Three input shapes accepted:
+    //  - array of titles                  → one per line
+    //  - string already with newlines     → used as-is (pre-rendered by
+    //    _renderTrackLines into "M:SS - Title" form)
+    //  - legacy " / "-joined string       → split + line-per-track
+    let body;
+    if (Array.isArray(fields.tracks)) {
+      body = fields.tracks.join('\n');
+    } else {
+      const s = String(fields.tracks || '');
+      body = s.includes('\n') ? s : s.split(' / ').filter(Boolean).join('\n');
+    }
+    document.getElementById('t-tracks').value = body;
   }
 }
 
@@ -126,19 +134,16 @@ export function openTag(fname) {
     format: '', tracks: f.tracks,
   });
   setCover(null);
-  // Pre-fill the search query from existing tags so a single click runs the search.
-  // Only overwrite the search field when it's empty or still holds whatever we
-  // last auto-filled — anything the user typed manually wins.
-  const q = [f.artist, f.album].filter(Boolean).join(' ');
-  const searchEl = document.getElementById('t-search-q');
-  const current = searchEl.value;
-  const userTyped = current && current !== tagPanelAutoQuery;
-  if (!userTyped) {
-    searchEl.value = q;
-    tagPanelAutoQuery = q;
-  }
+  // Reset the unified find-a-release bar each time the panel opens.
+  const findInp = document.getElementById('t-search');
+  if (findInp) findInp.value = '';
+  const findClr = document.getElementById('t-search-clear');
+  if (findClr) findClr.hidden = true;
+  // Subtitle starts in "mb" mode (empty bar) — it'll show the live
+  // "Enter to search MB for «…»" preview if Artist/Album are filled.
+  _updateFindSubtitle(_findMode(''));
   document.getElementById('t-candidates').innerHTML =
-    '<div class="empty-results">Hit search to look up this album on MusicBrainz.</div>';
+    '<div class="empty-results">Type above to filter your collection, paste a Discogs link, or hit Enter to search MusicBrainz using the Artist + Album fields on the left.</div>';
   document.getElementById('t-search-status').textContent = '';
   document.getElementById('tag-modal').dataset.fname = fname;
   // Snapshot the freshly-loaded form so we can detect divergence for the
@@ -160,16 +165,16 @@ export function openTag(fname) {
   // the next Tab keeps the user inside it.
   const firstInput = document.querySelector('#tag-modal input, #tag-modal button, #tag-modal select');
   if (firstInput) firstInput.focus();
-  // If we have a usable search query (artist+album already known), kick off
-  // the MB search automatically so the candidate list is populated by the
-  // time the user looks at it. Defer one tick so focus management above has
-  // settled. Skip when the field is empty (e.g. combine of untagged sides).
-  if (searchEl.value.trim()) {
+  // Fetch the cached Discogs collection in the background so the filter
+  // input lights up the moment the panel is interactive. Cheap when cached
+  // server-side (just returns the in-process list).
+  _loadCollectionForFilter();
+  // If the album already carries artist + album, kick off the MB search
+  // automatically so candidates are visible by the time the user looks.
+  // Skip on untagged sides (combine of unnamed rows).
+  if (f.artist || f.album) {
     setTimeout(() => {
-      // Bail if the modal closed in the meantime, or the user already
-      // started typing something different (treat that as their intent).
       if (document.getElementById('tag-modal').hidden) return;
-      if (searchEl.value !== tagPanelAutoQuery) return;
       runSearch();
     }, 60);
   }
@@ -261,18 +266,71 @@ function _flashChangedFields(before) {
 }
 const tagEscHandler = makeModalEscHandler(closeTag, 'tag-modal');
 
-function parseQuery(q) {
-  // Split on " - " or just take the first half as artist; user can override fields directly.
-  // Falls back to using the whole string as both artist and album hints.
-  const parts = q.split(/\s+-\s+|\s+—\s+/);
-  if (parts.length >= 2) return { artist: parts[0].trim(), album: parts.slice(1).join(' - ').trim() };
-  // Try to split heuristically: if the string has 4+ words, first ~half as artist.
-  const words = q.split(/\s+/);
-  if (words.length >= 4) {
-    const mid = Math.ceil(words.length / 2);
-    return { artist: words.slice(0, mid).join(' '), album: words.slice(mid).join(' ') };
-  }
-  return { artist: q.trim(), album: q.trim() };
+// Cached Discogs collection list (one fetch per panel open). The right-column
+// "filter your collection" input scans this in-memory so filtering is instant
+// and offline — no per-keystroke /api/search round-trip.
+let tagPanelCollectionAll = [];
+let tagPanelCollectionLoaded = false;
+
+// Tease a Discogs release id out of pasted text. Accepts:
+//   - https://www.discogs.com/release/12345 (with or without slug, locale prefix)
+//   - https://www.discogs.com/release/12345-Artist-Title
+//   - [r12345]  (Discogs's marketplace shorthand)
+//   - 12345     (bare id, ≥ 3 digits — guards against accidental year paste)
+// Returns the integer id or null.
+function _parseDiscogsId(s) {
+  const t = String(s || '').trim();
+  if (!t) return null;
+  const m = t.match(/discogs\.com\/(?:[^/]+\/)?release\/(\d+)/i)
+         || t.match(/\[r(\d+)\]/i)
+         || t.match(/^(\d{3,})$/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+function _normalizeForFilter(s) {
+  return String(s || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+}
+
+// Re-rank candidates so vinyl-format releases float above CDs / digital.
+// MB and Discogs both expose `format` as a comma-joined string; we just
+// substring-match on the obvious tokens. Stable: within each group the
+// server's relevance order is preserved.
+const _VINYL_RE = /\b(vinyl|lp|7\"|10\"|12\"|shellac)\b/i;
+function _isVinyl(c) {
+  const f = (c && (c.format || (Array.isArray(c.formats) ? c.formats.join(' ') : ''))) || '';
+  return _VINYL_RE.test(f);
+}
+function _vinylFirst(cands) {
+  const v = [], rest = [];
+  for (const c of cands) (_isVinyl(c) ? v : rest).push(c);
+  return v.concat(rest);
+}
+
+// Format a duration in seconds as M:SS for the tracks textarea.
+function _fmtTrackDuration(sec) {
+  const n = Math.max(0, Math.round(Number(sec) || 0));
+  return `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
+}
+
+// Build the tracks-textarea body from a candidate's `track_details`. Each
+// line is `M:SS - Title` when a duration is known, plain title otherwise.
+// applyTagPanel strips the `M:SS - ` prefix back off before persisting, so
+// the textarea is a faithful preview AND a single source of truth.
+function _renderTrackLines(tracksOrDetails) {
+  if (!tracksOrDetails) return '';
+  const arr = Array.isArray(tracksOrDetails) ? tracksOrDetails : [];
+  return arr.map(t => {
+    if (typeof t === 'string') return t;
+    const title = (t && t.title) || '';
+    const dur   = t && t.duration_seconds;
+    return (dur != null) ? `${_fmtTrackDuration(dur)} - ${title}` : title;
+  }).join('\n');
+}
+
+// Strip a leading "M:SS - " (or "MM:SS - ") off a tracks-textarea line so
+// the persisted titles don't carry the inline duration preview.
+function _stripTrackDuration(line) {
+  return String(line || '').replace(/^\s*\d{1,2}:\d{2}\s*-\s*/, '').trim();
 }
 
 function _renderMbCard(c, i) {
@@ -321,44 +379,49 @@ function _renderCollectionCard(c) {
 }
 
 export async function runSearch() {
-  const q = document.getElementById('t-search-q').value.trim();
-  if (!q) return;
-  // Prefer the typed left-side fields if they're filled, since they'll be more precise.
-  const leftArtist = document.getElementById('t-artist').value.trim();
-  const leftAlbum  = document.getElementById('t-album').value.trim();
-  const body = (leftArtist || leftAlbum) ? { artist: leftArtist, album: leftAlbum } : parseQuery(q);
+  // Source of truth is the left-column Artist + Album fields. The
+  // standalone search bar was retired (it required users to format their
+  // input as "artist + album", which was a fiddly second source of truth).
+  const artist = document.getElementById('t-artist').value.trim();
+  const album  = document.getElementById('t-album').value.trim();
+  if (!artist && !album) {
+    document.getElementById('t-search-status').textContent =
+      'Fill Artist or Album on the left, then ↗ search MusicBrainz.';
+    return;
+  }
   const list = document.getElementById('t-candidates');
   document.getElementById('t-search-status').textContent = 'searching MusicBrainz…';
   list.innerHTML = '';
   try {
     const r = await fetch('/api/search', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(body)
+      body: JSON.stringify({ artist, album })
     });
     if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
-    tagPanelCandidates = d.candidates || [];
-    tagPanelCollectionCandidates = d.collection_candidates || [];
+    // Vinyl-preference re-rank: keep LPs / 12" / 7" etc. above CD-only
+    // pressings within each result group. Server order (relevance) is
+    // preserved as the secondary sort via _vinylFirst's stable partition.
+    tagPanelCandidates = _vinylFirst(d.candidates || []);
+    tagPanelCollectionCandidates = _vinylFirst(d.collection_candidates || []);
     const mbN = tagPanelCandidates.length;
     const colN = tagPanelCollectionCandidates.length;
     if (!mbN && !colN) {
-      list.innerHTML = '<div class="empty-results">No matches. Try editing the search above.</div>';
+      list.innerHTML = '<div class="empty-results">No matches. Try editing Artist / Album on the left and search again.</div>';
       document.getElementById('t-search-status').textContent = '';
       return;
     }
-    const status =
-      (colN ? `${colN} from your collection` : '') +
-      (colN && mbN ? ' · ' : '') +
-      (mbN ? `${mbN} from MusicBrainz` : '') +
-      ' — click to load details';
-    document.getElementById('t-search-status').textContent = status;
+    // Result counts + the click-to-load hint live in the section headers
+    // now — keeping a separate status line under the search bar would
+    // duplicate that information and waste a row.
+    document.getElementById('t-search-status').textContent = '';
     let html = '';
     if (colN) {
-      html += '<div class="cand-section-header">From your collection</div>';
+      html += `<div class="cand-section-header">From your collection · ${colN} match${colN === 1 ? '' : 'es'} · click to load</div>`;
       html += tagPanelCollectionCandidates.map(_renderCollectionCard).join('');
     }
     if (mbN) {
-      if (colN) html += '<div class="cand-section-header">MusicBrainz results</div>';
+      html += `<div class="cand-section-header">MusicBrainz · ${mbN} result${mbN === 1 ? '' : 's'} · click to load</div>`;
       html += tagPanelCandidates.map((c, i) => _renderMbCard(c, i)).join('');
     }
     list.innerHTML = html;
@@ -366,6 +429,207 @@ export async function runSearch() {
     list.innerHTML = `<div class="empty-results err">search failed: ${htmlEscape(e.message)}</div>`;
     document.getElementById('t-search-status').textContent = '';
   }
+}
+
+// ── Unified find-a-release bar ────────────────────────────────────────────
+// The right-column "Find a release" input has three behaviours, picked on
+// every keystroke from the value + the left-column Artist/Album fields:
+//
+//   1. value matches a Discogs URL / id / [rN] → "discogs" mode.
+//      Subtitle hints "→ fetch Discogs release N (Enter)". Enter fetches.
+//   2. value is non-empty free text             → "filter" mode.
+//      Subtitle shows "N collection matches". The candidates list is
+//      re-rendered live with collection items only (no network).
+//   3. value is empty                            → "mb" mode.
+//      Subtitle shows what an Enter press will search for ("«artist · album»")
+//      pulled from the left fields. Disabled when both fields are empty.
+
+function _findMode(raw) {
+  const t = String(raw || '').trim();
+  if (!t) return { kind: 'mb' };
+  const id = _parseDiscogsId(t);
+  if (id) return { kind: 'discogs', id };
+  return { kind: 'filter', text: t };
+}
+
+function _updateFindSubtitle(mode) {
+  const el = document.getElementById('t-find-subtitle');
+  if (!el) return;
+  el.classList.remove('mode-discogs', 'mode-mb', 'mode-disabled');
+  if (mode.kind === 'discogs') {
+    el.classList.add('mode-discogs');
+    el.innerHTML = `→ fetch Discogs release <span class="t-find-emph">${mode.id}</span> · <span class="t-find-emph">Enter</span> to load`;
+    return;
+  }
+  if (mode.kind === 'filter') {
+    // _filterCollection (called from onFindInput) sets the precise match
+    // count in the search-status line, so the subtitle just describes the
+    // mode at a glance.
+    el.textContent = tagPanelCollectionAll.length
+      ? `filtering your collection (${tagPanelCollectionAll.length} records)`
+      : 'no collection loaded — type Artist + Album on the left and hit Enter';
+    return;
+  }
+  // mb mode
+  const artist = document.getElementById('t-artist').value.trim();
+  const album  = document.getElementById('t-album').value.trim();
+  if (!artist && !album) {
+    el.classList.add('mode-disabled');
+    el.textContent = 'fill Artist + Album on the left to search MusicBrainz';
+    return;
+  }
+  el.classList.add('mode-mb');
+  const label = [artist, album].filter(Boolean).join(' · ');
+  el.innerHTML = `→ <span class="t-find-emph">Enter</span> to search MusicBrainz for «<span class="t-find-emph">${htmlEscape(label)}</span>»`;
+}
+
+function _filterCollection(text) {
+  const list = document.getElementById('t-candidates');
+  const q = _normalizeForFilter(text.trim());
+  const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
+  // No DISCOGS_USERNAME configured → no collection to filter; nudge the
+  // user toward the MB-search path instead of letting "no matches" imply
+  // a stale collection problem.
+  if (!tagPanelCollectionAll.length) {
+    list.innerHTML = '<div class="empty-results">No Discogs collection is configured. Fill Artist + Album on the left and clear the bar, then hit <strong>Enter</strong> to search MusicBrainz.</div>';
+    document.getElementById('t-search-status').textContent = '';
+    return;
+  }
+  const matches = [];
+  if (tokens.length) {
+    for (const rel of tagPanelCollectionAll) {
+      const hay = _normalizeForFilter(`${rel.artist || ''} ${rel.title || ''} ${rel.label || ''} ${rel.catno || ''}`);
+      if (tokens.every(t => hay.includes(t))) matches.push(rel);
+      if (matches.length >= 50) break;        // cap so a one-letter filter doesn't paint thousands of rows
+    }
+  }
+  tagPanelCollectionCandidates = _vinylFirst(matches);
+  if (!matches.length) {
+    list.innerHTML = '<div class="empty-results">No collection releases match. Clear the bar and hit <strong>Enter</strong> to search MusicBrainz instead.</div>';
+    document.getElementById('t-search-status').textContent = '';
+    return;
+  }
+  document.getElementById('t-search-status').textContent = '';
+  const n = matches.length;
+  const refineHint = n === 50 ? ' · refine to narrow' : '';
+  list.innerHTML =
+    `<div class="cand-section-header">From your collection · ${n} match${n === 1 ? '' : 'es'}${refineHint} · click to load</div>`
+    + tagPanelCollectionCandidates.map(_renderCollectionCard).join('');
+}
+
+// Public handler: fires on every input/paste of #t-search. Toggles the
+// inline × clear button, updates the subtitle, and re-paints the
+// candidates panel to match the new mode so a stale filter-mode message
+// doesn't leak into discogs/mb mode.
+export function onFindInput(v) {
+  const inp = document.getElementById('t-search');
+  const clr = document.getElementById('t-search-clear');
+  if (clr) clr.hidden = !(inp && inp.value);
+  const mode = _findMode(v);
+  _updateFindSubtitle(mode);
+  const list = document.getElementById('t-candidates');
+  const status = document.getElementById('t-search-status');
+  if (mode.kind === 'filter') {
+    _filterCollection(mode.text);
+    return;
+  }
+  if (mode.kind === 'discogs') {
+    // Don't blow away a previously-loaded MB candidate list — but if the
+    // panel is currently showing a filter-mode hint, swap it for one that
+    // matches discogs mode so the message tracks reality.
+    if (list && list.querySelector('.empty-results')) {
+      list.innerHTML = '<div class="empty-results">Press <strong>Enter</strong> to fetch this Discogs release and fill the tags on the left.</div>';
+    }
+    if (status && status.textContent.startsWith('No collection')) status.textContent = '';
+    if (status && status.textContent.includes('from your collection')) status.textContent = '';
+    return;
+  }
+  // mb mode (empty bar). Wipe a stale filter-mode hint; keep candidate
+  // cards that the user can still click on.
+  if (list && list.querySelector('.empty-results')) {
+    list.innerHTML = '<div class="empty-results">Type above to filter your collection, paste a Discogs link, or hit <strong>Enter</strong> to search MusicBrainz using the Artist + Album fields on the left.</div>';
+  }
+  if (status && status.textContent.includes('from your collection')) status.textContent = '';
+}
+
+// Public handler: fires on Enter inside #t-search. Dispatches by mode.
+export async function onFindEnter() {
+  const inp = document.getElementById('t-search');
+  const mode = _findMode(inp ? inp.value : '');
+  if (mode.kind === 'discogs') {
+    await _fetchDiscogsRelease(mode.id);
+    if (inp) { inp.value = ''; onFindInput(''); }
+    return;
+  }
+  if (mode.kind === 'mb') {
+    runSearch();
+    return;
+  }
+  // filter mode: Enter is a no-op (filtering is already live). If the
+  // user wanted MB instead, they clear the bar and hit Enter again.
+}
+
+// Refresh the subtitle whenever the user edits Artist or Album so the
+// "Enter to search MusicBrainz for «…»" preview stays current.
+export function wireFindSubtitleLive() {
+  const sync = () => {
+    const inp = document.getElementById('t-search');
+    _updateFindSubtitle(_findMode(inp ? inp.value : ''));
+  };
+  for (const id of ['t-artist', 't-album']) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', sync);
+  }
+}
+
+async function _fetchDiscogsRelease(id) {
+  const status = document.getElementById('t-search-status');
+  status.textContent = `fetching Discogs release ${id}…`;
+  try {
+    const r = await fetch(`/api/release/discogs/${id}`);
+    if (!r.ok) throw new Error(await parseError(r));
+    const d = await r.json();
+    tagPanelMbid = null;
+    tagPanelDiscogsId = id;
+    const before = _readTagFields();
+    setLeft({
+      album: d.title, artist: d.artist, year: d.year, genre: d.genre,
+      label: d.label, catalog_number: d.catalog_number, country: d.country,
+      format: d.format, composer: d.composer, conductor: d.conductor,
+      tracks: _renderTrackLines(d.track_details && d.track_details.length ? d.track_details : d.tracks),
+    });
+    _flashChangedFields(before);
+    _recomputeTagDirty();
+    if (d.cover_url) setCover(d.cover_url);
+    const link = d.discogs_url
+      ? `<a class="ext-link" href="${d.discogs_url}" target="_blank" rel="noopener">↗ Discogs</a>`
+      : '';
+    status.innerHTML = `loaded · from Discogs paste · ${link}`;
+  } catch (e) {
+    status.textContent = 'load failed: ' + e.message;
+  }
+}
+
+// Fetch the full owned-collection list once per tag-panel open. Server
+// returns {releases: []} when no DISCOGS_USERNAME is set; the subtitle
+// + ↻ refresh button adapt accordingly.
+async function _loadCollectionForFilter() {
+  if (tagPanelCollectionLoaded) return;
+  tagPanelCollectionLoaded = true;
+  try {
+    const r = await fetch('/api/collection');
+    if (!r.ok) return;
+    const d = await r.json();
+    tagPanelCollectionAll = Array.isArray(d.releases) ? d.releases : [];
+  } catch (e) {
+    tagPanelCollectionAll = [];
+  }
+  const refresh = document.getElementById('t-collection-refresh');
+  if (refresh) refresh.hidden = !tagPanelCollectionAll.length;
+  // Nudge the subtitle so it shows "N collection records" the moment
+  // data lands, without needing to type.
+  const inp = document.getElementById('t-search');
+  _updateFindSubtitle(_findMode(inp ? inp.value : ''));
 }
 
 export async function pickCollectionCandidate(releaseId) {
@@ -388,7 +652,7 @@ export async function pickCollectionCandidate(releaseId) {
       album: d.title, artist: d.artist, year: d.year, genre: d.genre,
       label: d.label, catalog_number: d.catalog_number, country: d.country,
       format: d.format, composer: d.composer, conductor: d.conductor,
-      tracks: d.tracks,
+      tracks: _renderTrackLines(d.track_details && d.track_details.length ? d.track_details : d.tracks),
     });
     _flashChangedFields(before);
     _recomputeTagDirty();
@@ -411,8 +675,13 @@ export async function refreshCollection() {
     if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     toast(`✓ Discogs collection refreshed (${d.count} releases)`, 'ok');
-    // Re-run the current search so the new cache is reflected immediately.
-    if (document.getElementById('t-search-q').value.trim()) runSearch();
+    // Reset the cached list so _loadCollectionForFilter re-fetches it,
+    // and re-run the live filter (if any) against the new data.
+    tagPanelCollectionLoaded = false;
+    tagPanelCollectionAll    = [];
+    await _loadCollectionForFilter();
+    const inp = document.getElementById('t-search');
+    if (inp && inp.value.trim()) onFindInput(inp.value);
   } catch (e) {
     toast('✗ ' + e.message, 'err');
   } finally {
@@ -423,7 +692,14 @@ export async function refreshCollection() {
 export async function pickCandidate(i) {
   const c = tagPanelCandidates[i];
   if (!c) return;
-  document.querySelectorAll('.candidate').forEach((el, j) => el.classList.toggle('active', j === i));
+  // Match by data-i, not DOM-position: when both a "From your collection"
+  // and a "MusicBrainz" section are rendered, the MB cards live below the
+  // collection cards in the list, so a position-based comparison would
+  // light up the collection card at the same offset instead of the MB
+  // card the user clicked. Collection cards have no data-i, so their
+  // Number(undefined) → NaN never equals i.
+  document.querySelectorAll('.candidate').forEach(el =>
+    el.classList.toggle('active', Number(el.dataset.i) === i));
   document.getElementById('t-search-status').textContent = `loading ${c.title}…`;
   try {
     const r = await fetch(`/api/release/${c.mbid}`);
@@ -436,7 +712,7 @@ export async function pickCandidate(i) {
       album: d.title, artist: d.artist, year: d.year, genre: d.genre,
       label: d.label, catalog_number: d.catalog_number, country: d.country,
       format: d.format, composer: d.composer, conductor: d.conductor,
-      tracks: d.tracks,
+      tracks: _renderTrackLines(d.track_details && d.track_details.length ? d.track_details : d.tracks),
     });
     _flashChangedFields(before);
     _recomputeTagDirty();
@@ -456,8 +732,11 @@ export async function pickCandidate(i) {
 export async function applyTagPanel() {
   const fname = document.getElementById('tag-modal').dataset.fname;
   if (!fname) return;
+  // The textarea may carry the "M:SS - Title" preview format when the
+  // user picked a candidate with track durations. Strip the leading
+  // timecode back off so persisted tags hold just the titles.
   const tracks = document.getElementById('t-tracks').value
-    .split('\n').map(s => s.trim()).filter(Boolean);
+    .split('\n').map(_stripTrackDuration).filter(Boolean);
   const fields = {
     artist:         document.getElementById('t-artist').value.trim(),
     album:          document.getElementById('t-album').value.trim(),

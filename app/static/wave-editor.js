@@ -412,15 +412,7 @@ function openWaveEditor(fname) {
   document.getElementById('we-filename').textContent = headerLabel;
   document.getElementById('we-duration').textContent = fmtMMSS(we.total);
   document.getElementById('we-mini-end').textContent = fmtMMSS(we.total);
-  // Pre-fill with " - " so weRunSearch can split into artist/album. Strip a
-  // trailing "(YYYY)" from the album in case the user typed a year in.
-  const albumClean = (a.album || '').replace(/\s*\(\d{4}\)\s*$/, '');
-  document.getElementById('we-search-q').value =
-    [a.artist, albumClean].filter(Boolean).join(' - ');
-  document.getElementById('we-pop-discogs').hidden = true;
   document.getElementById('we-pop-silence').hidden = true;
-  document.getElementById('we-candidates').innerHTML =
-    '<div class="empty-results" style="padding:14px;font-size:11px">Search to load track durations.</div>';
   document.getElementById('we-search-status').textContent = '';
   document.getElementById('we-silence-status').textContent = '';
 
@@ -1237,10 +1229,8 @@ function weKeyDown(e) {
       e.preventDefault();
       // Dismiss an open suggest popover first; only close the whole editor
       // once nothing is layered on top.
-      const popDiscogs = document.getElementById('we-pop-discogs');
       const popSilence = document.getElementById('we-pop-silence');
-      if (!popDiscogs.hidden || !popSilence.hidden) {
-        popDiscogs.hidden = true;
+      if (popSilence && !popSilence.hidden) {
         popSilence.hidden = true;
         return;
       }
@@ -1626,105 +1616,50 @@ function onAudioTimeUpdate() {
 }
 
 // ── Suggest popovers ──────────────────────────────────────────────────────
+// The Discogs/MB tracklist search popover was retired in favor of the
+// "↻ load tracklist" button (which pulls from the album's already-saved
+// Discogs / MusicBrainz id). Only the silence popover is left.
 function weToggleSuggest(which) {
-  const a = document.getElementById('we-pop-discogs');
   const b = document.getElementById('we-pop-silence');
-  if (which === 'discogs') {
-    a.hidden = !a.hidden;
-    b.hidden = true;
-  } else {
-    b.hidden = !b.hidden;
-    a.hidden = true;
+  if (which === 'silence') b.hidden = !b.hidden;
+}
+
+// Manual re-trigger for the album's saved-id tracklist fetch. _weAutoLoadFromIds
+// runs once on open; this button lets the user re-run it after re-tagging,
+// or get a clear "no ids on this album" message when the album isn't tagged.
+async function weLoadTracklistFromTags() {
+  const status = document.getElementById('we-search-status');
+  const a = (typeof albumsByName !== 'undefined') ? albumsByName[we.albumId] : null;
+  if (!a) { status.textContent = 'No album loaded.'; return; }
+  const hasDiscogs = !!a.discogs_release_id;
+  const hasMbid    = !!a.musicbrainz_albumid;
+  if (!hasDiscogs && !hasMbid) {
+    status.textContent =
+      'No Discogs / MusicBrainz id saved on this album — tag it first via "edit tags" in the library.';
+    return;
+  }
+  // Temporarily clear cuts gate so _weAutoLoadFromIds re-runs. The function
+  // bails early when we.cuts.length > 0, which is the right thing on open
+  // but wrong when the user explicitly asked to reload. Snapshot + restore.
+  const prevCuts = we.cuts.slice();
+  we.cuts = [];
+  status.textContent = hasDiscogs
+    ? 'loading tracklist from saved Discogs id…'
+    : 'loading tracklist from saved MusicBrainz id…';
+  try {
+    await _weAutoLoadFromIds(a);
+  } finally {
+    // If auto-load applied a tracklist, we.cuts is now populated with new
+    // values and the snapshot is stale — keep the new cuts. Otherwise put
+    // the prior cuts back so we don't blank the editor on a failure.
+    if (!we.cuts.length) we.cuts = prevCuts;
   }
 }
 
-async function weRunSearch() {
-  const q = document.getElementById('we-search-q').value.trim();
-  if (!q) return;
-  // Reuse the tag-panel's parser so " - " / " — " separators and word-count
-  // heuristics behave the same in both editors. Strip a trailing "(YYYY)"
-  // from the album field — MB rejects it as part of the release title.
-  const body = parseQuery(q);
-  body.album = (body.album || '').replace(/\s*\(\d{4}\)\s*$/, '').trim();
-  const status = document.getElementById('we-search-status');
-  const list   = document.getElementById('we-candidates');
-  status.textContent = 'searching MusicBrainz + your collection…';
-  list.innerHTML = '';
-  try {
-    const r = await fetch('/api/search', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) throw new Error(await parseError(r));
-    const d = await r.json();
-    we.candidates           = d.candidates || [];
-    we.collectionCandidates = d.collection_candidates || [];
-    const mbN  = we.candidates.length;
-    const colN = we.collectionCandidates.length;
-    if (!mbN && !colN) {
-      list.innerHTML = '<div class="empty-results" style="padding:14px;font-size:11px">No matches.</div>';
-      status.textContent = '';
-      return;
-    }
-    const summary =
-      (colN ? `${colN} from your collection` : '') +
-      (colN && mbN ? ' · ' : '') +
-      (mbN ? `${mbN} from MusicBrainz` : '') +
-      ' — click to apply track durations';
-    status.textContent = summary;
-    let html = '';
-    if (colN) {
-      html += '<div class="cand-section-header">From your collection</div>';
-      html += we.collectionCandidates.map(c => {
-        const img = c.cover_url
-          ? `<img src="${htmlEscape(c.cover_url)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">`
-          : '';
-        const dUrl = `https://www.discogs.com/release/${c.discogs_release_id}`;
-        return `
-          <div class="candidate collection-cand" onclick="wePickCollectionCandidate(${c.discogs_release_id})">
-            <div class="candidate-thumb">${img}</div>
-            <div class="candidate-body">
-              <div class="candidate-title">
-                <span class="ct-text">${htmlEscape(c.title)}</span>
-                ${c.score != null ? `<span class="score">${c.score}%</span>` : ''}
-              </div>
-              <div class="candidate-sub">
-                ${htmlEscape(c.artist)} · ${htmlEscape(c.year || '?')}
-                ${c.label ? '· ' + htmlEscape(c.label) : ''}
-                ${c.catno ? '<span class="pill">' + htmlEscape(c.catno) + '</span>' : ''}
-                ${c.format ? '<span class="pill">' + htmlEscape(c.format) + '</span>' : ''}
-                <a class="ext-link" href="${dUrl}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on Discogs">↗ Discogs</a>
-              </div>
-            </div>
-          </div>`;
-      }).join('');
-    }
-    if (mbN) {
-      if (colN) html += '<div class="cand-section-header">MusicBrainz results</div>';
-      html += we.candidates.map((c, i) => `
-        <div class="candidate" onclick="wePickCandidate(${i})">
-          <div class="candidate-thumb"><img src="/api/cover/${c.mbid}" loading="lazy" onerror="this.remove()"></div>
-          <div class="candidate-body">
-            <div class="candidate-title">
-              <span class="ct-text">${htmlEscape(c.title)}</span>
-              ${c.score != null ? `<span class="score">${c.score}%</span>` : ''}
-            </div>
-            <div class="candidate-sub">
-              ${htmlEscape(c.artist)} · ${htmlEscape(c.year || '?')}
-              ${c.label ? '· ' + htmlEscape(c.label) : ''}
-              ${c.catalog_number ? '<span class="pill">' + htmlEscape(c.catalog_number) + '</span>' : ''}
-              ${c.country ? '<span class="pill">' + htmlEscape(c.country) + '</span>' : ''}
-              <a class="ext-link" href="https://musicbrainz.org/release/${c.mbid}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on MusicBrainz">↗ MB</a>
-            </div>
-          </div>
-        </div>`).join('');
-    }
-    list.innerHTML = html;
-  } catch (e) {
-    list.innerHTML = `<div class="empty-results" style="padding:14px;font-size:11px">search failed: ${htmlEscape(e.message)}</div>`;
-    status.textContent = '';
-  }
-}
+// The wave-editor used to host its own MB/Discogs search popover. Removed
+// in favor of the "↻ load tracklist" button + the album's saved Discogs /
+// MB id — see weLoadTracklistFromTags above. To re-tag an album mid-split,
+// close the editor and use the library's "edit tags" action.
 
 // Apply cumulative track durations as cut positions. The last fitting track
 // absorbs slack. Cuts past the recording's end are clamped to we.total, which
@@ -1860,33 +1795,9 @@ function _weApplyTracklist(track_details, sourceLabel) {
   return true;
 }
 
-async function wePickCandidate(i) {
-  const c = we.candidates[i];
-  if (!c) return;
-  const status = document.getElementById('we-search-status');
-  status.textContent = `loading tracklist for ${c.title}…`;
-  try {
-    const r = await fetch(`/api/release/${c.mbid}`);
-    if (!r.ok) throw new Error(await parseError(r));
-    const d = await r.json();
-    _weApplyTracklist(d.track_details, d.discogs_id ? 'enriched from Discogs' : 'MB only');
-  } catch (e) {
-    status.textContent = 'load failed: ' + e.message;
-  }
-}
-
-async function wePickCollectionCandidate(releaseId) {
-  const status = document.getElementById('we-search-status');
-  status.textContent = `loading tracklist from your collection…`;
-  try {
-    const r = await fetch(`/api/release/discogs/${releaseId}`);
-    if (!r.ok) throw new Error(await parseError(r));
-    const d = await r.json();
-    _weApplyTracklist(d.track_details, 'from your collection');
-  } catch (e) {
-    status.textContent = 'load failed: ' + e.message;
-  }
-}
+// wePickCandidate / wePickCollectionCandidate were the click handlers for
+// the retired search popover's candidate rows. The auto-load path below
+// (and weLoadTracklistFromTags) now covers every tracklist-fetch flow.
 
 // Auto-load the tracklist from a Discogs release id or MBID stored on the
 // file. Only called when the editor has no existing cuts (no draft, no

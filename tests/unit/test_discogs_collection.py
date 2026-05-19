@@ -189,6 +189,46 @@ def test_match_collection_respects_limit():
     assert len(out) == 3
 
 
+# ── match_collection_q (generic free-text variant) ──────────────────────
+def test_match_collection_q_finds_by_title_only():
+    """The structured matcher dings releases whose artist doesn't match
+    the (empty) artist query. The free-text matcher just tokenises the
+    query against `artist + title`, so "kind of blue" finds the Miles
+    Davis release even though the artist isn't typed."""
+    releases = [
+        _summarized(1, "Miles Davis", "Kind of Blue"),
+        _summarized(2, "Pink Floyd", "Animals"),
+    ]
+    out = discogs.match_collection_q("kind of blue", releases)
+    assert len(out) == 1
+    assert out[0]["discogs_release_id"] == 1
+    assert out[0]["score"] == 100  # all 3 tokens present in haystack
+
+
+def test_match_collection_q_finds_by_artist_only():
+    releases = [
+        _summarized(1, "Miles Davis", "Kind of Blue"),
+        _summarized(2, "Pink Floyd", "Animals"),
+    ]
+    out = discogs.match_collection_q("pink floyd", releases)
+    assert len(out) == 1
+    assert out[0]["discogs_release_id"] == 2
+
+
+def test_match_collection_q_empty_returns_empty():
+    releases = [_summarized(1, "x", "y")]
+    assert discogs.match_collection_q("", releases) == []
+    assert discogs.match_collection_q("   ", releases) == []
+
+
+def test_match_collection_q_handles_diacritics():
+    """Free-text matcher normalises both query and haystack so "sigur ros"
+    finds "Sigur Rós · Ágætis byrjun"."""
+    releases = [_summarized(1, "Sigur Rós", "Ágætis byrjun")]
+    out = discogs.match_collection_q("sigur ros", releases)
+    assert len(out) == 1
+
+
 # ── Token + cache (added in API hardening pass) ──────────────────────────
 def test_release_uses_configured_token(monkeypatch):
     """`release()` must include the Discogs Authorization header when
