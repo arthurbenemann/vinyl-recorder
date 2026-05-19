@@ -29,6 +29,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -446,51 +447,75 @@ def demote_album(album_id: str) -> dict:
     return {"moved": moved, "music_preserved": bool(manifest.get("music_relpath"))}
 
 
+# Serializes `create_album` so two concurrent combine requests with
+# overlapping source filenames can't race each other into a half-built
+# album dir. Combine is rare and metadata-only (no ffmpeg), so holding a
+# process-wide lock for the duration of the rename loop is essentially
+# free, and it pairs with the partial-failure cleanup below to keep the
+# in-progress/ tree free of orphan empty dirs.
+_CREATE_ALBUM_LOCK = threading.Lock()
+
+
 def create_album(filenames: list[str], tags: dict) -> tuple[str, dict]:
     """Create a new in-progress album: mint a slug, mkdir the album dir,
     move the named raw/ sides into it (preserving filenames; uniquify on
     collision), write album.json. Returns `(album_id, manifest)`.
 
-    Raises FileNotFoundError if any source is missing from raw/."""
-    sources: list[Path] = []
-    for fn in filenames:
-        if "/" in fn or "\\" in fn or ".." in fn:
-            raise ValueError(f"invalid filename: {fn!r}")
-        p = RAW_DIR / fn
-        if not p.exists():
-            raise FileNotFoundError(f"side not found in raw/: {fn}")
-        sources.append(p)
+    Raises FileNotFoundError if any source is missing from raw/. If a
+    failure happens partway through moving sources (e.g. a concurrent
+    combine already grabbed the file), the freshly-mkdir'd album dir is
+    cleaned up before the exception propagates so no orphan empty dir is
+    left behind."""
+    with _CREATE_ALBUM_LOCK:
+        sources: list[Path] = []
+        for fn in filenames:
+            if "/" in fn or "\\" in fn or ".." in fn:
+                raise ValueError(f"invalid filename: {fn!r}")
+            p = RAW_DIR / fn
+            if not p.exists():
+                raise FileNotFoundError(f"side not found in raw/: {fn}")
+            sources.append(p)
 
-    # Tiny chance of collision; re-roll a few times before giving up.
-    for _ in range(8):
-        album_id = new_album_id()
-        d = album_dir(album_id)
-        if not d.exists():
-            d.mkdir(parents=True)
-            break
-    else:
-        raise RuntimeError("could not allocate unique album_id")
+        # Tiny chance of collision; re-roll a few times before giving up.
+        for _ in range(8):
+            album_id = new_album_id()
+            d = album_dir(album_id)
+            if not d.exists():
+                d.mkdir(parents=True)
+                break
+        else:
+            raise RuntimeError("could not allocate unique album_id")
 
-    moved_sides: list[str] = []
-    for src in sources:
-        dst = d / src.name
-        if dst.exists():
-            stem, ext = dst.stem, dst.suffix
-            i = 2
-            while True:
-                cand = d / f"{stem} ({i}){ext}"
-                if not cand.exists():
-                    dst = cand
-                    break
-                i += 1
-        src.rename(dst)
-        moved_sides.append(dst.name)
+        try:
+            moved_sides: list[str] = []
+            for src in sources:
+                dst = d / src.name
+                if dst.exists():
+                    stem, ext = dst.stem, dst.suffix
+                    i = 2
+                    while True:
+                        cand = d / f"{stem} ({i}){ext}"
+                        if not cand.exists():
+                            dst = cand
+                            break
+                        i += 1
+                src.rename(dst)
+                moved_sides.append(dst.name)
 
-    manifest = _stub_manifest()
-    manifest["tags"] = {k: v for k, v in (tags or {}).items() if v not in ("", None)}
-    manifest["sides"] = moved_sides
-    write_manifest(album_id, manifest)
-    return album_id, manifest
+            manifest = _stub_manifest()
+            manifest["tags"] = {
+                k: v for k, v in (tags or {}).items() if v not in ("", None)
+            }
+            manifest["sides"] = moved_sides
+            write_manifest(album_id, manifest)
+        except Exception:
+            # Roll back the partially-built album dir so a failed combine
+            # (typically `src.rename` raising FileNotFoundError when a
+            # concurrent request already moved the source) doesn't leave
+            # an empty dir lingering in in-progress/.
+            shutil.rmtree(d, ignore_errors=True)
+            raise
+        return album_id, manifest
 
 
 def write_cover(album_id: str, data: bytes) -> Path:
