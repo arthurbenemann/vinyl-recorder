@@ -293,7 +293,14 @@ def test_wave_editor_saving_indicator_visible_in_flight(stack, page):
             f"button[title*='plit into tracks']"
         )
         page.wait_for_selector("#we-modal:not([hidden])", timeout=10_000)
-        page.wait_for_function("() => we.loaded === true", timeout=10_000)
+        # Wait for BOTH the loaded flag AND a non-zero total — the editor
+        # marks itself loaded before peaks/duration land, and we need
+        # `we.total > 0` so the cut math below picks a real timestamp.
+        # Matches the pattern in test_wave_editor.py.
+        page.wait_for_function(
+            "() => typeof we !== 'undefined' && we.loaded === true && we.total > 0",
+            timeout=20_000,
+        )
         # Trigger an edit that flips dirty=true and schedules the
         # debounced save. weAddCutAtTime is the same handle the existing
         # wave-editor tests use.
