@@ -34,6 +34,15 @@ const we = {
   // weSetTitle, weSetCutAt, weClearCuts) flip it to true; _savePlanNow
   // resets it after a successful POST.
   dirty:       false,
+  // Optimistic-concurrency token. Seeded from the manifest's current
+  // plan_version on editor open (via weLoadExistingSplit) and bumped on
+  // every successful save. Sent as `expected_version` in the next save
+  // so the server can detect that another tab wrote in between.
+  planVersion: 0,
+  // Latch flipped true after a 409 to keep _persistDraft from
+  // re-arming the debounce in a tight loop. Cleared when the user
+  // resolves the conflict (reload-from-server or modal close).
+  planConflict: false,
 };
 
 // Slider-readout helper: convert 1..127 to dB. Mid-bin reconstruction:
@@ -118,6 +127,10 @@ async function _savePlanNow() {
   // single-track plan even if the user never touched anything — pollutes
   // album.json.has_draft for every album the user merely peeked at.
   if (!we.dirty) return;
+  // Conflict latch: once we've seen a 409, stop auto-saving until the
+  // user resolves it (reload-from-server clears the latch). Otherwise
+  // every keystroke would re-collide with the server's newer state.
+  if (we.planConflict) return;
   // Snapshot the current editor state into the plan shape the server
   // already understands (see SplitRequest / PlanUpdateRequest).
   const tracks = _regions().map(r => ({
@@ -134,7 +147,7 @@ async function _savePlanNow() {
   const outputFormat = document.getElementById('we-format')?.value || 'flac';
   const bitDepth     = parseInt(document.getElementById('we-bitdepth')?.value, 10);
   const sampleRate   = parseInt(document.getElementById('we-sample-rate')?.value, 10);
-  const planBody = { tracks };
+  const planBody = { tracks, expected_version: we.planVersion };
   if (!Number.isNaN(bitDepth))   planBody.bit_depth     = bitDepth;
   if (!Number.isNaN(sampleRate)) planBody.sample_rate   = sampleRate;
   if (outputFormat)              planBody.output_format = outputFormat;
@@ -144,11 +157,27 @@ async function _savePlanNow() {
       body: JSON.stringify(planBody),
     });
     const r = await _planSaveInFlight;
-    if (r && r.ok && we.albumId === albumId) {
+    if (we.albumId !== albumId) return;  // editor moved on
+    if (r && r.status === 409) {
+      // Another tab wrote a newer plan_version. Don't overwrite local
+      // edits — surface a toast with a Reload action so the user can
+      // pull the latest server state when they're ready.
+      we.planConflict = true;
+      // dirty stays true so the user can still manually reload + retry.
+      _showPlanConflictToast(albumId);
+      return;
+    }
+    if (r && r.ok) {
       // Clear dirty BEFORE updating the indicator — if the user edits again
       // during the render, the next debounce cycle finds dirty=true and
       // saves again.
       we.dirty = false;
+      try {
+        const body = await r.json();
+        if (body && typeof body.plan_version === 'number') {
+          we.planVersion = body.plan_version;
+        }
+      } catch (e) { /* legacy server without version — leave planVersion */ }
       _markSavedNow();
     }
   } catch (e) {
@@ -157,6 +186,43 @@ async function _savePlanNow() {
     // dirty=true so the next interaction re-attempts.
   } finally {
     _planSaveInFlight = null;
+  }
+}
+
+// 409 UX: surface a toast announcing the conflict and offer a Reload
+// action that re-runs weLoadExistingSplit (which resets planVersion +
+// rehydrates cuts/titles/skipped from the server's newer plan). Until
+// the user clicks Reload OR closes + reopens the editor, the conflict
+// latch keeps auto-save paused so we don't spam the server with
+// guaranteed-409 writes.
+function _showPlanConflictToast(albumId) {
+  // Prefer the toast helper if it's available (it's exported on
+  // `window.toast` from app/static/main.js). Fall back to console so the
+  // unit test (which stubs the DOM out) can still observe the call.
+  const msg = 'Another tab saved newer edits — reload?';
+  if (typeof window !== 'undefined' && typeof window.toast === 'function') {
+    window.toast(msg, 'err');
+  }
+  // Surface a Reload action next to the saved-Xs-ago label so the user
+  // doesn't have to close-reopen the modal. The button restores the
+  // server's plan and clears the conflict latch.
+  const host = document.getElementById('we-saved');
+  if (host) {
+    host.hidden = false;
+    host.textContent = msg + ' ';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'we-reload-plan';
+    btn.textContent = 'Reload';
+    btn.onclick = () => {
+      if (we.albumId !== albumId) return;
+      we.planConflict = false;
+      we.dirty = false;
+      // weLoadExistingSplit reseeds we.planVersion + repopulates cuts/
+      // titles/skipped from the server's newer plan.
+      try { weLoadExistingSplit(albumId); } catch (e) { /* logged in fn */ }
+    };
+    host.appendChild(btn);
   }
 }
 
@@ -256,6 +322,11 @@ function openWaveEditor(fname) {
     // etc. from the manifest without going through the user-edit call
     // sites, so it must NOT flip dirty. Only actual user input does.
     dirty:       false,
+    // Reset the optimistic-concurrency state per-open. weLoadExistingSplit
+    // seeds planVersion from the server; until it resolves we use 0,
+    // which only matches a brand-new album anyway.
+    planVersion: 0,
+    planConflict: false,
   });
   resetMeasureUI();
   // Reset the encoder selectors to defaults on every open. weLoadExistingSplit
@@ -340,6 +411,17 @@ async function weLoadExistingSplit(fname) {
     if (!r.ok) return;
     const d = await r.json();
     if (we.albumId !== fname) return;  // editor moved on while we were waiting
+    // Seed the optimistic-concurrency token from the server's current
+    // plan_version. Set before the early-return below so even an
+    // album with no plan tracks yet starts with the right baseline
+    // version (legacy manifests report 0).
+    if (typeof d.plan_version === 'number') {
+      we.planVersion = d.plan_version;
+    }
+    // Clear any prior conflict latch — a fresh load means we're back in
+    // sync with the server and the user's saved-Xs-ago indicator can
+    // resume normal display.
+    we.planConflict = false;
     const plan = d.plan;
     const ptracks = (plan && Array.isArray(plan.tracks)) ? plan.tracks : null;
     if (!ptracks || !ptracks.length) return;
@@ -1336,6 +1418,16 @@ async function weLoadTracklistFromTags() {
 // `_weCutsFromTracklist` live in `modules/timeline-state.js`; the
 // algorithm rationale (per-side anchoring, end-of-side gap region,
 // overflow handling, …) lives next to those functions there.
+
+// Window exports introduced by the plan_version conflict-detection work
+// (#33). `_wePosLetter` and `_weCutsFromTracklist` are no longer re-exported
+// here — they live (and re-export themselves) inside
+// `modules/timeline-state.js` after the extraction.
+if (typeof window !== 'undefined') {
+  // Exposed for the Node-sandbox test that drives the 409 path.
+  window._savePlanNow        = _savePlanNow;
+  window._weEditorState      = we;
+}
 
 function _weApplyTracklist(track_details, sourceLabel) {
   const td = (track_details || []).filter(t => t && t.title);

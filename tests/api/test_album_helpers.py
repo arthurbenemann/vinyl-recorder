@@ -96,13 +96,18 @@ def test_music_dir_for_strips_filesystem_hostile_chars():
 # ── /api/album/{id}/tracks ───────────────────────────────────────────────
 def test_album_tracks_no_plan_returns_empty_shape():
     """A pre-split album has no `plan` in its manifest. The endpoint
-    returns an empty-ish payload the UI uses to render "not split yet"."""
+    returns an empty-ish payload the UI uses to render "not split yet".
+    `plan_version` is surfaced too so the editor's optimistic-concurrency
+    token has a baseline value at load time."""
     aid = _make_album(tags={"artist": "A", "album": "B"})
     try:
         r = _client().get(f"/api/album/{aid}/tracks")
         assert r.status_code == 200
         body = r.json()
-        assert body == {"tracks": [], "music_relpath": None, "plan": None}
+        assert body == {
+            "tracks": [], "music_relpath": None, "plan": None,
+            "plan_version": 0,
+        }
     finally:
         _cleanup_album(aid)
 
