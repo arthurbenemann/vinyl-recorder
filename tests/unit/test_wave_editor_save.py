@@ -1,12 +1,13 @@
 """Pytest runner for `wave_editor_save.test.js`.
 
-Mirrors `test_wave_editor_tracklist.py` — runs the JS sandbox test via
-Node and surfaces the result as a single pytest case. The JS file
-exercises `_savePlanNow`'s 409 (plan-version conflict) path: fake-fetch
-returns a 409, and the assertion is that the editor (a) shows a toast,
-(b) keeps `we.dirty` true so the user can manually retry, and (c)
-latches `we.planConflict` so the debounce loop doesn't spam guaranteed-
-409 writes.
+Runs the JS sandbox tests via Node and surfaces the result as a single
+pytest case. The JS file pins both PR-31's `_savePlanNow` in-flight
+coalesce behaviour AND PR-33's 409 (plan-version conflict) path:
+fake-fetch responses drive both, and the assertions cover that the
+editor (a) coalesces concurrent saves, (b) on 409 shows a toast,
+keeps `we.dirty` true so the user can manually retry, and latches
+`we.planConflict` so the debounce loop doesn't spam guaranteed-409
+writes.
 """
 import shutil
 import subprocess
