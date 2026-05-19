@@ -885,6 +885,11 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .toast.ok  { border-left: 3px solid var(--green); }
 .toast.err { border-left: 3px solid var(--accent); }
 .toast.info { border-left: 3px solid var(--blue); }
+/* Action toasts host an inline button. Stay open until the user clicks
+   (no auto-fade) so the choice doesn't disappear mid-decision. */
+.toast-action { display: flex; align-items: center; gap: 10px; }
+.toast-action > span { flex: 1 1 auto; }
+.toast-action .btn-tiny { flex: 0 0 auto; }
 
 /* ADC gain slider (only shown for pi-recorder streams) */
 .gain-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 8px 10px;

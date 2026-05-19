@@ -7,10 +7,50 @@ import { state } from './state.js';
 import { setClipBadge, updateMeter, decayMeters } from './meter.js';
 import { applyUpstreamState, applyHealthState, probeGain } from './upstream.js';
 import { applyRecordState, applyDurationChange, applySilenceProgress, applySilenceSecondsChange, getRecDurationSec, getRecStartTimeMs } from './recording.js';
-import { renderLog } from './log.js';
+import { renderLog, toast, toastAction, dismissActionToast } from './log.js';
 import { refreshLib, refreshDiskFree } from './library.js';
 import { refreshAlbums } from './albums.js';
 import { openTag } from './tagging.js';
+import { parseError } from './api.js';
+
+// Stable id for the upstream-drop reconnect prompt. A single shared id
+// across the page means a flood of crash events (one per concurrent
+// recording, future re-fires on retry storms) only ever surfaces one
+// toast — and any tab whose `applyUpstreamState` later sees `live=true`
+// can dismiss it by name without having to track DOM references.
+const RECONNECT_TOAST_ID = 'upstream-reconnect';
+
+// Trigger the reconnect prompt. Captured the URL the server told us about
+// at the time the WS hello arrived — if the user blanked the input after
+// a drop we still know what to reconnect to.
+function showReconnectPrompt() {
+  toastAction({
+    id: RECONNECT_TOAST_ID,
+    msg: 'Stream connection lost',
+    kind: 'err',
+    actionLabel: 'Reconnect',
+    onClick: async () => {
+      // POST to the same endpoint the sidebar's "connect" button uses.
+      // Read the URL from the input rather than caching it here — the
+      // input is the canonical "what URL would I connect to right now"
+      // surface, and the WS hello already mirrors the server's URL into
+      // it on reconnect of the WS itself.
+      const url = document.getElementById('stream-url')?.value || '';
+      try {
+        const r = await fetch('/api/connect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stream_url: url }),
+        });
+        if (!r.ok) toast('✗ ' + await parseError(r), 'err');
+        // Success path is silent — the next `upstream` WS event flips
+        // every tab's state back to connected via applyUpstreamState.
+      } catch (e) {
+        toast('✗ ' + e.message, 'err');
+      }
+    },
+  });
+}
 
 let ws = null, wsReconnectMs = 1000;
 let wsReconnectTimer = null;  // single pending reconnect — avoids racing pairs
@@ -141,6 +181,13 @@ function handleWsEvent(m) {
         fmt:        m.format,
       });
       if ((m.configured || m.connected) && m.url) probeGain(m.url);
+      // Upstream is live again — any reconnect prompts in this tab (whether
+      // we earned them via our own recording or just heard them broadcast)
+      // are stale. Dismiss so the user isn't left with a clickable banner
+      // for an action they don't need to take. `connected`/`live` is the
+      // signal here, not `configured` — configured stays true through the
+      // crash window (it's only cleared on explicit /api/disconnect).
+      if (m.connected) dismissActionToast(RECONNECT_TOAST_ID);
       break;
     case 'health':
       applyHealthState(m);
@@ -159,6 +206,12 @@ function handleWsEvent(m) {
         refreshLib().catch(() => {});
         // If this tab started the recording, open the tag panel as before.
         if (m.session_id && m.session_id === state.sessionId) openTag(m.filename);
+        // reason="crash" means the upstream died mid-recording (Pi reboot,
+        // network blip). The server doesn't auto-respawn, so every tab
+        // gets a click-to-reconnect prompt. The first tab to click wins;
+        // sibling tabs' prompts dismiss themselves on the next
+        // `upstream live=true` event.
+        if (m.reason === 'crash') showReconnectPrompt();
         // applyRecordState already reset sessionId; clear any owner tag.
       } else if (m.event === 'pause') {
         // Server-authoritative elapsed — local clock would over-report after
