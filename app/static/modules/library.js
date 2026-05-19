@@ -30,7 +30,7 @@ export function updateBulkBar() {
   const combineBtn = document.getElementById('combine-btn');
   if (combineBtn) {
     combineBtn.disabled = state.selected.size < 1;
-    combineBtn.textContent = state.selected.size === 1 ? 'tag as album' : 'combine into album';
+    combineBtn.textContent = state.selected.size === 1 ? 'Tag as album' : 'Combine sides into album';
   }
 }
 
