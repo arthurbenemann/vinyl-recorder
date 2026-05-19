@@ -210,17 +210,79 @@ def test_delete_unknown_returns_404():
     assert r.status_code == 404
 
 
-def test_delete_removes_file():
-    from state import RAW_DIR
+def test_delete_soft_deletes_to_trash():
+    """The DELETE endpoint moves the file to TRASH_DIR (soft-delete) and
+    returns a `trash_token` the client can POST back to /restore for the
+    Undo UX. The original file vanishes from raw/ — that's still the
+    user-visible contract — and the response carries the metadata the
+    library JS needs to render the Undo toast."""
+    from state import RAW_DIR, TRASH_DIR
     f = RAW_DIR / "to_delete.flac"
     f.write_bytes(b"x")
     try:
         r = _client().delete("/api/recordings/to_delete.flac")
         assert r.status_code == 200
-        assert r.json() == {}
+        body = r.json()
+        # The token names the trash entry and embeds the original name so
+        # the restore endpoint can recover it without server-side state.
+        assert isinstance(body.get("trash_token"), str) and body["trash_token"], body
+        assert body["original"] == "to_delete.flac"
+        assert isinstance(body["ttl_seconds"], int) and body["ttl_seconds"] > 0
         assert not f.exists()
+        # The bytes still live in the trash directory under the token.
+        trash_path = TRASH_DIR / body["trash_token"]
+        assert trash_path.exists()
+        assert trash_path.read_bytes() == b"x"
     finally:
         f.unlink(missing_ok=True)
+        # Clean up any leftover trash entry from this test.
+        for entry in TRASH_DIR.glob("to_delete__trash_*.flac"):
+            entry.unlink(missing_ok=True)
+
+
+def test_restore_recovers_soft_deleted_file():
+    """POST /api/recordings/restore with the trash_token returned by
+    DELETE puts the file back under its original name in raw/. After
+    restore, the trash entry is gone and the file is queryable via
+    the regular listing."""
+    from state import RAW_DIR, TRASH_DIR
+    f = RAW_DIR / "to_restore.flac"
+    f.write_bytes(b"hello")
+    try:
+        del_resp = _client().delete("/api/recordings/to_restore.flac")
+        token = del_resp.json()["trash_token"]
+        assert not f.exists()
+        r = _client().post("/api/recordings/restore", json={"trash_token": token})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body == {"filename": "to_restore.flac"}
+        assert f.exists()
+        assert f.read_bytes() == b"hello"
+        # Trash entry got renamed back, so it should no longer be present.
+        assert not (TRASH_DIR / token).exists()
+    finally:
+        f.unlink(missing_ok=True)
+        for entry in TRASH_DIR.glob("to_restore__trash_*.flac"):
+            entry.unlink(missing_ok=True)
+
+
+def test_restore_unknown_token_returns_404():
+    """Restore with an unknown / expired / fabricated token surfaces a
+    404 rather than 200 — the UI surfaces this as a 'restore failed'
+    toast rather than silently doing nothing."""
+    r = _client().post(
+        "/api/recordings/restore",
+        json={"trash_token": "ghost__trash_deadbeef.flac"},
+    )
+    assert r.status_code == 404
+
+
+def test_restore_missing_body_returns_422():
+    """The endpoint requires a `trash_token` field; missing it surfaces
+    as a 422 (matches the FastAPI / pydantic contract for malformed
+    requests on every other endpoint)."""
+    r = _client().post("/api/recordings/restore", json={})
+    assert r.status_code == 422
 
 
 # ── /api/recordings/bulk-delete ──────────────────────────────────────────

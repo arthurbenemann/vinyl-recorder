@@ -2,6 +2,7 @@
 import asyncio
 import json
 import math
+import re
 import signal
 import subprocess
 import threading
@@ -10,6 +11,7 @@ import uuid
 import warnings
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -42,7 +44,7 @@ from state import (
     BulkDelete, DEFAULT_AUTO_STOP_ON_SILENCE, DEFAULT_SILENCE_SECONDS,
     DEFAULT_SILENCE_THRESHOLD_DB, DURATION_EDIT_MIN_SLACK_SECONDS,
     DurationEditRequest, LOG_DIR, RAW_DIR, RecordRequest, RenameRequest,
-    SilenceEditRequest, sessions, upstream,
+    SilenceEditRequest, TRASH_DIR, TRASH_TTL_SECONDS, sessions, upstream,
 )
 
 
@@ -1015,17 +1017,127 @@ async def rename_recording(filename: str, req: RenameRequest):
     return {"filename": target.name}
 
 
+def _sweep_trash() -> None:
+    """Purge any entries in TRASH_DIR older than TRASH_TTL_SECONDS.
+
+    Called opportunistically from the soft-delete / restore endpoints
+    so we don't need a background thread. Failure to remove individual
+    files is swallowed — they'll get another shot on the next sweep."""
+    if not TRASH_DIR.exists():
+        return
+    now = time.time()
+    for entry in TRASH_DIR.iterdir():
+        try:
+            age = now - entry.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        if age <= TRASH_TTL_SECONDS:
+            continue
+        try:
+            if entry.is_file():
+                entry.unlink()
+            # We never recursively delete subdirs from here — the trash
+            # only stores top-level FLACs today; defensive in case the
+            # contract widens later.
+        except OSError:
+            pass
+
+
+def _trash_token_for(filename: str) -> str:
+    """Build the on-disk trash filename for `filename`. Includes the
+    original name + a unique token so concurrent soft-deletes of the
+    same logical name don't clobber each other.
+
+    The token shape `{stem}__trash_{uuid}.flac` is read back by the
+    restore endpoint to recover the original name."""
+    p = Path(filename)
+    token = uuid.uuid4().hex[:8]
+    return f"{p.stem}__trash_{token}{p.suffix}"
+
+
+def _restore_target_for(trash_name: str) -> Optional[str]:
+    """Inverse of `_trash_token_for`: given a trash filename, derive the
+    original name we'd restore it as. Returns None for filenames that
+    don't carry the `__trash_<token>` marker (i.e. anything we didn't
+    place there ourselves)."""
+    m = re.match(r"^(.+)__trash_[0-9a-f]+(\.[^.]+)$", trash_name)
+    if not m:
+        return None
+    return f"{m.group(1)}{m.group(2)}"
+
+
 @router.delete("/api/recordings/{filename}")
 async def delete_recording(filename: str):
+    """Soft-delete a raw side: move it to TRASH_DIR and return a token
+    the client can pass to `/restore` for ~5 s of undo. Entries are
+    purged automatically after TRASH_TTL_SECONDS (300 s).
+
+    The Undo UX in the library replaced the legacy `confirm()` dialog —
+    immediate delete with a 5 s undo window is faster than a blocking
+    modal for the common case, and safer than the old unrecoverable
+    `path.unlink()`."""
     path = find_side(filename)
     if not path:
         raise HTTPException(404)
-    path.unlink()
-    return {}
+    _sweep_trash()
+    trash_name = _trash_token_for(filename)
+    trash_path = TRASH_DIR / trash_name
+    try:
+        path.rename(trash_path)
+    except OSError as e:
+        # Rename across filesystems is rare here (TRASH_DIR is under
+        # OUTPUT_DIR alongside raw/), but fall back to a hard delete if
+        # something exotic prevents the move. The old behaviour was a
+        # hard delete anyway, so this is no worse.
+        try:
+            path.unlink()
+        except OSError:
+            raise HTTPException(500, f"could not move to trash: {e}")
+        return {"trash_token": None}
+    return {"trash_token": trash_name, "original": filename, "ttl_seconds": TRASH_TTL_SECONDS}
+
+
+@router.post("/api/recordings/restore")
+async def restore_recording(req: dict):
+    """Restore a soft-deleted recording from `TRASH_DIR`. The body
+    carries the `trash_token` returned by the DELETE endpoint.
+
+    422 if the body is malformed, 404 if the token is unknown
+    (already swept or never existed), 409 if a file with the
+    original name has reappeared in raw/ in the meantime."""
+    token = (req or {}).get("trash_token")
+    if not isinstance(token, str) or not token:
+        raise HTTPException(422, "trash_token is required")
+    # Guard the same way find_side does — token is supposed to be a
+    # filename we generated, but never trust client input.
+    if "/" in token or "\\" in token or ".." in token:
+        raise HTTPException(400, "invalid trash_token")
+    _sweep_trash()
+    trash_path = TRASH_DIR / token
+    if not trash_path.exists():
+        raise HTTPException(404, "trash entry not found (expired or unknown)")
+    target_name = _restore_target_for(token)
+    if not target_name:
+        raise HTTPException(400, "trash_token has unexpected shape")
+    target = RAW_DIR / target_name
+    if target.exists():
+        raise HTTPException(409, "a file with that name already exists")
+    try:
+        trash_path.rename(target)
+    except OSError as e:
+        raise HTTPException(500, f"could not restore: {e}")
+    return {"filename": target_name}
 
 
 @router.post("/api/recordings/bulk-delete")
 async def bulk_delete(req: BulkDelete):
+    """Bulk delete raw recordings. Currently hard-deletes (no per-item
+    undo) — the UI shows a single 'Deleted N file(s)' toast on success.
+
+    A future iteration could route every entry through the trash so a
+    bulk delete is also undoable, but the storage cost (full copy of N
+    FLACs for up to 5 min) and the UI complexity of restoring N items
+    via one Undo button aren't worth it for the current usage shape."""
     deleted, missing = [], []
     for fn in req.filenames:
         p = find_side(fn)
