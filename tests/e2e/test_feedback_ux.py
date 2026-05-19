@@ -301,19 +301,30 @@ def test_wave_editor_saving_indicator_visible_in_flight(stack, page):
             "() => typeof we !== 'undefined' && we.loaded === true && we.total > 0",
             timeout=20_000,
         )
+        # Slow the plan POST so the "Saving…" indicator stays visible long
+        # enough for Playwright's ~100ms poll cadence to catch it. Without
+        # this, the in-flight window on a localhost POST is ~10-50 ms and
+        # the visibility transition is racy.
+        def _slow_plan_post(route):
+            import time as _t
+            _t.sleep(0.6)
+            route.continue_()
+        page.route("**/api/album/**/plan", _slow_plan_post)
+
         # Trigger an edit that flips dirty=true and schedules the
         # debounced save. weAddCutAtTime is the same handle the existing
         # wave-editor tests use.
         page.evaluate("() => { weAddCutAtTime((we.total || 0) / 2); }")
-        # The "Saving…" indicator should flicker visible while the POST
-        # is in flight. Race-friendly poll — we just need to catch it
-        # being non-hidden at least once.
+        # The "Saving…" indicator becomes visible from when _savePlanNow
+        # calls _showSavingIndicator (after the 500ms debounce) until the
+        # POST resolves. With the slowdown above, that window is ~600ms,
+        # comfortably above the poll cadence.
         page.wait_for_function(
             "() => {"
             "  const el = document.getElementById('we-saving-indicator');"
             "  return el && !el.hidden;"
             "}",
-            timeout=4_000,
+            timeout=5_000,
         )
         # And after the save resolves, the indicator hides again and the
         # persistent "saved Xs ago" pill takes over.
