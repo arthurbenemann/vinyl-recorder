@@ -567,12 +567,18 @@
 
 <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-<!-- peaks.js + wave-editor.js are still classic scripts that share script
-     scope; they must load before main.js so the `we` / weAudio bindings
-     they export to script-scope are defined. The inline bridge below
-     copies `we` onto `window` so main.js (an ES module — isolated from
-     script scope) can still drive `we.targetPeakDb` from /api/config. -->
+<!-- peaks.js + timeline-state.js + audio-manager.js + wave-editor.js are
+     classic scripts that share script scope; load order matters because
+     wave-editor.js's call sites bind to script-scope names declared in
+     the helpers. They must all run before main.js so the `we` / weAudio
+     bindings they export are defined. The inline bridge below copies
+     `we` onto `window` so main.js (an ES module — isolated from script
+     scope) can drive `we.targetPeakDb` from /api/config, and the
+     timeline-state helpers (which read `window.we` lazily) see the live
+     editor state. -->
 <script src="/static/peaks.js"></script>
+<script src="/static/modules/timeline-state.js"></script>
+<script src="/static/modules/audio-manager.js"></script>
 <script src="/static/wave-editor.js"></script>
 <script>window.we = we;</script>
 <script type="module" src="/static/main.js"></script>
