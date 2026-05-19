@@ -598,6 +598,12 @@ def _finalize_session(session_id: str, reason: str) -> dict:
         # makes ffmpeg flush + exit on its own when we then SIGINT it (or
         # naturally if it already finished from `-t duration`).
         upstream.unsubscribe(f"rec-{session_id}")
+        # Snapshot the pause state BEFORE clearing it — the `end_time`
+        # selection below depends on whether we stopped while paused, and
+        # we still need to clear the live flags now so any in-flight sink
+        # callback observes a non-paused session before we tear down.
+        was_paused = s.paused
+        pause_started_at = s.pause_started
         if s.paused:
             s.paused = False
             s.sess_state["paused"] = False
@@ -616,7 +622,7 @@ def _finalize_session(session_id: str, reason: str) -> dict:
         # If we stopped while paused, start_time hasn't been advanced for the
         # current pause window — only resume does that. Use pause_started so the
         # reported elapsed matches the FLAC duration (un-paused recording time).
-        end_time = s.pause_started if s.paused else time.monotonic()
+        end_time = pause_started_at if was_paused else time.monotonic()
         elapsed = int(end_time - s.start_time)
         fname = Path(s.outfile).name
         fsize = round(Path(s.outfile).stat().st_size / 1e6, 1) if Path(s.outfile).exists() else 0
