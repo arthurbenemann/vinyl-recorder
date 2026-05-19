@@ -268,12 +268,19 @@ def test_wave_editor_saving_indicator_visible_in_flight(stack, page):
                 f"#raw-section tbody input.row-check[data-fname=\"{s.name}\"]"
             )
         page.click("#combine-btn")
-        # The combine modal opens — fill in just enough to commit.
-        page.wait_for_selector("#combine-modal:not([hidden])", timeout=5_000)
-        page.fill("#combine-artist", f"FeedbackArtist{stamp}")
-        page.fill("#combine-album", f"FeedbackAlbum{stamp}")
-        page.click("#combine-submit")
-        page.wait_for_selector("#combine-modal[hidden]", timeout=10_000)
+        # The combine flow reuses the tag-panel modal (sides reorder
+        # section unhidden via openCombine); there is no separate
+        # `#combine-modal`. Match the pattern in test_wave_editor.py.
+        page.wait_for_selector("#tag-modal:not([hidden])", timeout=5_000)
+        page.wait_for_selector("#combine-sides-section:not([hidden])", timeout=5_000)
+        page.fill("#t-artist", f"FeedbackArtist{stamp}")
+        page.fill("#t-album", f"FeedbackAlbum{stamp}")
+        page.fill("#t-year", "2026")
+        page.click("#tag-apply-btn")
+        page.wait_for_function(
+            "() => document.getElementById('tag-modal').hasAttribute('hidden')",
+            timeout=20_000,
+        )
         # Open the editor on the new album.
         page.wait_for_function(
             f"() => Array.from(document.querySelectorAll('tr[data-album-id]'))"
