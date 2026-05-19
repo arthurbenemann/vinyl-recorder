@@ -52,10 +52,10 @@ import {
 } from './modules/pi-deploy.js';
 import { wsConnect, sendVisibility } from './modules/ws.js';
 import { applyConfig } from './modules/config.js';
-import { parseError, withJobProgress, newJobId, showBar, hideBar } from './modules/api.js';
+import { parseError, withJobProgress, showBar, hideBar } from './modules/api.js';
 import { toast } from './modules/log.js';
 import {
-  htmlEscape, fmtDate, fmtDateFull, fmtSourceFormat, fmtDuration, fmtBps, fmt, dbStr,
+  htmlEscape, fmtSourceFormat, fmtDuration,
 } from './modules/util.js';
 
 // ── window-attached entry points ─────────────────────────────────────────
@@ -145,21 +145,17 @@ window.runPiDeploy = runPiDeploy;
 
 // Globals consumed by wave-editor.js (a classic script that used to share
 // script-scope with the old monolithic main.js). The name on `window` is
-// the same name wave-editor.js reads.
+// the same name wave-editor.js reads. Only the names actually referenced
+// by wave-editor.js / peaks.js / inline onclick handlers are exposed —
+// other util helpers stay module-scoped.
 window.toast = toast;
 window.parseError = parseError;
 window.withJobProgress = withJobProgress;
-window.newJobId = newJobId;
 window.showBar = showBar;
 window.hideBar = hideBar;
 window.htmlEscape = htmlEscape;
-window.fmtDate = fmtDate;
-window.fmtDateFull = fmtDateFull;
 window.fmtSourceFormat = fmtSourceFormat;
 window.fmtDuration = fmtDuration;
-window.fmtBps = fmtBps;
-window.fmt = fmt;
-window.dbStr = dbStr;
 
 // `albumsByName` / `filesByName` were module-scope `let` bindings in the
 // monolithic file. wave-editor.js reads them as bare names; expose live
