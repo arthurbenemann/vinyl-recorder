@@ -1491,10 +1491,10 @@ function renderTracks() {
                onchange="weSetCutAt(${i}, parseMMSS(this.value))">
         <span class="range" title="${rangeTitle}">${rangeText}</span>
         <button class="skip-btn ${skipped ? 'on' : ''}"
-                title="${skipped ? 'Restore region as a track' : 'Skip — drop region from output and measurement'}"
+                title="${skipped ? 'Restore region as a track (S toggles the region at the playhead)' : 'Skip — drop region from output and measurement (S toggles the region at the playhead)'}"
                 aria-label="${htmlEscape((skipped ? 'Restore track ' : 'Skip track ') + ctx)}"
                 onclick="weToggleSkip(${i})" ${unfit ? 'disabled' : ''}>⊘</button>
-        <button class="del" title="Remove cut" aria-label="${htmlEscape('Remove cut before track ' + ctx)}" ${isFirst ? 'disabled' : ''}
+        <button class="del" title="Remove cut (Del removes the cut nearest the playhead)" aria-label="${htmlEscape('Remove cut before track ' + ctx)}" ${isFirst ? 'disabled' : ''}
                 onclick="weDeleteCut(${i - 1})">✕</button>
       </div>`;
   }).join('');
