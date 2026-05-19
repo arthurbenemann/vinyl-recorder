@@ -6,13 +6,35 @@
   --surface2: #222220;
   --border: rgba(255,255,255,0.08);
   --border2: rgba(255,255,255,0.13);
+  /* Stronger border tints used on hover/focus/active across buttons and
+     inputs — kept as separate vars so the existing semantic border/border2
+     remain untouched. */
+  --border-hover: rgba(255,255,255,0.22);
+  --border-focus: rgba(255,255,255,0.25);
   --text: #e8e4dc;
   --muted: #7a776e;
   --accent: #e24b4a;
   --accent2: #c87941;
+  --accent-hover: #ff7c7b;
   --green: #639922;
+  --green-bright: #a3d864;
   --blue: #378add;
   --amber: #ba7517;
+  --white: #fff;
+  /* Wave editor / minimap canvas background — deep navy that reads as
+     near-black but is distinct from --bg so the waveform area stands out. */
+  --wave-bg: #0a0e16;
+  /* VU meter gradient stops (low / mid). The high stop is --accent. */
+  --vu-green: #2f8a18;
+  --vu-amber: #b88a18;
+  /* Accent (red) tint scale — recurring danger-button states and the rec
+     button's pulse ring. */
+  --accent-bg: rgba(226,75,74,0.1);
+  --accent-bd: rgba(226,75,74,0.35);
+  --accent-bd-hover: rgba(226,75,74,0.55);
+  /* Blue tint scale — focus borders and active/playing highlights. */
+  --blue-bg: rgba(55,138,221,0.18);
+  --blue-bd: rgba(55,138,221,0.5);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; min-height: 100vh; }
@@ -70,7 +92,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
   padding: 4px 8px; cursor: pointer; line-height: 1;
   transition: color 0.12s, background 0.12s, border-color 0.12s;
 }
-.status-indicator:hover { color: var(--text); background: var(--surface2); border-color: rgba(255,255,255,0.22); }
+.status-indicator:hover { color: var(--text); background: var(--surface2); border-color: var(--border-hover); }
 .status-indicator:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .status-indicator[aria-expanded="true"] { background: var(--surface2); color: var(--text); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); transition: background 0.3s; }
@@ -148,9 +170,9 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
   .main[data-collapsed] .sb-section-vu .vu-track {
     width: 6px; height: 80px; flex: 0 0 auto;
     background: linear-gradient(to top,
-      #2f8a18 0%, #2f8a18 55%,
-      #b88a18 70%, #b88a18 80%,
-      #e24b4a 92%, #e24b4a 100%);
+      var(--vu-green) 0%, var(--vu-green) 55%,
+      var(--vu-amber) 70%, var(--vu-amber) 80%,
+      var(--accent) 92%, var(--accent) 100%);
   }
   .main[data-collapsed] .sb-section-vu .vu-mask {
     top: 0; left: 0; right: 0; bottom: auto;
@@ -185,22 +207,22 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
    at ~50% opacity, layered on top of the existing --border outline so the
    shared chrome stays unchanged. */
 #raw-section > summary + div { box-shadow: inset 2px 0 0 rgba(186,117,23,0.5); }
-#in-progress-section > summary + div { box-shadow: inset 2px 0 0 rgba(55,138,221,0.5); }
+#in-progress-section > summary + div { box-shadow: inset 2px 0 0 var(--blue-bd); }
 #music-section > summary + div { box-shadow: inset 2px 0 0 rgba(99,153,34,0.5); }
 
 /* Stream config */
 .stream-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .stream-row input { flex: 1 1 100%; min-width: 0; background: var(--surface); border: 0.5px solid var(--border2); border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 7px 10px; outline: none; }
 .stream-row .btn-small { flex: 1 1 auto; }
-.stream-row input:focus { border-color: rgba(255,255,255,0.25); }
+.stream-row input:focus { border-color: var(--border-focus); }
 .stream-row input:disabled { color: var(--muted); cursor: not-allowed; }
 .btn-small { background: transparent; border: 0.5px solid var(--border2); border-radius: 6px; color: var(--muted); font-family: var(--mono); font-size: 11px; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
 .btn-small:hover { border-color: var(--border2); color: var(--text); background: var(--surface2); }
-.btn-small.active { color: var(--text); border-color: rgba(255,255,255,0.25); background: var(--surface2); }
+.btn-small.active { color: var(--text); border-color: var(--border-focus); background: var(--surface2); }
 .btn-small:disabled { opacity: 0.5; cursor: wait; }
 .btn-small:disabled:hover { border-color: var(--border2); background: transparent; color: var(--muted); }
-.btn-small.danger { color: var(--accent); border-color: rgba(226,75,74,0.35); }
-.btn-small.danger:hover { background: rgba(226,75,74,0.1); color: var(--accent); border-color: rgba(226,75,74,0.55); }
+.btn-small.danger { color: var(--accent); border-color: var(--accent-bd); }
+.btn-small.danger:hover { background: var(--accent-bg); color: var(--accent); border-color: var(--accent-bd-hover); }
 
 /* VU meter — stereo peak with hold markers */
 .vu-wrap { background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
@@ -209,19 +231,19 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 .vu-track {
   flex: 1; height: 10px; border-radius: 2px; position: relative; overflow: hidden;
   background: linear-gradient(to right,
-    #2f8a18 0%, #2f8a18 55%,
-    #b88a18 70%, #b88a18 80%,
-    #e24b4a 92%, #e24b4a 100%);
+    var(--vu-green) 0%, var(--vu-green) 55%,
+    var(--vu-amber) 70%, var(--vu-amber) 80%,
+    var(--accent) 92%, var(--accent) 100%);
 }
 .vu-mask { position: absolute; top: 0; right: 0; height: 100%; width: var(--vu-fill, 100%); background: var(--surface2); transition: width 0.04s linear; will-change: width; }
-.vu-peak { position: absolute; top: 0; height: 100%; width: 2px; left: var(--vu-peak, 0%); background: #fff; box-shadow: 0 0 4px rgba(255,255,255,0.6); transition: left 0.08s linear; }
+.vu-peak { position: absolute; top: 0; height: 100%; width: 2px; left: var(--vu-peak, 0%); background: var(--white); box-shadow: 0 0 4px rgba(255,255,255,0.6); transition: left 0.08s linear; }
 .vu-db { font-family: var(--mono); font-size: 9px; color: var(--muted); width: 32px; text-align: right; font-variant-numeric: tabular-nums; }
 /* Sticky clip indicator. Latches on full-scale peaks; click to acknowledge. */
 .vu-clip {
   font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.08em;
-  background: var(--accent); color: #fff; border: none;
+  background: var(--accent); color: var(--white); border: none;
   padding: 2px 5px; border-radius: 3px; cursor: pointer;
-  box-shadow: 0 0 6px rgba(226,75,74,0.55);
+  box-shadow: 0 0 6px var(--accent-bd-hover);
   animation: clipPulse 0.5s ease-out;
 }
 .vu-clip:hover { opacity: 0.85; }
@@ -241,13 +263,13 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 .sb-section-stop select.dur { flex: 0 0 auto; }
 .rec-btn { width: 48px; height: 48px; border-radius: 50%; border: 2px solid var(--accent); background: transparent; cursor: pointer; position: relative; flex-shrink: 0; transition: all 0.15s; }
 .rec-btn:hover { box-shadow: 0 0 0 6px rgba(226,75,74,0.12); }
-.rec-btn.active { background: var(--accent); }
+.rec-btn.active { background: var(--accent); animation: ring 1.8s ease-in-out infinite; }
 .rec-btn-dot { width: 16px; height: 16px; border-radius: 50%; background: var(--accent); position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); transition: all 0.15s; }
-.rec-btn.active .rec-btn-dot { border-radius: 4px; width: 14px; height: 14px; background: #fff; }
+.rec-btn.active .rec-btn-dot { border-radius: 4px; width: 14px; height: 14px; background: var(--white); }
 .pause-btn { width: 36px; height: 36px; border-radius: 50%; border: 0.5px solid var(--border2); background: var(--surface); color: var(--text); font-family: var(--mono); font-size: 16px; line-height: 1; cursor: pointer; flex-shrink: 0; transition: all 0.12s; }
-.pause-btn:hover { background: var(--surface2); border-color: rgba(255,255,255,0.22); }
+.pause-btn:hover { background: var(--surface2); border-color: var(--border-hover); }
 .pause-btn[hidden] { display: none; }
-.pause-btn.paused { background: var(--accent); color: #fff; border-color: var(--accent); }
+.pause-btn.paused { background: var(--accent); color: var(--white); border-color: var(--accent); }
 .timer-block { flex: 1; min-width: 0; overflow: hidden; }
 .timer { font-size: 24px; font-weight: 500; letter-spacing: 0.03em; line-height: 1; font-variant-numeric: tabular-nums; }
 .timer-hint { font-size: 10px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
@@ -326,7 +348,6 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .log-details > summary:hover::before { color: var(--text); }
 
 /* Meta form */
-.meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field.span2 { grid-column: 1 / -1; }
 .field label { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
@@ -334,7 +355,7 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
   background: var(--surface); border: 0.5px solid var(--border2); border-radius: 6px;
   color: var(--text); font-family: var(--mono); font-size: 12px; padding: 7px 10px; outline: none;
 }
-.field input:focus, .field textarea:focus { border-color: rgba(255,255,255,0.25); }
+.field input:focus, .field textarea:focus { border-color: var(--border-focus); }
 .field textarea { resize: vertical; min-height: 80px; line-height: 1.7; }
 /* Read-only field (currently just the tag panel's tracklist): looks
    like the other inputs but the cursor + focus ring make it clear the
@@ -345,11 +366,11 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 /* Action buttons */
 .action-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .btn { background: transparent; border: 0.5px solid var(--border2); border-radius: 6px; color: var(--muted); font-family: var(--mono); font-size: 12px; padding: 8px 14px; cursor: pointer; transition: all 0.12s; }
-.btn:hover { color: var(--text); border-color: rgba(255,255,255,0.22); background: var(--surface2); }
+.btn:hover { color: var(--text); border-color: var(--border-hover); background: var(--surface2); }
 .btn.primary { border-color: #378add55; color: var(--blue); }
 .btn.primary:hover { background: rgba(55,138,221,0.1); border-color: var(--blue); }
 .btn.danger { color: var(--accent); border-color: rgba(226,75,74,0.3); }
-.btn.danger:hover { background: rgba(226,75,74,0.1); }
+.btn.danger:hover { background: var(--accent-bg); }
 
 /* Keyboard focus rings — visible against the dark theme. We deliberately key
    off `:focus-visible` (not `:focus`) so mouse clicks don't paint the ring on
@@ -380,8 +401,8 @@ textarea:focus-visible,
    make `hidden` actually hide the wrap so JS toggles work as expected. */
 .search-wrap[hidden] { display: none; }
 .search-wrap input { width: 100%; min-width: 0; background: var(--surface); border: 0.5px solid var(--border2); border-radius: 6px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 7px 28px 7px 30px; outline: none; }
-.search-wrap input:focus { border-color: rgba(55,138,221,0.5); }
-.search-wrap input.active { border-color: rgba(55,138,221,0.5); background: var(--surface2); }
+.search-wrap input:focus { border-color: var(--blue-bd); }
+.search-wrap input.active { border-color: var(--blue-bd); background: var(--surface2); }
 .search-wrap input::-webkit-search-cancel-button,
 .search-wrap input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
 .search-icon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--muted); pointer-events: none; }
@@ -409,10 +430,10 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .t-find-subtitle-row { display: flex; align-items: center; gap: 8px; }
 .t-find-subtitle { flex: 1 1 auto; font-size: 10px; color: var(--muted); margin: 0 0 0 2px; min-height: 14px; line-height: 1.3; min-width: 0; }
 .btn-tiny { background: transparent; border: 0.5px solid var(--border2); color: var(--muted); border-radius: 4px; padding: 2px 7px; font-size: 10px; cursor: pointer; line-height: 1.3; }
-.btn-tiny:hover { color: var(--text); border-color: rgba(255,255,255,0.25); }
+.btn-tiny:hover { color: var(--text); border-color: var(--border-focus); }
 .btn-tiny[hidden] { display: none; }
 .t-find-subtitle .t-find-emph { color: var(--text); }
-.t-find-subtitle.mode-discogs { color: #a3d864; }
+.t-find-subtitle.mode-discogs { color: var(--green-bright); }
 .t-find-subtitle.mode-mb      { color: rgba(55,138,221,0.95); }
 .t-find-subtitle.mode-disabled { color: var(--muted); font-style: italic; }
 
@@ -445,9 +466,9 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .lib-table tr:last-child td { border-bottom: none; }
 .icon-btn { width: 26px; height: 26px; background: transparent; border: 0.5px solid var(--border2); border-radius: 5px; cursor: pointer; color: var(--muted); font-size: 12px; display: inline-flex; align-items: center; justify-content: center; margin-left: 4px; text-decoration: none; }
 .icon-btn:hover { background: var(--surface2); color: var(--text); }
-.icon-btn.playing { background: rgba(55,138,221,0.18); border-color: var(--blue); color: var(--blue); }
+.icon-btn.playing { background: var(--blue-bg); border-color: var(--blue); color: var(--blue); }
 .icon-btn.danger { color: var(--accent); border-color: rgba(226,75,74,0.3); }
-.icon-btn.danger:hover { background: rgba(226,75,74,0.1); color: var(--accent); border-color: rgba(226,75,74,0.55); }
+.icon-btn.danger:hover { background: var(--accent-bg); color: var(--accent); border-color: var(--accent-bd-hover); }
 .empty-lib { text-align: center; padding: 40px; color: var(--muted); font-size: 12px; }
 
 /* Cover thumb in library / album rows */
@@ -463,9 +484,8 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .rename-glyph:hover { color: var(--text); }
 .inline-rename { background: var(--surface); border: 0.5px solid var(--blue); border-radius: 4px; color: var(--text); font-family: var(--mono); font-size: 12px; padding: 4px 6px; outline: none; }
 
-/* Recording pulse ring */
+/* Recording pulse ring — applied via the .rec-btn.active rule above. */
 @keyframes ring { 0%,100% { box-shadow: 0 0 0 0 rgba(226,75,74,0.35); } 50% { box-shadow: 0 0 0 10px rgba(226,75,74,0); } }
-.rec-btn.active { animation: ring 1.8s ease-in-out infinite; }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 4px; }
@@ -491,25 +511,23 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .left-fields .span2 { grid-column: 1 / -1; }
 .left-fields .field input, .left-fields .field textarea { font-size: 11px; padding: 5px 8px; }
 .left-fields .field textarea { min-height: 90px; }
-.search-row { display: flex; gap: 6px; align-items: center; }
-.search-row .search-wrap { flex: 1; max-width: none; }
 .candidates { display: flex; flex-direction: column; gap: 6px; max-height: 380px; overflow-y: auto; padding-right: 2px; }
 .candidate { display: flex; gap: 10px; padding: 8px 10px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; cursor: pointer; transition: all 0.12s; min-width: 0; }
 .candidate:hover { background: var(--surface2); border-color: var(--border2); }
 .candidate.active { border-color: var(--blue); background: rgba(55,138,221,0.08); }
-.candidate.collection-cand { border-left: 2px solid #a3d864; }
+.candidate.collection-cand { border-left: 2px solid var(--green-bright); }
 .cand-section-header { font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); padding: 6px 2px 2px; }
 .candidate-thumb { width: 44px; height: 44px; background: var(--surface2); border-radius: 4px; flex-shrink: 0; overflow: hidden; }
 .candidate-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .candidate-body { flex: 1; min-width: 0; }
 .candidate-title { font-size: 12px; color: var(--text); font-weight: 500; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .candidate-title .ct-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
-.candidate-title .score { flex-shrink: 0; font-size: 9px; padding: 1px 5px; border-radius: 3px; background: rgba(55,138,221,0.18); color: var(--blue); font-weight: 400; letter-spacing: 0.05em; }
+.candidate-title .score { flex-shrink: 0; font-size: 9px; padding: 1px 5px; border-radius: 3px; background: var(--blue-bg); color: var(--blue); font-weight: 400; letter-spacing: 0.05em; }
 .ext-link { color: var(--muted); text-decoration: none; font-size: 10px; margin-left: 4px; padding: 1px 4px; border-radius: 3px; }
 .ext-link:hover { color: var(--text); background: var(--surface2); }
 .candidate-sub { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.55; word-break: break-word; }
 .pill { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 3px; background: var(--surface2); color: var(--muted); margin-left: 4px; letter-spacing: 0.05em; white-space: nowrap; }
-.pill.discogs { background: rgba(99,153,34,0.18); color: #a3d864; }
+.pill.discogs { background: rgba(99,153,34,0.18); color: var(--green-bright); }
 .empty-results { padding: 24px; text-align: center; color: var(--muted); font-size: 11px; border: 0.5px dashed var(--border2); border-radius: 6px; }
 .search-status { font-size: 10px; color: var(--muted); margin-top: 4px; }
 /* When no progress/error message is set, collapse the row entirely so
@@ -577,7 +595,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
   padding: 1px 6px;
   font-family: var(--mono); font-size: 9px; letter-spacing: 0.05em;
   color: var(--accent);
-  background: rgba(226,75,74,0.10);
+  background: var(--accent-bg);
   border: 0.5px solid rgba(226,75,74,0.5);
   border-radius: 3px;
   cursor: pointer;
@@ -678,16 +696,16 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .we-sides .arrow-btn:hover:not([disabled]) { background: var(--bg); color: var(--text); }
 .we-sides .arrow-btn[disabled] { opacity: 0.3; cursor: default; }
 
-.we-minimap { position: relative; background: #0a0e16; border: 0.5px solid var(--border); border-radius: 6px; overflow: hidden; height: 40px; user-select: none; cursor: pointer; }
+.we-minimap { position: relative; background: var(--wave-bg); border: 0.5px solid var(--border); border-radius: 6px; overflow: hidden; height: 40px; user-select: none; cursor: pointer; }
 .we-minimap-img { width: 100%; height: 100%; display: block; pointer-events: none; opacity: 0.7; }
-.we-minimap-vp { position: absolute; top: 0; bottom: 0; background: rgba(55,138,221,0.18); border-left: 1px solid var(--blue); border-right: 1px solid var(--blue); cursor: grab; }
+.we-minimap-vp { position: absolute; top: 0; bottom: 0; background: var(--blue-bg); border-left: 1px solid var(--blue); border-right: 1px solid var(--blue); cursor: grab; }
 .we-minimap-vp:active { cursor: grabbing; }
 .we-minimap-cuts { position: absolute; inset: 0; pointer-events: none; }
 .we-minimap-cuts .mc { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); opacity: 0.7; }
 .we-minimap-cuts .ms { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--blue); opacity: 0.7; pointer-events: none; }
 .we-minimap-axis { display: flex; justify-content: space-between; padding: 2px 6px; font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
-.wave-wrap { position: relative; background: #0a0e16; border: 0.5px solid var(--border); border-radius: 6px; overflow: hidden; user-select: none; margin-top: 8px; }
+.wave-wrap { position: relative; background: var(--wave-bg); border: 0.5px solid var(--border); border-radius: 6px; overflow: hidden; user-select: none; margin-top: 8px; }
 .wave-img { display: block; width: 100%; height: 140px; pointer-events: none; image-rendering: -webkit-optimize-contrast; }
 /* The waveform canvas is keyboard-focusable (tabindex=0) so AT users can
    reach the rich keyboard shortcuts wired in wave-editor.js. Show the focus
@@ -696,11 +714,10 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 #we-canvas:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .wave-overlay { position: absolute; inset: 0; cursor: crosshair; }
 .wave-playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.65); pointer-events: none; box-shadow: 0 0 4px rgba(255,255,255,0.4); }
-.wave-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.18); pointer-events: none; }
 .wave-cut { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); cursor: ew-resize; }
-.wave-cut:hover { background: #ff7c7b; }
-.wave-cut .grip { position: absolute; top: -6px; left: -6px; width: 14px; height: 14px; background: var(--accent); border-radius: 2px; border: 1px solid #fff; }
-.wave-cut .grip:hover { background: #ff7c7b; }
+.wave-cut:hover { background: var(--accent-hover); }
+.wave-cut .grip { position: absolute; top: -6px; left: -6px; width: 14px; height: 14px; background: var(--accent); border-radius: 2px; border: 1px solid var(--white); }
+.wave-cut .grip:hover { background: var(--accent-hover); }
 /* When a cut carries a sleeve position (A1, B2, …) the grip *is* the
    label: a chip centred on the cut line, flush with the waveform's top
    edge (no top border — it reads as a tab hanging off the edge) and a
@@ -710,10 +727,10 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
   top: 0; left: 1px; transform: translateX(-50%);
   width: auto; min-width: 26px; height: auto; padding: 1px 5px;
   border-top: none; border-radius: 0 0 3px 3px;
-  font-size: 9px; line-height: 1.3; color: #fff; text-align: center;
+  font-size: 9px; line-height: 1.3; color: var(--white); text-align: center;
   white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: 0.04em;
 }
-.wave-cut .grip.grip-labeled:hover { background: #ff7c7b; }
+.wave-cut .grip.grip-labeled:hover { background: var(--accent-hover); }
 .wave-silence { position: absolute; top: 0; bottom: 0; background: rgba(186,117,23,0.18); pointer-events: none; }
 .wave-side-switch { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1.5px dashed rgba(55,138,221,0.7); pointer-events: none; }
 /* Anchored to the bottom — after a per-side Discogs apply the side-start
@@ -730,7 +747,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
   color: var(--text); font-family: var(--mono); font-size: 11px; padding: 3px 6px;
   outline: none; width: 56px; font-variant-numeric: tabular-nums;
 }
-.we-suggest-pop input[type="number"]:focus { border-color: rgba(55,138,221,0.5); }
+.we-suggest-pop input[type="number"]:focus { border-color: var(--blue-bd); }
 
 /* Silence-detection control grid: slider on its own row, two number inputs
    below. Keeping each labeled control on a single row prevents inline labels
@@ -765,12 +782,12 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .wave-track .pn { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: clip; }
 .wave-track .play-track { width: 22px; height: 22px; padding: 0; border-radius: 4px; background: var(--surface2); border: 0.5px solid var(--border2); color: var(--text); font-size: 11px; cursor: pointer; line-height: 1; }
 .wave-track .play-track:hover { background: var(--bg); }
-.wave-track .play-track.playing { background: rgba(55,138,221,0.18); border-color: var(--blue); color: var(--blue); }
+.wave-track .play-track.playing { background: var(--blue-bg); border-color: var(--blue); color: var(--blue); }
 .wave-track input { background: var(--surface2); border: 0.5px solid var(--border2); border-radius: 4px; color: var(--text); font-family: var(--mono); font-size: 11px; padding: 4px 6px; outline: none; min-width: 0; }
 .wave-track .start-input { font-variant-numeric: tabular-nums; text-align: right; }
 .wave-track .range { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .wave-track .del { width: 22px; height: 22px; padding: 0; border-radius: 4px; background: transparent; border: 0.5px solid var(--border2); color: var(--muted); cursor: pointer; line-height: 1; font-size: 12px; }
-.wave-track .del:hover { color: var(--accent); border-color: rgba(226,75,74,0.35); }
+.wave-track .del:hover { color: var(--accent); border-color: var(--accent-bd); }
 .wave-track .del[disabled] { opacity: 0.3; cursor: default; }
 .wave-track .skip-btn { width: 22px; height: 22px; padding: 0; border-radius: 4px; background: transparent; border: 0.5px solid var(--border2); color: var(--muted); cursor: pointer; line-height: 1; font-size: 13px; }
 .wave-track .skip-btn:hover { color: var(--text); background: var(--surface2); }
@@ -847,7 +864,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .side-row .arrow-btn[disabled] { opacity: 0.3; cursor: default; }
 .side-row .play-side { width: 22px; height: 22px; padding: 0; border-radius: 4px; background: var(--surface2); border: 0.5px solid var(--border2); color: var(--text); font-size: 11px; cursor: pointer; line-height: 1; }
 .side-row .play-side:hover { background: var(--bg); }
-.side-row .play-side.playing { background: rgba(55,138,221,0.18); border-color: var(--blue); color: var(--blue); }
+.side-row .play-side.playing { background: var(--blue-bg); border-color: var(--blue); color: var(--blue); }
 
 /* Bulk-action bar */
 .bulk-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--surface2); border-bottom: 0.5px solid var(--border2); font-size: 11px; color: var(--muted); }
@@ -890,7 +907,6 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
   .sidebar { border-right: 0; border-bottom: 0.5px solid var(--border2); padding: 14px; gap: 14px; }
   .content { padding: 14px; }
   .header { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
-  .meta-grid { grid-template-columns: 1fr; }
   .sidebar .log,
   .sidebar .log-details { display: none; }
   .toast-container { top: 10px; right: 10px; left: 10px; max-width: none; }
