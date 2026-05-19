@@ -3,7 +3,7 @@
 // shape as the Raw library; this module focuses on bulk selection,
 // per-album failure pills, and the demote / delete actions.
 
-import { htmlEscape, fmtDate, fmtDateFull, fmtSourceFormat, fmtDuration } from './util.js';
+import { htmlEscape, fmtDate, fmtDateFull, fmtSourceFormat, fmtDuration, toastSimple } from './util.js';
 import { toast } from './log.js';
 import { state } from './state.js';
 import { actionBtn, setTbodyIfChanged } from './dom-helpers.js';
@@ -74,12 +74,22 @@ export function clearMusicSelection() {
 
 async function _bulkDeleteAlbumNames(ids, label) {
   if (!ids.length) return;
-  if (!confirm(`Delete ${ids.length} ${label}? Music tracks emitted from these albums will also be removed.`)) return;
+  // No confirm() dialog — the bulk-action toolbar requires a visible
+  // selection step. Album delete has no undo (the music/ folder and
+  // album.json get unlinked server-side), so we just surface a clear
+  // post-action toast. The trade-off is documented in the PR: keeping
+  // confirm() for the irreversible "purge originals" and "demote"
+  // operations where the dialog text carries warnings users need to
+  // read; album-delete itself is a clean "you knew what you selected"
+  // path that doesn't need an interrupting modal.
+  let okCount = 0;
   for (const album_id of ids) {
-    try { await fetch(`/api/albums/${album_id}`, { method: 'DELETE' }); }
-    catch (e) { console.error(e); }
+    try {
+      const r = await fetch(`/api/albums/${album_id}`, { method: 'DELETE' });
+      if (r.ok) okCount++;
+    } catch (e) { console.error(e); }
   }
-  toast(`✓ Deleted ${ids.length} ${label}`, 'ok');
+  toastSimple(`Deleted ${okCount} ${label}`, { kind: okCount === ids.length ? 'ok' : 'err' });
 }
 
 export async function bulkDeleteAlbums() {
@@ -380,13 +390,15 @@ export function refreshAlbumsRender() {
 export async function deleteAlbum(album_id) {
   const a = state.albumsByName[album_id];
   const label = (a && a.album) || album_id;
-  const splitWarn = (a && a.split)
-    ? `\n\nThe music/${a.music_relpath || '...'} folder will be removed too.`
-    : '';
-  if (!confirm(`Delete album "${label}"?${splitWarn}`)) return;
+  // No confirm() — same reasoning as _bulkDeleteAlbumNames above.
+  // Single-album delete from the per-row ✕ button is harder to
+  // misclick than a bulk action, and the toast confirms the action.
+  // If the album was split and emitted to music/, the user already
+  // has a visible "music/X" pill in the row indicating that surface
+  // exists.
   const r = await fetch(`/api/albums/${album_id}`, { method: 'DELETE' });
   if (r.ok) {
-    toast(`✓ Album deleted — ${label}`, 'ok');
+    toastSimple(`Deleted album — ${label}`, { kind: 'ok' });
     refreshAlbums();
   } else {
     toast('✗ delete failed', 'err');

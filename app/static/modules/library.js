@@ -6,7 +6,7 @@
 // single header click reflows all three tables); the helpers live in
 // `sort-filter.js` and are imported by both renderers.
 
-import { htmlEscape, fmtDate, fmtDateFull, fmtSourceFormat, fmtDuration } from './util.js';
+import { htmlEscape, fmtDate, fmtDateFull, fmtSourceFormat, fmtDuration, toastWithUndo, toastSimple } from './util.js';
 import { parseError } from './api.js';
 import { toast } from './log.js';
 import { state } from './state.js';
@@ -58,30 +58,51 @@ export function clearSelection() {
 export async function bulkDelete() {
   if (!state.selected.size) return;
   const names = [...state.selected];
-  if (!confirm(`Delete ${names.length} recording${names.length===1?'':'s'}? This cannot be undone.`)) return;
+  // No more confirm() dialog — the bulk-action toolbar already requires a
+  // visible selection step, so accidental triggers are rare. We surface
+  // per-file progress instead so the user can watch the count climb and
+  // a long run doesn't look hung.
   const bar = document.getElementById('bulk-action-bar');
   const fill = document.getElementById('bulk-action-fill');
-  document.getElementById('bulk-action-phase').textContent = 'deleting…';
-  document.getElementById('bulk-action-pct').textContent = '';
-  fill.classList.add('indeterminate');
+  const phaseEl = document.getElementById('bulk-action-phase');
+  const pctEl = document.getElementById('bulk-action-pct');
+  const total = names.length;
+  // We delete one-at-a-time client-side so the user gets a "3 of 47"
+  // readout — the existing /api/recordings/bulk-delete returns a single
+  // summary at the end, which is fine for small selections but feels
+  // hung on big ones. Per-file API calls cost ~1 RTT each but the file
+  // ops on the server are fast (rename / unlink) so the wall-time
+  // difference is small.
+  phaseEl.textContent = `Deleting 0 of ${total}`;
+  pctEl.textContent = '0%';
+  fill.classList.remove('indeterminate');
+  fill.style.width = '0%';
   bar.hidden = false;
-  try {
-    const r = await fetch('/api/recordings/bulk-delete', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({filenames: names})
-    });
-    const d = await r.json();
-    toast(`✓ Deleted ${d.deleted.length} file${d.deleted.length===1?'':'s'}`,
-          d.missing?.length ? 'err' : 'ok');
-    state.selected.clear();
-    refreshLib();
-  } catch(e) { toast('✗ ' + e.message, 'err'); }
-  finally {
-    bar.hidden = true;
-    fill.classList.remove('indeterminate');
-    fill.style.width = '0%';
+  let okCount = 0;
+  let failCount = 0;
+  for (let i = 0; i < names.length; i++) {
+    const fn = names[i];
+    try {
+      const r = await fetch(`/api/recordings/${encodeURIComponent(fn)}`, { method: 'DELETE' });
+      if (r.ok) okCount++; else failCount++;
+    } catch (e) {
+      failCount++;
+    }
+    const done = i + 1;
+    const pct = Math.floor((done / total) * 100);
+    phaseEl.textContent = `Deleting ${done} of ${total}`;
+    pctEl.textContent = `${pct}%`;
+    fill.style.width = `${pct}%`;
   }
+  bar.hidden = true;
+  fill.style.width = '0%';
+  state.selected.clear();
+  if (failCount) {
+    toastSimple(`Deleted ${okCount} of ${total} — ${failCount} failed`, { kind: 'err' });
+  } else {
+    toastSimple(`Deleted ${okCount} file${okCount === 1 ? '' : 's'}`, { kind: 'ok' });
+  }
+  refreshLib();
 }
 
 // ── Library refresh + render ─────────────────────────────────────────────
@@ -176,12 +197,39 @@ export function refreshLibRender() {
 }
 
 export async function deleteFile(fname) {
-  if (!confirm(`Delete ${fname}? This cannot be undone.`)) return;
+  // No confirm() dialog. The DELETE endpoint soft-deletes via TRASH_DIR
+  // and returns a token; we show an Undo toast for 5 s so a misclick is
+  // recoverable. After 5 s the entry sweeps automatically on the next
+  // trash-touching request (TRASH_TTL_SECONDS=300 s — generous margin
+  // beyond the toast in case the user's tab freezes).
   try {
     const r = await fetch(`/api/recordings/${encodeURIComponent(fname)}`, { method: 'DELETE' });
     if (!r.ok) throw new Error(await parseError(r));
+    const d = await r.json().catch(() => ({}));
     state.selected.delete(fname);
     refreshLib();
+    const token = d.trash_token;
+    const label = d.original || fname;
+    if (token) {
+      toastWithUndo(`Deleted "${label}"`, async () => {
+        try {
+          const rr = await fetch('/api/recordings/restore', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ trash_token: token }),
+          });
+          if (!rr.ok) throw new Error(await parseError(rr));
+          toast(`✓ Restored "${label}"`, 'ok');
+          refreshLib();
+        } catch (e) {
+          toast('✗ restore failed: ' + e.message, 'err');
+        }
+      }, { kind: 'ok' });
+    } else {
+      // The server hard-deleted (cross-FS rename fell back). No undo,
+      // but the user still sees confirmation that the file is gone.
+      toastSimple(`Deleted "${label}"`, { kind: 'ok' });
+    }
   } catch (e) { toast('✗ delete failed: ' + e.message, 'err'); }
 }
 

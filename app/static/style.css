@@ -868,6 +868,34 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .toast.ok  { border-left: 3px solid var(--green); }
 .toast.err { border-left: 3px solid var(--accent); }
 .toast.info { border-left: 3px solid var(--blue); }
+/* Toast-with-undo: inline Undo button next to the message. The button
+   uses the same accent color as the action buttons so it reads as a
+   clickable affordance, and stays full-height so the toast itself
+   doesn't grow taller than the no-undo variant. */
+.toast-with-undo { display: flex; align-items: center; gap: 12px; }
+.toast-with-undo .toast-msg { flex: 1; }
+.toast-undo {
+  background: transparent;
+  color: var(--blue);
+  border: 0.5px solid var(--blue);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.toast-undo:hover:not(:disabled) { background: rgba(80, 144, 255, 0.12); }
+.toast-undo:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.toast-undo:disabled { opacity: 0.6; cursor: default; }
+
+/* Wave-editor "Saving…" indicator — sits in the same slot as #we-saved
+   in the modal header. Differentiated visually so the user can tell at
+   a glance whether a save is pending (italic) or landed (regular). */
+.we-saving { font-style: italic; color: var(--muted); margin-right: 8px; }
+.we-saving[hidden] { display: none; }
 
 /* ADC gain slider (only shown for pi-recorder streams) */
 .gain-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 8px 10px;

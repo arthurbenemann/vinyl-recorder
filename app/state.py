@@ -20,6 +20,19 @@ RAW_DIR = OUTPUT_DIR / "raw"
 IN_PROGRESS_DIR = OUTPUT_DIR / "in-progress"
 MUSIC_DIR = Path(os.getenv("MUSIC_OUTPUT_DIR", str(OUTPUT_DIR / "music")))
 LOG_DIR = OUTPUT_DIR / ".logs"
+# Soft-delete trash for raw recordings. `DELETE /api/recordings/{name}`
+# moves the FLAC here rather than unlinking it; the UI then offers an
+# Undo toast for ~5 s. Entries older than `TRASH_TTL_SECONDS` are
+# considered expired and purged on the next trash-touching request
+# (no background thread — see app/routes/recordings.py for the
+# opportunistic sweep). The directory is intentionally hidden
+# (leading dot) so the recorder's own /api/recordings listing never
+# surfaces it, and it shares the same volume as raw/ so the move is
+# atomic (an os.rename, not a copy).
+TRASH_DIR = OUTPUT_DIR / ".trash"
+TRASH_TTL_SECONDS = 300  # 5 minutes — generous buffer beyond the 5 s toast.
+for _d in (RAW_DIR, IN_PROGRESS_DIR, MUSIC_DIR, LOG_DIR, TRASH_DIR):
+    _d.mkdir(parents=True, exist_ok=True)
 # IMPORTANT: This mkdir runs at IMPORT time — the first time anything imports
 # `state` (or anything that imports it transitively, which is most of the
 # app), the layout under OUTPUT_DIR is created on the spot. Tests must
@@ -27,8 +40,6 @@ LOG_DIR = OUTPUT_DIR / ".logs"
 # tests/conftest.py which does exactly that via os.environ.setdefault. If
 # you're running unit tests outside pytest, set OUTPUT_DIR yourself or
 # you'll mkdir the developer's real recordings directory.
-for _d in (RAW_DIR, IN_PROGRESS_DIR, MUSIC_DIR, LOG_DIR):
-    _d.mkdir(parents=True, exist_ok=True)
 
 MB_BASE = "https://musicbrainz.org/ws/2"
 MB_UA = "VinylRecorder/0.1 ( https://github.com/arthurbenemann/vinyl-recorder )"

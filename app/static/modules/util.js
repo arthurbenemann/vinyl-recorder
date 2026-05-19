@@ -1,5 +1,7 @@
 // Pure formatting / string helpers used across modules. No DOM access,
-// no fetches; safe to import from anywhere.
+// no fetches; safe to import from anywhere — with the single exception
+// of `actionToast` at the bottom, which writes to #toast-container so
+// every module has one toast affordance to import.
 
 export function dbStr(v) {
   if (v <= 0.0005) return '−∞';
@@ -135,4 +137,93 @@ export function trapModalFocus(modalEl, e) {
     e.preventDefault();
     first.focus();
   }
+}
+
+// Toast with an inline Undo button — used to replace `confirm()` for
+// destructive actions like delete. The undoFn receives no args; the
+// caller closes over whatever ids/tokens it needs. The toast lingers
+// for `timeoutMs` (default 5000); after that the Undo button is gone
+// and so is the chance to recover.
+//
+// ARIA shape mirrors the existing `.toast` helper in log.js but with
+// `role="alert"` so AT users get the announcement promptly. The Undo
+// button is a real <button> with `tabindex="0"` so keyboard users can
+// Shift-Tab to it from wherever focus landed after the delete.
+//
+// Returns nothing — fire-and-forget. If multiple toasts stack, the
+// container's flex-direction:column lays them top-down.
+export function toastWithUndo(message, undoFn, opts) {
+  const o = opts || {};
+  const timeoutMs = Number.isFinite(o.timeoutMs) ? o.timeoutMs : 5000;
+  const kind = o.kind || 'info';
+  const c = document.getElementById('toast-container');
+  if (!c) {
+    // No container — fall back to firing the message via console so the
+    // calling code still has some signal. Should never happen in
+    // production (index.html always renders #toast-container).
+    console.warn('toastWithUndo: #toast-container missing —', message);
+    return;
+  }
+  const t = document.createElement('div');
+  t.className = `toast ${kind} toast-with-undo`;
+  t.setAttribute('role', 'alert');
+  const msgSpan = document.createElement('span');
+  msgSpan.textContent = message;
+  msgSpan.className = 'toast-msg';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'toast-undo';
+  btn.textContent = 'Undo';
+  // Set a clear AT label since "Undo" alone after a delete is ambiguous —
+  // screen readers will hear the message first via role="alert", then
+  // "Undo button" when they land on it.
+  btn.setAttribute('aria-label', `Undo: ${message}`);
+  t.appendChild(msgSpan);
+  t.appendChild(btn);
+  c.appendChild(t);
+  requestAnimationFrame(() => t.classList.add('show'));
+  let resolved = false;
+  const close = () => {
+    if (resolved) return;
+    resolved = true;
+    t.classList.remove('show');
+    setTimeout(() => t.remove(), 250);
+  };
+  btn.addEventListener('click', () => {
+    if (resolved) return;
+    resolved = true;
+    // Visually freeze the button so the user has feedback while the
+    // restore POST is in flight; the toast itself stays put until the
+    // undoFn resolves (or rejects, which we ignore — the caller will
+    // surface its own error toast).
+    btn.disabled = true;
+    btn.textContent = 'Undoing…';
+    Promise.resolve().then(undoFn).finally(() => {
+      t.classList.remove('show');
+      setTimeout(() => t.remove(), 250);
+    });
+  });
+  setTimeout(close, timeoutMs);
+}
+
+// Plain toast (no Undo). Useful when the operation isn't reversible
+// but we still want to inform the user without an interrupting modal.
+// Wraps the same DOM/animation/timeout dance as toastWithUndo so the
+// look-and-feel stays consistent.
+export function toastSimple(message, opts) {
+  const o = opts || {};
+  const timeoutMs = Number.isFinite(o.timeoutMs) ? o.timeoutMs : 3500;
+  const kind = o.kind || 'info';
+  const c = document.getElementById('toast-container');
+  if (!c) return;
+  const t = document.createElement('div');
+  t.className = `toast ${kind}`;
+  t.setAttribute('role', 'status');
+  t.textContent = message;
+  c.appendChild(t);
+  requestAnimationFrame(() => t.classList.add('show'));
+  setTimeout(() => {
+    t.classList.remove('show');
+    setTimeout(() => t.remove(), 250);
+  }, timeoutMs);
 }

@@ -138,6 +138,7 @@ async function _savePlanNow() {
   if (!Number.isNaN(bitDepth))   planBody.bit_depth     = bitDepth;
   if (!Number.isNaN(sampleRate)) planBody.sample_rate   = sampleRate;
   if (outputFormat)              planBody.output_format = outputFormat;
+  _showSavingIndicator();
   try {
     _planSaveInFlight = fetch(`/api/album/${albumId}/plan`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
@@ -157,7 +158,28 @@ async function _savePlanNow() {
     // dirty=true so the next interaction re-attempts.
   } finally {
     _planSaveInFlight = null;
+    _hideSavingIndicator();
   }
+}
+
+// "Saving…" indicator — shown while a POST /api/album/{id}/plan is in
+// flight. Pairs with the persistent "saved Xs ago" pill (#we-saved):
+// during a save the saving indicator is visible and the saved pill is
+// hidden; on success _markSavedNow() shows the saved pill again. Lets
+// the user tell "edit in flight" from "edit confirmed" at a glance.
+function _showSavingIndicator() {
+  const el = document.getElementById('we-saving-indicator');
+  const saved = document.getElementById('we-saved');
+  if (el) el.hidden = false;
+  // Hide the saved pill while a save is pending so the two indicators
+  // don't read as conflicting state. _renderSavedLabel will un-hide it
+  // when the save lands.
+  if (saved) saved.hidden = true;
+}
+
+function _hideSavingIndicator() {
+  const el = document.getElementById('we-saving-indicator');
+  if (el) el.hidden = true;
 }
 
 // Persistent confirmation that the debounced auto-save landed. The
@@ -203,6 +225,10 @@ function _stopSavedTicker() {
   _savedAt = null;
   const el = document.getElementById('we-saved');
   if (el) { el.hidden = true; el.textContent = ''; }
+  // Make sure the "Saving…" indicator isn't left hanging on close —
+  // closing the modal mid-save could otherwise leave it visible the
+  // next time the modal reopens (the DOM persists across opens).
+  _hideSavingIndicator();
 }
 
 // Public hook: called on modal close so the final state is flushed even

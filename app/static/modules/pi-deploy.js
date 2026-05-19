@@ -8,6 +8,74 @@ import { makeModalEscHandler } from './util.js';
 import { toast } from './log.js';
 import { parseError } from './api.js';
 
+// Map the backend's DeployError messages into user-readable
+// alternatives. The backend (services/pi_deploy.py) raises one of:
+//   "authentication failed — wrong username or password"
+//   "cannot resolve host '..."
+//   "cannot reach host:port — ..." (refused / timeout / OSError)
+//   "SSH error: ..." (paramiko SSHException)
+//   "network error: ..." (OSError catch-all)
+//   "could not open SFTP channel: ..."
+//   "file upload failed: ..."
+//   "could not start remote command: ..." / "failed sending command: ..."
+// We classify on substrings rather than precise prefixes so a future
+// re-word of the backend string doesn't silently fall through to the
+// raw fallback. Both the returned `friendly` (toast-headline) and `hint`
+// (extra context in the deploy log) come from the same map, but a
+// caller can ignore `hint` if it just wants a short toast.
+function _classifyPiDeployError(detail) {
+  const d = String(detail || '').toLowerCase();
+  if (d.includes('authentication failed') || d.includes('wrong username') || d.includes('wrong password')) {
+    return {
+      friendly: 'Authentication failed. Check the password.',
+      hint: 'Make sure SSH password login is enabled on the Pi (PasswordAuthentication yes in /etc/ssh/sshd_config).',
+    };
+  }
+  if (d.includes('cannot resolve host')) {
+    return {
+      friendly: "Couldn't resolve the host. Is the name spelled correctly?",
+      hint: 'Try the Pi\'s IP address (e.g. 192.168.1.42) if mDNS / .local lookup is flaky.',
+    };
+  }
+  if (d.includes('cannot reach')) {
+    // Backend collapses ConnectionRefusedError + socket.timeout +
+    // TimeoutError into "cannot reach host:port — ...". The exact
+    // socket error sits after the em-dash; we use it to refine the
+    // hint without parroting paramiko's wording.
+    if (d.includes('refused')) {
+      return {
+        friendly: "Couldn't connect. Is SSH running on the Pi?",
+        hint: 'Connection refused — the Pi answered but isn\'t listening on the SSH port.',
+      };
+    }
+    if (d.includes('timed out') || d.includes('timeout')) {
+      return {
+        friendly: "Pi-recorder didn't respond in 30s. Is the host reachable?",
+        hint: 'Network timeout — the Pi may be off, on a different subnet, or behind a firewall.',
+      };
+    }
+    return {
+      friendly: "Couldn't reach the Pi over the network.",
+      hint: 'Check that the host is on the same network and SSH is enabled.',
+    };
+  }
+  if (d.includes('ssh error')) {
+    return {
+      friendly: 'SSH handshake failed.',
+      hint: 'Often a host-key change after re-imaging — remove ~/.ssh/known_hosts entry for this Pi.',
+    };
+  }
+  if (d.includes('sftp')) {
+    return {
+      friendly: "Couldn't copy files to the Pi.",
+      hint: 'The SFTP subsystem might be disabled in /etc/ssh/sshd_config (Subsystem sftp must be uncommented).',
+    };
+  }
+  // Final fallback — return the raw detail. We don't want to gaslight
+  // the user when the backend raises something we haven't classified.
+  return { friendly: String(detail || 'deploy failed'), hint: null };
+}
+
 const PI_DEPLOY_HOST_KEY = 'piDeploy.host';
 const PI_DEPLOY_USER_KEY = 'piDeploy.user';
 let _piDeployFocusReturn = null;
@@ -106,8 +174,10 @@ export async function runPiDeploy() {
     if (!r.ok) {
       // Pre-stream failure (e.g. 422 validation) — body is regular JSON.
       const detail = await parseError(r);
-      _piDeployLogLine('✗ ' + detail, 'err');
-      toast('✗ pi deploy failed: ' + detail, 'err');
+      const { friendly, hint } = _classifyPiDeployError(detail);
+      _piDeployLogLine('✗ ' + friendly, 'err');
+      if (hint) _piDeployLogLine(hint, 'info');
+      toast('✗ ' + friendly, 'err');
       return;
     }
     // Streamed NDJSON: one JSON object per \n-terminated chunk. Parse
@@ -140,12 +210,18 @@ export async function runPiDeploy() {
       toast('✓ pi deployed to ' + host, 'ok');
     } else {
       const detail = errorDetail || 'deploy ended without a result';
-      _piDeployLogLine('✗ ' + detail, 'err');
-      toast('✗ pi deploy failed: ' + detail, 'err');
+      const { friendly, hint } = _classifyPiDeployError(detail);
+      _piDeployLogLine('✗ ' + friendly, 'err');
+      if (hint) _piDeployLogLine(hint, 'info');
+      toast('✗ ' + friendly, 'err');
     }
   } catch (e) {
-    _piDeployLogLine('✗ ' + (e.message || e), 'err');
-    toast('✗ pi deploy failed: ' + (e.message || e), 'err');
+    // Browser-side fetch errors (network drop, CORS, etc.) — these never
+    // reach the backend so we can't classify off DeployError. Still
+    // worth surfacing the raw exception for diagnosis.
+    const msg = e.message || String(e);
+    _piDeployLogLine('✗ ' + msg, 'err');
+    toast('✗ pi deploy failed: ' + msg, 'err');
   } finally {
     goBtn.disabled = false; goBtn.textContent = 'deploy';
     if (headerBtn) headerBtn.disabled = false;
