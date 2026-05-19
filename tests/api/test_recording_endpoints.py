@@ -80,6 +80,32 @@ def test_test_stream_handles_other_errors(monkeypatch):
     assert "ffprobe" in r.json()["detail"]
 
 
+def test_test_stream_offloads_subprocess_to_thread(monkeypatch):
+    """ffprobe is a blocking call; the handler must route it through
+    ``asyncio.to_thread`` so a slow/unreachable URL can't stall the event
+    loop. Regression guard for the bug-hunt fix."""
+    from routes import recordings as recs_mod
+
+    seen = {"to_thread": False}
+
+    class _FakeProc:
+        returncode = 0
+        stdout = '{"streams": [{"sample_rate": "48000", "channels": 1}]}'
+        stderr = ""
+
+    async def fake_to_thread(func, *args, **kwargs):
+        seen["to_thread"] = True
+        # Sanity-check that we're actually wrapping subprocess.run.
+        assert func is recs_mod.subprocess.run
+        return _FakeProc()
+
+    monkeypatch.setattr(recs_mod.asyncio, "to_thread", fake_to_thread)
+    r = _client().post("/api/test-stream", json={"stream_url": "http://x"})
+    assert r.status_code == 200
+    assert seen["to_thread"] is True
+    assert r.json()["sample_rate"] == "48000"
+
+
 # ── /api/stream-proxy guards ─────────────────────────────────────────────
 def test_stream_proxy_returns_409_when_upstream_disconnected():
     # No upstream → handler aborts before spawning ffmpeg. Tests the guard

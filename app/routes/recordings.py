@@ -213,10 +213,14 @@ async def test_stream(body: dict):
     underlying message in `detail` — clients rely on HTTP status to branch."""
     url = body.get("stream_url", "")
     try:
-        result = subprocess.run(
+        # Offload to a worker thread so a slow/unreachable URL can't block
+        # the asyncio loop (and every other request on this worker) for up
+        # to 10 s. Matches the pattern used elsewhere in this module.
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["ffprobe", "-v", "error", "-print_format", "json",
              "-show_streams", "-i", url],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, text=True, timeout=10,
         )
         if result.returncode != 0:
             raise HTTPException(
