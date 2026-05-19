@@ -274,3 +274,223 @@ def test_split_emit_does_not_clear_existing_plan_knobs():
         assert plan["bit_depth"] == 24
     finally:
         _cleanup(album_id)
+
+
+# ── Optimistic-concurrency tests ─────────────────────────────────────────
+# `plan_version` lets two tabs editing the same album detect a stale write
+# instead of silently clobbering each other. See `update_plan` in
+# routes/albums.py for the contract.
+
+
+def test_plan_post_returns_version_field():
+    """Every successful plan POST returns the new `plan_version` so the
+    client can update its optimistic-concurrency token."""
+    album_id = "tver001"
+    _seed_album(album_id)
+    try:
+        r = _client().post(
+            f"/api/album/{album_id}/plan",
+            json={"tracks": [{"title": "x", "duration_seconds": 1.0, "skip": False}]},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert "plan_version" in body
+        assert isinstance(body["plan_version"], int)
+        assert body["plan_version"] >= 1
+    finally:
+        _cleanup(album_id)
+
+
+def test_plan_post_increments_version_on_write():
+    """Each successful write bumps plan_version by exactly 1. Two sequential
+    saves go 0→1→2, matching the read-modify-write semantics the
+    optimistic-concurrency check relies on."""
+    album_id = "tver002"
+    _seed_album(album_id)
+    try:
+        r1 = _client().post(
+            f"/api/album/{album_id}/plan",
+            json={"tracks": [{"title": "a", "duration_seconds": 1.0, "skip": False}]},
+        )
+        assert r1.status_code == 200
+        v1 = r1.json()["plan_version"]
+        r2 = _client().post(
+            f"/api/album/{album_id}/plan",
+            json={"tracks": [{"title": "b", "duration_seconds": 1.0, "skip": False}]},
+        )
+        assert r2.status_code == 200
+        v2 = r2.json()["plan_version"]
+        assert v2 == v1 + 1
+    finally:
+        _cleanup(album_id)
+
+
+def test_plan_post_with_stale_expected_version_returns_409():
+    """When the client sends an out-of-date `expected_version`, the server
+    rejects with 409 and surfaces the current plan + version so the
+    client can offer a "reload?" path. The user's stale local edits
+    must NOT be persisted — assert the manifest's tracks are unchanged."""
+    album_id = "tver003"
+    _seed_album(album_id)
+    try:
+        # Save once to bump the version off the default 0.
+        r1 = _client().post(
+            f"/api/album/{album_id}/plan",
+            json={"tracks": [{"title": "first", "duration_seconds": 1.0, "skip": False}]},
+        )
+        assert r1.status_code == 200
+        current_version = r1.json()["plan_version"]
+        # Tab B writes after tab A's snapshot — bumps to current_version + 1.
+        r2 = _client().post(
+            f"/api/album/{album_id}/plan",
+            json={"tracks": [{"title": "tabB", "duration_seconds": 2.0, "skip": False}]},
+        )
+        assert r2.status_code == 200
+        latest_version = r2.json()["plan_version"]
+        # Tab A's debounced save fires with the STALE expected_version.
+        r3 = _client().post(
+            f"/api/album/{album_id}/plan",
+            json={
+                "tracks": [{"title": "tabA-stale", "duration_seconds": 3.0, "skip": False}],
+                "expected_version": current_version,  # tab A's old snapshot
+            },
+        )
+        assert r3.status_code == 409
+        body = r3.json()
+        # 409 body must surface the server's current state so the client
+        # can repaint without a second round-trip.
+        assert body["plan_version"] == latest_version
+        assert body["plan"]["tracks"][0]["title"] == "tabB"
+        # Tab A's stale write was REJECTED — the manifest still has tab B's
+        # edits, not "tabA-stale". This is the whole point of the feature.
+        plan_after = _read_plan(album_id)
+        assert plan_after["tracks"][0]["title"] == "tabB"
+    finally:
+        _cleanup(album_id)
+
+
+def test_plan_post_with_matching_expected_version_succeeds():
+    """The happy path: client sends the version it loaded, server matches
+    it, write goes through, response carries the bumped version."""
+    album_id = "tver004"
+    _seed_album(album_id)
+    try:
+        r1 = _client().post(
+            f"/api/album/{album_id}/plan",
+            json={"tracks": [{"title": "x", "duration_seconds": 1.0, "skip": False}]},
+        )
+        v1 = r1.json()["plan_version"]
+        r2 = _client().post(
+            f"/api/album/{album_id}/plan",
+            json={
+                "tracks": [{"title": "y", "duration_seconds": 1.0, "skip": False}],
+                "expected_version": v1,
+            },
+        )
+        assert r2.status_code == 200
+        assert r2.json()["plan_version"] == v1 + 1
+        plan = _read_plan(album_id)
+        assert plan["tracks"][0]["title"] == "y"
+    finally:
+        _cleanup(album_id)
+
+
+def test_plan_post_without_expected_version_writes_unconditionally():
+    """Backward-compat: callers that don't track plan_version (legacy
+    clients, integration scripts, the split route's own writes) keep
+    working — the omitted field means "write blind", same as before
+    this feature landed."""
+    album_id = "tver005"
+    _seed_album(album_id)
+    try:
+        # Bump the version a few times so it's clearly non-zero.
+        for title in ("a", "b", "c"):
+            _client().post(
+                f"/api/album/{album_id}/plan",
+                json={"tracks": [{"title": title, "duration_seconds": 1.0, "skip": False}]},
+            )
+        # No expected_version → must succeed regardless of the server's
+        # current value.
+        r = _client().post(
+            f"/api/album/{album_id}/plan",
+            json={"tracks": [{"title": "unconditional", "duration_seconds": 5.0, "skip": False}]},
+        )
+        assert r.status_code == 200
+        plan = _read_plan(album_id)
+        assert plan["tracks"][0]["title"] == "unconditional"
+    finally:
+        _cleanup(album_id)
+
+
+def test_plan_post_with_expected_version_zero_matches_legacy_albums():
+    """A pre-existing album with no `plan_version` in its manifest reads
+    back as 0. A client that loaded it (and got 0 from /tracks) should
+    be able to save with expected_version=0 without a 409. This guards
+    the migration path for albums that existed before the feature
+    landed."""
+    album_id = "tver006"
+    # Seed an album with a manifest that pre-dates the plan_version field.
+    from state import IN_PROGRESS_DIR
+    d = IN_PROGRESS_DIR / album_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "side1.flac").write_bytes(b"")
+    legacy_manifest = {
+        "schema_version": 2,
+        "tags": {"artist": "X", "album": "Y"},
+        "sides": ["side1.flac"],
+        "cover": None,
+        "plan": None,
+        "music_relpath": None,
+        # No plan_version key at all — simulates a pre-feature album.
+    }
+    (d / "album.json").write_text(json.dumps(legacy_manifest))
+    try:
+        r = _client().post(
+            f"/api/album/{album_id}/plan",
+            json={
+                "tracks": [{"title": "legacy-compat", "duration_seconds": 2.0, "skip": False}],
+                "expected_version": 0,
+            },
+        )
+        assert r.status_code == 200
+        assert r.json()["plan_version"] == 1
+    finally:
+        _cleanup(album_id)
+
+
+def test_tracks_endpoint_returns_plan_version():
+    """The /tracks endpoint seeds the editor's planVersion at load time,
+    so it has to surface the current value."""
+    album_id = "tver007"
+    _seed_album(album_id, plan={
+        "tracks": [{"title": "saved", "duration_seconds": 10.0, "skip": False}],
+    })
+    try:
+        # Bump the version via a plan POST so it's non-zero.
+        _client().post(
+            f"/api/album/{album_id}/plan",
+            json={"tracks": [{"title": "saved", "duration_seconds": 10.0, "skip": False}]},
+        )
+        r = _client().get(f"/api/album/{album_id}/tracks")
+        assert r.status_code == 200
+        body = r.json()
+        assert "plan_version" in body
+        assert isinstance(body["plan_version"], int)
+        assert body["plan_version"] >= 1
+    finally:
+        _cleanup(album_id)
+
+
+def test_tracks_endpoint_returns_zero_version_for_empty_plan():
+    """Albums with no plan yet still return plan_version=0 from /tracks
+    so the editor's planVersion init has a sensible default."""
+    album_id = "tver008"
+    _seed_album(album_id, plan=None)
+    try:
+        r = _client().get(f"/api/album/{album_id}/tracks")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["plan"] is None
+        assert body["plan_version"] == 0
+    finally:
+        _cleanup(album_id)
