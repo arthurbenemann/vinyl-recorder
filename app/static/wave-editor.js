@@ -110,6 +110,18 @@ function _persistDraft() {
 async function _savePlanNow() {
   _planSaveTimer = null;
   if (!we.albumId) return;
+  // In-flight coalesce. The 500 ms debounce in _persistDraft already
+  // collapses bursts of edits, but a slow POST can outlive its own
+  // debounce window — a follow-up flurry would fire a second fetch
+  // while the first is still in transit, and two concurrent
+  // write_manifest calls on the server race with no file lock. Reschedule
+  // instead; _buildPlan reads from we.* at call time, so the retry picks
+  // up the latest edits including anything that arrived during the
+  // outstanding POST. Mirrors the we.loaded race-guard pattern below.
+  if (_planSaveInFlight) {
+    _planSaveTimer = setTimeout(_savePlanNow, 200);
+    return;
+  }
   // Open-time race guard. openWaveEditor seeds the editor with empty
   // defaults and then kicks off weLoadExistingSplit() to fill them in
   // from album.json. drawAll() runs in between, which calls _persistDraft()
@@ -151,6 +163,14 @@ async function _savePlanNow() {
   if (!Number.isNaN(bitDepth))   planBody.bit_depth     = bitDepth;
   if (!Number.isNaN(sampleRate)) planBody.sample_rate   = sampleRate;
   if (outputFormat)              planBody.output_format = outputFormat;
+  // Clear dirty BEFORE awaiting the fetch. The body we're about to POST
+  // is already a snapshot of we.* at this point, so we've "consumed" the
+  // current dirt. Any edit that lands while the fetch is in flight will
+  // (re-)set we.dirty = true via its callsite, and the coalesce guard at
+  // the top reschedules the next save instead of starting a second POST
+  // — so this never loses an edit. On a network failure we restore the
+  // flag in catch so the next interaction still retries.
+  we.dirty = false;
   _showSavingIndicator();
   try {
     _planSaveInFlight = fetch(`/api/album/${albumId}/plan`, {
@@ -164,15 +184,19 @@ async function _savePlanNow() {
       // edits — surface a toast with a Reload action so the user can
       // pull the latest server state when they're ready.
       we.planConflict = true;
-      // dirty stays true so the user can still manually reload + retry.
+      // PR-31 cleared `we.dirty` pre-fetch (so concurrent edits during
+      // the in-flight save flip it back to true). On a 409 the server
+      // rejected our snapshot, so re-arm dirty: a future user gesture
+      // (e.g. the Reload button) clears the conflict latch and the
+      // next save retries with the rehydrated server state.
+      we.dirty = true;
       _showPlanConflictToast(albumId);
       return;
     }
     if (r && r.ok) {
-      // Clear dirty BEFORE updating the indicator — if the user edits again
-      // during the render, the next debounce cycle finds dirty=true and
-      // saves again.
-      we.dirty = false;
+      // we.dirty was already cleared pre-fetch (see comment above the
+      // `try` block); read the new plan_version from the response and
+      // hand off to the saved-pill ticker.
       try {
         const body = await r.json();
         if (body && typeof body.plan_version === 'number') {
@@ -180,11 +204,16 @@ async function _savePlanNow() {
         }
       } catch (e) { /* legacy server without version — leave planVersion */ }
       _markSavedNow();
+    } else {
+      // Non-OK response (server rejected the plan). Mark dirty again so
+      // the next interaction re-attempts and the user isn't stranded on
+      // a stale view of the saved state.
+      we.dirty = true;
     }
   } catch (e) {
-    // Network blip — the next change will retry. Silent on purpose; a
-    // toast for every transient save failure would spam the user. Leave
-    // dirty=true so the next interaction re-attempts.
+    // Network blip — re-arm dirty so the next change retries. Silent on
+    // purpose; a toast for every transient save failure would spam.
+    if (we.albumId === albumId) we.dirty = true;
   } finally {
     _planSaveInFlight = null;
     _hideSavingIndicator();
@@ -303,6 +332,13 @@ async function _flushPlanSave() {
   if (_planSaveTimer) {
     clearTimeout(_planSaveTimer);
     _planSaveTimer = null;
+    // If a save is still in flight, wait it out first so the coalesce
+    // guard in _savePlanNow doesn't bounce us back onto setTimeout — we
+    // need the flush to actually post the latest state before the modal
+    // tears down.
+    if (_planSaveInFlight) {
+      try { await _planSaveInFlight; } catch (e) {}
+    }
     await _savePlanNow();
   } else if (_planSaveInFlight) {
     try { await _planSaveInFlight; } catch (e) {}
