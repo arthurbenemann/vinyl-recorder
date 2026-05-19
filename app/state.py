@@ -422,6 +422,12 @@ class PlanUpdateRequest(BaseModel):
     bit_depth:        Optional[int]    = None
     sample_rate:      Optional[int]    = None
     output_format:    Optional[str]    = None
+    # Optimistic-concurrency token. When supplied, the server compares it
+    # against the manifest's current `plan_version` and returns 409 on
+    # mismatch so two tabs can't silently clobber each other. Omit it to
+    # write unconditionally — keeps callers that don't track versions
+    # backward-compatible.
+    expected_version: Optional[int]    = None
 
 
 class BulkDelete(BaseModel):

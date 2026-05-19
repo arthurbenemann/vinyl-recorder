@@ -2,7 +2,6 @@
 import asyncio
 import json
 import math
-import queue
 import re
 import signal
 import subprocess
@@ -30,6 +29,16 @@ from services.eventbus import bus
 from services.ffmpeg import (
     LOW_SPACE_GB, disk_free_gb, disk_space_error, find_side, list_recordings,
     safe_name,
+)
+# Process-lifecycle helpers for the proxy ffmpeg children live in their own
+# service module so the route file stays focused on HTTP glue. The
+# background reaper thread is spawned at recording_process import time.
+# `_graceful_close` is re-exported under its old underscore name so any
+# external monkey-patching (in tests, ops scripts) keeps working.
+from services.recording_process import (
+    graceful_close as _graceful_close,  # noqa: F401 — public re-export
+    reap as _reap,
+    teardown_proxy as _teardown_proxy,
 )
 from state import (
     BulkDelete, DEFAULT_AUTO_STOP_ON_SILENCE, DEFAULT_SILENCE_SECONDS,
@@ -98,30 +107,6 @@ def _update_smoothed_ms(prev_ms: float, chunk_ms: float,
 
 
 router = APIRouter()
-
-
-def _graceful_close(proc, timeout: float = 2.0) -> None:
-    """Best-effort graceful teardown of a Popen child: close stdin so the
-    child sees EOF (lets ffmpeg flush its trailers), terminate, wait up
-    to `timeout`, and only kill if wait timed out / failed. Each step is
-    individually exception-safe so a half-dead proc (already closed pipe,
-    already exited) never raises out."""
-    try:
-        if proc.stdin:
-            proc.stdin.close()
-    except Exception:
-        pass
-    try:
-        proc.terminate()
-    except Exception:
-        pass
-    try:
-        proc.wait(timeout=timeout)
-    except Exception:
-        try:
-            proc.kill()
-        except Exception:
-            pass
 
 
 @router.get("/api/stream-proxy")
@@ -223,59 +208,6 @@ async def stream_proxy():
     return StreamingResponse(generate(), media_type="audio/mpeg")
 
 
-def _teardown_proxy(proc: subprocess.Popen, sub_id: str) -> None:
-    """Tear down a stream-proxy ffmpeg + its upstream subscription.
-
-    Order matters and is enforced here by code structure (see
-    test_proxy_teardown_kills_before_unsubscribe in
-    tests/unit/test_upstream_unit.py): the subscriber's worker thread
-    may be blocked inside `proc.stdin.write/flush` waiting for ffmpeg
-    to drain its stdin pipe, holding the BufferedWriter `_write_lock`.
-    If we went unsubscribe → `_on_close` → `proc.stdin.close` from this
-    HTTP worker thread, close would try to acquire the same `_write_lock`
-    and deadlock. Killing ffmpeg first breaks the worker out of its
-    blocked write with BrokenPipeError, releasing `_write_lock`; the
-    subsequent unsubscribe + close then run cleanly."""
-    if proc.poll() is None:
-        try: proc.kill()
-        except Exception: pass
-    upstream.unsubscribe(sub_id)
-    _reap(proc)
-
-
-# Background reaper for proxy ffmpegs. A single dedicated thread waits on
-# whatever procs the request handlers hand off, so HTTP workers never block
-# on cleanup. Daemon -> dies with the process.
-_reap_q: "queue.Queue[subprocess.Popen]" = queue.Queue()
-
-
-def _reap(proc: subprocess.Popen) -> None:
-    """Schedule `proc` for asynchronous cleanup and waitpid."""
-    try:
-        _reap_q.put_nowait(proc)
-    except queue.Full:
-        # Should never happen — queue is unbounded — but if it does, do an
-        # in-line best-effort kill rather than leak the process.
-        try: proc.kill()
-        except Exception: pass
-
-
-def _reaper_loop() -> None:
-    while True:
-        proc = _reap_q.get()
-        if proc.poll() is None:
-            _graceful_close(proc, timeout=2.0)
-            # `_graceful_close` does not wait after kill; do one more wait
-            # here so a kill-9'd child gets reaped instead of lingering as
-            # a zombie until process exit.
-            if proc.poll() is None:
-                try: proc.wait(timeout=2)
-                except Exception: pass
-
-
-threading.Thread(target=_reaper_loop, daemon=True, name="proxy-reaper").start()
-
-
 @router.post("/api/test-stream")
 async def test_stream(body: dict):
     """Probe an upstream URL with ffprobe and surface its stream parameters.
@@ -283,10 +215,14 @@ async def test_stream(body: dict):
     underlying message in `detail` — clients rely on HTTP status to branch."""
     url = body.get("stream_url", "")
     try:
-        result = subprocess.run(
+        # Offload to a worker thread so a slow/unreachable URL can't block
+        # the asyncio loop (and every other request on this worker) for up
+        # to 10 s. Matches the pattern used elsewhere in this module.
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["ffprobe", "-v", "error", "-print_format", "json",
              "-show_streams", "-i", url],
-            capture_output=True, text=True, timeout=10
+            capture_output=True, text=True, timeout=10,
         )
         if result.returncode != 0:
             raise HTTPException(
@@ -600,6 +536,12 @@ def _finalize_session(session_id: str, reason: str) -> dict:
         # makes ffmpeg flush + exit on its own when we then SIGINT it (or
         # naturally if it already finished from `-t duration`).
         upstream.unsubscribe(f"rec-{session_id}")
+        # Snapshot the pause state BEFORE clearing it — the `end_time`
+        # selection below depends on whether we stopped while paused, and
+        # we still need to clear the live flags now so any in-flight sink
+        # callback observes a non-paused session before we tear down.
+        was_paused = s.paused
+        pause_started_at = s.pause_started
         if s.paused:
             s.paused = False
             s.sess_state["paused"] = False
@@ -618,7 +560,7 @@ def _finalize_session(session_id: str, reason: str) -> dict:
         # If we stopped while paused, start_time hasn't been advanced for the
         # current pause window — only resume does that. Use pause_started so the
         # reported elapsed matches the FLAC duration (un-paused recording time).
-        end_time = s.pause_started if s.paused else time.monotonic()
+        end_time = pause_started_at if was_paused else time.monotonic()
         elapsed = int(end_time - s.start_time)
         fname = Path(s.outfile).name
         fsize = round(Path(s.outfile).stat().st_size / 1e6, 1) if Path(s.outfile).exists() else 0

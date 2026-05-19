@@ -284,7 +284,12 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
 
 def _persist_split_plan(req, relpath: str) -> None:
     """Write the resolved plan + the new music_relpath back into album.json
-    so the wave-editor can re-load and re-edit later."""
+    so the wave-editor can re-load and re-edit later.
+
+    Bumps `plan_version` for consistency with the plan-update route's
+    optimistic-concurrency contract — a successful split is a plan write
+    too, so any wave-editor tab still holding a stale plan_version will
+    correctly detect a conflict on its next debounced save."""
     plan = {
         "tracks": [
             {"title": t.title,
@@ -302,6 +307,7 @@ def _persist_split_plan(req, relpath: str) -> None:
     manifest = albums_fs.read_manifest(req.album_id)
     manifest["plan"] = plan
     manifest["music_relpath"] = relpath
+    manifest["plan_version"] = int(manifest.get("plan_version") or 0) + 1
     albums_fs.write_manifest(req.album_id, manifest)
 
 
