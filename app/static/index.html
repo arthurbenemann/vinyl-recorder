@@ -485,7 +485,11 @@
             <div class="field"><label>Conductor</label><input id="t-conductor"/></div>
           </div>
         </div>
-        <div class="field"><label>Tracks (one per line)</label><textarea id="t-tracks" rows="6"></textarea></div>
+        <!-- Tracklist is sourced verbatim from the picked candidate; the
+             textarea is read-only so users don't think edits stick. To
+             change a track title or duration, pick a different release
+             on the right. -->
+        <div class="field"><label>Tracks (from picked release)</label><textarea id="t-tracks" rows="6" readonly tabindex="-1" aria-readonly="true"></textarea></div>
         <div class="action-row">
           <button class="btn primary" id="tag-apply-btn" onclick="applyTagPanel()">apply tags</button>
           <span class="unsaved-badge" id="tag-unsaved-badge" hidden title="Form has unsaved changes">unsaved</span>

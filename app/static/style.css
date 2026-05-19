@@ -336,6 +336,11 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 }
 .field input:focus, .field textarea:focus { border-color: rgba(255,255,255,0.25); }
 .field textarea { resize: vertical; min-height: 80px; line-height: 1.7; }
+/* Read-only field (currently just the tag panel's tracklist): looks
+   like the other inputs but the cursor + focus ring make it clear the
+   user can't type into it. Selecting + scrolling still work. */
+.field textarea[readonly], .field input[readonly] { background: var(--surface2); color: var(--muted); cursor: default; }
+.field textarea[readonly]:focus, .field input[readonly]:focus { border-color: var(--border); caret-color: transparent; }
 
 /* Action buttons */
 .action-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
