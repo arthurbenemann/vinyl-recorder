@@ -342,12 +342,13 @@ def test_disconnect_when_not_connected_is_silent():
 
 # ── Regression: stream-proxy teardown order ──────────────────────────────
 def test_proxy_teardown_kills_before_unsubscribe(monkeypatch):
-    """`_teardown_proxy` MUST kill ffmpeg first, then unsubscribe. Killing
+    """`teardown_proxy` MUST kill ffmpeg first, then unsubscribe. Killing
     second can deadlock against the subscriber's worker thread holding the
     BufferedWriter `_write_lock` while blocked in `stdin.write`. Pin the
     order with a sentinel so a future refactor that swaps these calls
     fails the test."""
-    from routes import recordings
+    from services import recording_process
+    from state import upstream as upstream_state
 
     calls: list[str] = []
 
@@ -366,11 +367,11 @@ def test_proxy_teardown_kills_before_unsubscribe(monkeypatch):
     def fake_reap(p):
         calls.append("reap")
 
-    monkeypatch.setattr(recordings.upstream, "unsubscribe", fake_unsubscribe)
-    monkeypatch.setattr(recordings, "_reap", fake_reap)
+    monkeypatch.setattr(upstream_state, "unsubscribe", fake_unsubscribe)
+    monkeypatch.setattr(recording_process, "reap", fake_reap)
 
     p = _FakeProc()
-    recordings._teardown_proxy(p, "proxy-abc")
+    recording_process.teardown_proxy(p, "proxy-abc")
     assert calls == ["kill", "unsubscribe:proxy-abc", "reap"], (
         f"teardown order wrong — kill must precede unsubscribe; got {calls}"
     )
@@ -380,7 +381,8 @@ def test_proxy_teardown_skips_kill_if_already_dead(monkeypatch):
     """If ffmpeg has already exited (e.g. EOF on its stdout flushed the
     generator), don't bother sending another signal — `proc.poll()` reports
     a returncode and we skip straight to unsubscribe + reap."""
-    from routes import recordings
+    from services import recording_process
+    from state import upstream as upstream_state
 
     calls: list[str] = []
 
@@ -390,11 +392,12 @@ def test_proxy_teardown_skips_kill_if_already_dead(monkeypatch):
         def kill(self):
             calls.append("kill")
 
-    monkeypatch.setattr(recordings.upstream, "unsubscribe",
+    monkeypatch.setattr(upstream_state, "unsubscribe",
                         lambda n: calls.append(f"unsub:{n}"))
-    monkeypatch.setattr(recordings, "_reap", lambda p: calls.append("reap"))
+    monkeypatch.setattr(recording_process, "reap",
+                        lambda p: calls.append("reap"))
 
-    recordings._teardown_proxy(_FakeProc(), "proxy-x")
+    recording_process.teardown_proxy(_FakeProc(), "proxy-x")
     assert "kill" not in calls
     assert calls == ["unsub:proxy-x", "reap"]
 

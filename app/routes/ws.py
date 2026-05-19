@@ -20,6 +20,7 @@ Everything is JSON. No auth — same scope as the rest of the app.
 """
 import asyncio
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from services.eventbus import bus
 from state import sessions as session_mgr, upstream
 
 router = APIRouter()
+_log = logging.getLogger(__name__)
 
 
 def _record_snapshot() -> dict:
@@ -149,9 +151,27 @@ async def ws(ws: WebSocket):
             )
             for t in pending:
                 t.cancel()
-                # Suppress task-cancellation noise from the other coroutine.
-                try: await t
-                except (asyncio.CancelledError, Exception): pass
+                # Awaiting the just-cancelled task is normal cleanup —
+                # CancelledError is the *expected* outcome, so swallow it
+                # silently. Any other Exception escaping here is a real
+                # bug in `_send_loop` / `_recv_loop` (or the underlying
+                # socket layer); log it at warning level so it doesn't
+                # silently disappear, then let the loop fall through to
+                # the `finally` block which releases the upstream hold
+                # and unsubscribes from the bus.
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+                except WebSocketDisconnect:
+                    # Cancelling the recv loop after the peer hung up
+                    # races with WebSocketDisconnect; benign.
+                    pass
+                except Exception:
+                    _log.warning(
+                        "ws task raised during cancellation cleanup",
+                        exc_info=True,
+                    )
             for t in done:
                 # Surface unexpected exceptions only if they're not the
                 # benign "client closed" / cancellation paths.
