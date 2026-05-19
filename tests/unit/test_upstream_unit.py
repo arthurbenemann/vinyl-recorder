@@ -479,3 +479,88 @@ def test_finalize_session_is_idempotent_under_concurrent_calls(monkeypatch):
         sessions.remove(sid)
         try: os.unlink(outfile)
         except OSError: pass
+
+
+# ── Regression: stop-while-paused reports recorded time, not wallclock ──
+def test_finalize_session_paused_reports_recorded_time_not_wallclock(monkeypatch):
+    """Stopping a paused session must report the un-paused recording
+    time, not the wallclock since start.
+
+    Pre-fix, `_finalize_session` cleared `s.paused` *before* the
+    `end_time = s.pause_started if s.paused else time.monotonic()`
+    selection, so the conditional always took the `time.monotonic()`
+    branch — meaning a user who recorded 3 s then paused for 60 s
+    before hitting Stop saw the toast / log / bus event report ~63 s
+    elapsed even though the FLAC on disk is the correct 3 s.
+
+    Pin: the recording started 3 s before the pause, the test clock
+    has since advanced 60 s past the pause point, and the reported
+    elapsed must be 3 — not 63."""
+    import os
+    from routes import recordings as rec
+    from state import sessions, Session
+
+    class _DeadProc:
+        returncode = 0
+        def poll(self): return 0
+        def send_signal(self, sig): pass
+        def terminate(self): pass
+        def wait(self, timeout=None): return 0
+
+    class _FH:
+        def close(self): pass
+
+    # Capture the bus event so we can verify the user-facing elapsed too.
+    published: list[dict] = []
+    monkeypatch.setattr(rec.upstream, "unsubscribe", lambda name: None)
+    monkeypatch.setattr(rec.bus, "log", lambda *a, **kw: None)
+    monkeypatch.setattr(rec.bus, "publish", lambda payload: published.append(payload))
+
+    sid = "paused-stop-sid"
+    outfile = "/tmp/__paused_stop_test_finalize.flac"
+    with open(outfile, "wb") as f:
+        f.write(b"x" * 1024)
+
+    # Build a session that recorded 3 s, then paused. We use a synthetic
+    # clock base so the assertions don't depend on real wall-time drift.
+    t_start = 1000.0       # monotonic at recording start
+    t_pause = t_start + 3  # 3 s of recorded audio, then user pressed pause
+    t_stop  = t_pause + 60 # user finally hit Stop 60 s later
+
+    # Patch monotonic so the `end_time = ... time.monotonic()` branch (the
+    # buggy one) would report ~63 s if it were incorrectly chosen.
+    monkeypatch.setattr(rec.time, "monotonic", lambda: t_stop)
+
+    sessions.insert(Session(
+        sid=sid,
+        proc=_DeadProc(),
+        outfile=outfile,
+        log_fh=_FH(),
+        start_time=t_start,
+        duration=0,
+        meta={},
+        filename="x.flac",
+        sess_state={"paused": True},
+        finalize_lock=threading.Lock(),
+        finalized=False,
+        paused=True,
+        pause_started=t_pause,
+    ))
+
+    try:
+        result = rec._finalize_session(sid, "user")
+        # 3 s of recorded audio — NOT 63 s of wallclock-since-start.
+        assert result["elapsed"] == 3, (
+            f"expected ~3 s recorded time, got {result['elapsed']} "
+            "(bug: paused-time leaked into reported elapsed)"
+        )
+        assert result["filename"] == os.path.basename(outfile)
+        # The bus event the UI subscribes to must carry the same elapsed.
+        stop_events = [e for e in published
+                       if e.get("type") == "record" and e.get("event") == "stop"]
+        assert stop_events, "no stop event was published"
+        assert stop_events[-1]["elapsed"] == 3
+    finally:
+        sessions.remove(sid)
+        try: os.unlink(outfile)
+        except OSError: pass
