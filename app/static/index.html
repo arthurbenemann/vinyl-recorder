@@ -31,13 +31,13 @@
       </div>
     </div>
     <div class="health-panel" id="health-panel" hidden>
-      <div class="health-row"><span class="health-label">level</span><span id="hp-level">—</span></div>
-      <div class="health-row"><span class="health-label">bytes/sec</span><span id="hp-bps">—</span></div>
-      <div class="health-row"><span class="health-label">expected</span><span id="hp-expected">—</span></div>
-      <div class="health-row"><span class="health-label">gaps (5 s)</span><span id="hp-gaps">0</span></div>
-      <div class="health-row"><span class="health-label">total gaps</span><span id="hp-gap-total">0</span></div>
-      <div class="health-row"><span class="health-label">since last frame</span><span id="hp-since">—</span></div>
-      <div class="health-row"><span class="health-label">reconnects</span><span id="hp-reconnects">0</span></div>
+      <div class="health-row" title="Recent peak audio level (dBFS). 0 = clipping; -6 to -12 dBFS is a healthy target."><span class="health-label">level</span><span id="hp-level">—</span></div>
+      <div class="health-row" title="Incoming data rate from the upstream stream (bytes per second)."><span class="health-label">bytes/sec</span><span id="hp-bps">—</span></div>
+      <div class="health-row" title="Expected bytes/sec for the current upstream format (sample rate × channels × bytes-per-sample). Large deviations from this baseline imply network loss or upstream re-encoding."><span class="health-label">expected</span><span id="hp-expected">—</span></div>
+      <div class="health-row" title="Audio dropouts detected in the last 5 seconds. A non-zero value is usually a network or upstream issue."><span class="health-label">gaps (5 s)</span><span id="hp-gaps">0</span></div>
+      <div class="health-row" title="Cumulative dropout count since this upstream session connected."><span class="health-label">total gaps</span><span id="hp-gap-total">0</span></div>
+      <div class="health-row" title="Time elapsed since the most recent audio frame arrived. Should stay near 0; rising values mean the stream has stalled."><span class="health-label">since last frame</span><span id="hp-since">—</span></div>
+      <div class="health-row" title="How many times the upstream stream has reconnected (been re-established) since this session started."><span class="health-label">reconnects</span><span id="hp-reconnects">0</span></div>
     </div>
   </div>
 </div>
@@ -70,18 +70,18 @@
           <span class="vu-label">L</span>
           <div class="vu-track">
             <div class="vu-mask" id="mask-L" style="--vu-fill:100%"></div>
-            <div class="vu-peak" id="peak-L" style="--vu-peak:0%"></div>
+            <div class="vu-peak" id="peak-L" style="--vu-peak:0%" title="Peak-hold indicator (left). Latches the highest recent sample for ~1.5 s, then decays."></div>
           </div>
-          <span class="vu-db" id="db-L">−∞</span>
+          <span class="vu-db" id="db-L" title="Current peak-hold level for the left channel in dBFS.">−∞</span>
           <button class="vu-clip" id="clip-L" hidden onclick="clearClip('L')" title="Click to clear — clipping detected on L" aria-live="polite" aria-label="Clipping detected on left channel — click to clear">CLIP</button>
         </div>
         <div class="vu-channel">
           <span class="vu-label">R</span>
           <div class="vu-track">
             <div class="vu-mask" id="mask-R" style="--vu-fill:100%"></div>
-            <div class="vu-peak" id="peak-R" style="--vu-peak:0%"></div>
+            <div class="vu-peak" id="peak-R" style="--vu-peak:0%" title="Peak-hold indicator (right). Latches the highest recent sample for ~1.5 s, then decays."></div>
           </div>
-          <span class="vu-db" id="db-R">−∞</span>
+          <span class="vu-db" id="db-R" title="Current peak-hold level for the right channel in dBFS.">−∞</span>
           <button class="vu-clip" id="clip-R" hidden onclick="clearClip('R')" title="Click to clear — clipping detected on R" aria-live="polite" aria-label="Clipping detected on right channel — click to clear">CLIP</button>
         </div>
       </div>
@@ -177,7 +177,7 @@
           <span class="grow"></span>
           <button class="btn-small" onclick="clearSelection()">clear</button>
           <button class="btn-small" id="combine-btn" onclick="openCombine()" disabled
-                  title="Select one or more sides to combine into an album">combine into album</button>
+                  title="Group the selected sides into one multi-side album. Tagging the single selection works the same way.">Combine sides into album</button>
           <button class="btn-small danger" onclick="bulkDelete()">delete selected</button>
         </div>
         <div class="job-bar" id="bulk-action-bar" hidden style="padding:6px 12px 8px">
@@ -297,7 +297,7 @@
     </div>
 
     <div class="we-toolbar">
-      <button class="play-btn" id="we-play" onclick="weTogglePlay()" title="Play / pause">▶</button>
+      <button class="play-btn" id="we-play" onclick="weTogglePlay()" title="Play / pause (Space)" aria-keyshortcuts="Space">▶</button>
       <span class="readout">
         <strong id="we-time">0:00</strong> / <span id="we-duration">—</span>
       </span>
@@ -394,7 +394,7 @@
           <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
           <div class="job-bar-text"><span class="job-bar-pct">0%</span></div>
         </div>
-        <button class="btn-small" id="we-measure-btn" onclick="weMeasure()">measure</button>
+        <button class="btn-small" id="we-measure-btn" onclick="weMeasure()" title="Scan the album audio to compute peak, noise floor, dynamic range, and effective bits.">measure</button>
       </div>
       <div class="we-process-row" style="flex-wrap:wrap">
         <label class="we-process-toggle">
@@ -433,10 +433,10 @@
     </div>
 
     <div class="action-row" style="margin-top:14px">
-      <button class="btn primary" id="we-go" onclick="weApplySplit()" disabled>apply split</button>
-      <button class="btn" onclick="weAddCutAtPlayhead()">+ add cut at playhead</button>
-      <button class="btn" onclick="weClearCuts()">clear cuts</button>
-      <button class="btn" onclick="closeWaveEditor()">cancel</button>
+      <button class="btn primary" id="we-go" onclick="weApplySplit()" disabled title="Apply split: render the cuts above into per-track files using the chosen output format and bit depth.">apply split</button>
+      <button class="btn" onclick="weAddCutAtPlayhead()" title="Insert a cut at the current playhead position. Same as shift+click on the waveform.">+ add cut at playhead</button>
+      <button class="btn" onclick="weClearCuts()" title="Remove every cut. The waveform reverts to a single track.">clear cuts</button>
+      <button class="btn" onclick="closeWaveEditor()" title="Close the split editor (Esc).">cancel</button>
     </div>
     <div class="job-bar" id="we-split-bar" hidden style="margin-top:10px">
       <div class="job-bar-text"><span class="job-bar-phase">working…</span><span class="job-bar-pct">0%</span></div>
@@ -567,12 +567,18 @@
 
 <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-<!-- peaks.js + wave-editor.js are still classic scripts that share script
-     scope; they must load before main.js so the `we` / weAudio bindings
-     they export to script-scope are defined. The inline bridge below
-     copies `we` onto `window` so main.js (an ES module — isolated from
-     script scope) can still drive `we.targetPeakDb` from /api/config. -->
+<!-- peaks.js + timeline-state.js + audio-manager.js + wave-editor.js are
+     classic scripts that share script scope; load order matters because
+     wave-editor.js's call sites bind to script-scope names declared in
+     the helpers. They must all run before main.js so the `we` / weAudio
+     bindings they export are defined. The inline bridge below copies
+     `we` onto `window` so main.js (an ES module — isolated from script
+     scope) can drive `we.targetPeakDb` from /api/config, and the
+     timeline-state helpers (which read `window.we` lazily) see the live
+     editor state. -->
 <script src="/static/peaks.js"></script>
+<script src="/static/modules/timeline-state.js"></script>
+<script src="/static/modules/audio-manager.js"></script>
 <script src="/static/wave-editor.js"></script>
 <script>window.we = we;</script>
 <script type="module" src="/static/main.js"></script>

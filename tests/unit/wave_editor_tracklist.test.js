@@ -1,4 +1,6 @@
-// Node-runnable unit tests for `_weCutsFromTracklist`.
+// Node-runnable unit tests for `_weCutsFromTracklist`, `_wePosLetter`,
+// `_weSideBounds`, and `_weCutGroupSpan`. All four now live in
+// `app/static/modules/timeline-state.js` (extracted from wave-editor.js).
 //
 // The Discogs-apply path turns a flat list of {title, duration, position}
 // rows into the editor's cuts/titles/skipped/positions arrays. When the
@@ -7,13 +9,17 @@
 // emits an end-of-side cut + a draggable side-start cut with a skipped
 // gap region between (runout + needle-drop dead time). This file pins
 // down both that path and the global-cumulative fallback.
+//
+// `_weSideBounds` / `_weCutGroupSpan` read editor state from
+// `window.we`; the helper `setWe(...)` here pokes a fresh state shape
+// into the sandbox window so each assertion is reproducible.
 'use strict';
 const fs   = require('fs');
 const path = require('path');
 const vm   = require('vm');
 
 const SRC = fs.readFileSync(
-  path.join(__dirname, '..', '..', 'app', 'static', 'wave-editor.js'),
+  path.join(__dirname, '..', '..', 'app', 'static', 'modules', 'timeline-state.js'),
   'utf8',
 );
 
@@ -29,19 +35,21 @@ const sandbox = {
   clearTimeout:     clearTimeout,
 };
 vm.createContext(sandbox);
-// `we` is a module-level const inside wave-editor.js — expose it so the
-// _weSideBounds cases can drive the editor's side/total state directly.
-vm.runInContext(SRC + '\nif (typeof window !== "undefined") window.__we = we;', sandbox);
+vm.runInContext(SRC, sandbox);
 
 const cutsFor    = win._weCutsFromTracklist;
 const letter     = win._wePosLetter;
 const sideBounds = win._weSideBounds;
 const groupSpan  = win._weCutGroupSpan;
-const weState    = win.__we;
 if (typeof cutsFor !== 'function' || typeof letter !== 'function'
-    || typeof sideBounds !== 'function' || typeof groupSpan !== 'function'
-    || !weState) {
+    || typeof sideBounds !== 'function' || typeof groupSpan !== 'function') {
   throw new Error('helpers not exposed on window');
+}
+
+// `_weSideBounds` and `_weCutGroupSpan` read `window.we` lazily. Set up a
+// fresh `we` object before each call so assertions stay reproducible.
+function setWe(patch) {
+  win.we = Object.assign({ sides: [], total: 0, cuts: [], skipped: [], positions: [] }, patch);
 }
 
 let passed = 0, failed = 0;
@@ -139,8 +147,7 @@ check('fallback: only one side letter present → global cumulative',
 
 // ── _weSideBounds — drag-clamp window for a cut at time `t`
 function bounds(sides, total, time) {
-  weState.sides = sides.map(d => ({ duration_seconds: d }));
-  weState.total = total;
+  setWe({ sides: sides.map(d => ({ duration_seconds: d })), total });
   return { b: sideBounds(time) };
 }
 check('sideBounds: 2 sides, cut inside side A',  bounds([28,30],58,24.08), { b:[0,28] });
@@ -154,9 +161,7 @@ check('sideBounds: last side hi clamps to total when durations under-sum',
 
 // ── _weCutGroupSpan — which cuts a shift+drag moves as a rigid group
 function span(sides, total, cuts, i) {
-  weState.sides = sides.map(d => ({ duration_seconds: d }));
-  weState.total = total;
-  weState.cuts  = cuts.slice();
+  setWe({ sides: sides.map(d => ({ duration_seconds: d })), total, cuts: cuts.slice() });
   const r = groupSpan(i);
   return { i: r.i, last: r.last, sideLo: r.sideLo, sideHi: r.sideHi };
 }
