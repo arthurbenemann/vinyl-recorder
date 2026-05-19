@@ -64,6 +64,12 @@ def _stub_manifest() -> dict:
         "sides":          [],
         "cover":          None,
         "plan":           None,
+        # Monotonic counter bumped on every plan-update POST. Lets two
+        # tabs editing the same album detect a stale write via the
+        # `expected_version` field on PlanUpdateRequest. Existing albums
+        # without the field read as 0 (see `read_manifest`'s setdefault
+        # backfill).
+        "plan_version":   0,
         "music_relpath":  None,
         "sources_purged": False,
     }

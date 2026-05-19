@@ -49,6 +49,7 @@ def test_read_manifest_returns_stub_when_missing(tmp_path, monkeypatch):
         "sides":          [],
         "cover":          None,
         "plan":           None,
+        "plan_version":   0,
         "music_relpath":  None,
         "sources_purged": False,
     }
