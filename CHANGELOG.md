@@ -1,3 +1,9 @@
+## v1.4.0 — 2026-05-19
+
+### Features
+- **docker:** Inherit host timezone for recording date tags (#18)
+- **search:** Generic search, Discogs paste, collection picker (#19)
+
 ## v1.3.0 — 2026-05-14
 
 ### Features
