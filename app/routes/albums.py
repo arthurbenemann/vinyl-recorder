@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from services import albums_fs, split_orchestrator
 from services.ffmpeg import (
@@ -159,9 +159,28 @@ async def update_plan(album_id: str, req: PlanUpdateRequest):
     page reload, or moving to a different browser. The shape lines up
     with what `/api/album/split` already writes after a successful run —
     `music_relpath` (the "split has been emitted" signal) is left
-    untouched here. Only the editor's intent gets written."""
+    untouched here. Only the editor's intent gets written.
+
+    Optimistic-concurrency: if `expected_version` is sent and doesn't
+    match the manifest's current `plan_version`, return 409 with the
+    server's current plan + version so the client can offer a "reload?"
+    path instead of silently clobbering the other tab's edits. When
+    `expected_version` is omitted, the write is unconditional (kept
+    backward-compatible for callers that don't track the version)."""
     _require_album(album_id)
     manifest = albums_fs.read_manifest(album_id)
+    current_version = int(manifest.get("plan_version") or 0)
+    if req.expected_version is not None and req.expected_version != current_version:
+        # Stale write — surface the server's current state so the client
+        # can show a "another tab saved newer edits — reload?" toast.
+        return JSONResponse(
+            status_code=409,
+            content={
+                "detail":       "plan version mismatch",
+                "plan":         manifest.get("plan"),
+                "plan_version": current_version,
+            },
+        )
     plan = dict(manifest.get("plan") or {})
     plan["tracks"] = [
         {"title": t.title, "duration_seconds": t.duration_seconds, "skip": t.skip}
@@ -174,8 +193,9 @@ async def update_plan(album_id: str, req: PlanUpdateRequest):
     if req.sample_rate      is not None: plan["sample_rate"]      = req.sample_rate
     if req.output_format    is not None: plan["output_format"]    = req.output_format
     manifest["plan"] = plan
+    manifest["plan_version"] = current_version + 1
     albums_fs.write_manifest(album_id, manifest)
-    return {"plan": plan}
+    return {"plan": plan, "plan_version": manifest["plan_version"]}
 
 
 @router.post("/api/album/{album_id}/sides/reorder")
@@ -429,9 +449,11 @@ async def album_tracks(album_id: str):
     `music/{music_relpath}/`. Used by the wave editor's re-edit reload
     path and by the Music section's "expand to show tracks" affordance."""
     manifest = _require_album(album_id)
+    plan_version = int(manifest.get("plan_version") or 0)
     plan = manifest.get("plan")
     if not plan:
-        return {"tracks": [], "music_relpath": None, "plan": None}
+        return {"tracks": [], "music_relpath": None, "plan": None,
+                "plan_version": plan_version}
     music_relpath = manifest.get("music_relpath") or ""
     music_dir = MUSIC_DIR / music_relpath if music_relpath else None
     kept = [t for t in plan.get("tracks", []) if not t.get("skip")]
@@ -471,6 +493,7 @@ async def album_tracks(album_id: str):
         "tracks":         tracks,
         "music_relpath":  music_relpath or None,
         "plan":           plan,
+        "plan_version":   plan_version,
     }
 
 

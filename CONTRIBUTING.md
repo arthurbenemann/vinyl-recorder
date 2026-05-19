@@ -111,6 +111,20 @@ sudo systemctl enable --now pi-recorder
 systemctl status pi-recorder
 ```
 
+### Environment variables
+
+`pi/server.py` reads its config from the environment at startup. Override
+any of these in `/etc/systemd/system/pi-recorder.service` via `Environment=`
+lines (or export them before launching the script manually):
+
+| Variable      | What it controls                                          | Default                                  |
+|---------------|-----------------------------------------------------------|------------------------------------------|
+| `PORT`        | HTTP port the service listens on                          | `8000`                                   |
+| `SAMPLE_RATE` | `arecord -r` capture rate, in Hz                          | `96000`                                  |
+| `BIT_DEPTH`   | Capture bit depth (16, 24, or 32 — anything else → S24_3LE) | `24`                                   |
+| `CARD`        | ALSA card index passed to `amixer -c`                     | `0`                                      |
+| `DEVICE`      | ALSA device string passed to `arecord -D`                 | `plughw:CARD=sndrpihifiberry,DEV=0`      |
+
 ### Verify
 
 For a regular install, just **connect** in the recorder UI — VU meters
