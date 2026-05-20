@@ -140,6 +140,16 @@ def page(page, request):  # noqa: F811 — intentional override of pytest-playwr
     page.on("pageerror", lambda e: pageerrors.append(e.message))
     page.context.tracing.start(screenshots=True, snapshots=True, sources=True)
 
+    # First-run onboarding overlay: pre-seed the `vr.onboarded` localStorage
+    # flag so the overlay does NOT auto-show over the page in tests that
+    # immediately drive UI behind it (combine, delete, rename, …). Without
+    # this, the z-index:100 backdrop would intercept their first click. The
+    # init script runs before any page script on every navigation in this
+    # context. test_onboarding.py opts out (it exercises the genuine first-
+    # run path) by matching on the module name, so it sees empty storage.
+    if "test_onboarding" not in request.node.nodeid:
+        page.add_init_script("try{localStorage.setItem('vr.onboarded','1')}catch(e){}")
+
     yield page
 
     failed = bool(getattr(request.node, "rep_call", None) and request.node.rep_call.failed)

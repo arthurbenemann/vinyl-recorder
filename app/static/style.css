@@ -507,6 +507,47 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .modal-title { font-family: var(--serif); font-size: 18px; }
 .modal-sub { font-size: 11px; color: var(--muted); margin-top: 2px; word-break: break-all; }
 
+/* First-run onboarding overlay — a compact, centered card over the dim
+   .modal-backdrop. Reuses the modal/header/btn primitives; only the steps
+   row + the entrance animation are bespoke. The card is narrow so the
+   three-stage flow reads as a single glance, not a wall of text. */
+.modal.onboarding-card { width: 560px; animation: onboardingIn 0.18s ease-out; }
+#onboarding-modal .modal-sub { word-break: normal; }
+.onboarding-steps {
+  list-style: none; margin: 4px 0 0; padding: 0;
+  display: flex; align-items: stretch; gap: 10px;
+}
+.onboarding-step {
+  flex: 1 1 0; min-width: 0;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 14px; background: var(--surface); border: 0.5px solid var(--border2); border-radius: 8px;
+}
+.onboarding-step-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--blue-bg); color: var(--blue);
+  font-family: var(--mono); font-size: 11px; font-weight: 500;
+}
+.onboarding-step-title { font-family: var(--serif); font-size: 15px; color: var(--text); }
+.onboarding-step-desc { font-size: 11px; color: var(--muted); line-height: 1.55; }
+.onboarding-arrow {
+  flex: 0 0 auto; align-self: center;
+  color: var(--muted); font-size: 16px; line-height: 1;
+}
+@keyframes onboardingIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* Narrow viewports: stack the stages vertically and rotate the arrows so
+   the Raw → Album → Music flow still reads top-to-bottom. */
+@media (max-width: 600px) {
+  .onboarding-steps { flex-direction: column; }
+  .onboarding-arrow { transform: rotate(90deg); }
+}
+/* Reduced-motion: drop the entrance animation. The global block below
+   already neutralizes animation-duration app-wide; this is an explicit,
+   self-documenting belt-and-braces for the overlay specifically. */
+@media (prefers-reduced-motion: reduce) {
+  .modal.onboarding-card { animation: none; }
+}
+
 /* Tag panel two-column layout */
 .tag-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 18px; align-items: start; }
 .tag-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
