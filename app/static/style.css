@@ -100,6 +100,13 @@ body { background: var(--bg); color: var(--text); font-family: var(--mono); font
 .dot.ok   { background: var(--green); }
 .dot.warn { background: #facc15; }
 .dot.bad  { background: #ef4444; }
+/* Recording paused — ffmpeg is still live, the session just isn't writing.
+   Slow amber blink reads as "halted but alive", distinct from rec's fast red
+   blink and from the gray "nothing configured" dot. */
+.dot.paused { background: #facc15; animation: blink 1.6s step-start infinite; }
+/* Configured but ffmpeg idle (demand-driven standby, or waking). Dim blue so
+   a frozen VU during standby doesn't read as a healthy green. */
+.dot.idle { background: var(--blue); opacity: 0.55; }
 @keyframes blink { 50% { opacity: 0; } }
 /* Stream-health affordance: a small chevron after "connected" signals the
    stats panel can be expanded. The connection dot itself doubles as the
@@ -1123,5 +1130,6 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
     transition-duration: 0.001ms !important;
   }
   .dot.rec { animation: none; }
+  .dot.paused { animation: none; }
   .vu-clip { animation: none; }
 }

@@ -174,6 +174,10 @@ export function applyUpstreamState({ connected, configured, fmt: f }) {
   // mixed-version client/server combo still works.
   const isConfigured = (typeof configured === 'boolean') ? configured : !!connected;
   state.upstreamConnected = isConfigured;
+  // `connected` is the server's `live` flag (ffmpeg actually running now).
+  // Old servers that only send one boolean collapse the two — fall back so
+  // the live state tracks configured rather than getting stuck false.
+  state.upstreamLive = (typeof connected === 'boolean') ? connected : isConfigured;
   const btn = document.getElementById('connect-btn');
   if (btn) btn.textContent = isConfigured ? 'disconnect' : 'connect';
   // Lock the URL input while configured — changing it has no effect until
@@ -181,7 +185,7 @@ export function applyUpstreamState({ connected, configured, fmt: f }) {
   const urlInput = document.getElementById('stream-url');
   if (urlInput) urlInput.disabled = isConfigured;
   if (!state.recording) {
-    document.getElementById('stext').textContent = isConfigured ? 'connected' : 'disconnected';
+    document.getElementById('stext').textContent = upstreamStatusText();
   }
   // Chevron is the click affordance for the health panel; only show it when
   // there's something to see (configured). The status-indicator itself is a
@@ -202,19 +206,40 @@ export function applyUpstreamState({ connected, configured, fmt: f }) {
   }
 }
 
-// Single source of truth for the connection-dot color. Recording wins (red
-// blink) over health; otherwise the dot reflects the latest health level
-// while connected, gray when disconnected.
+// Single source of truth for the non-recording status label. Kept here (not
+// inlined) so applyUpstreamState and recording.js's stop path agree on what
+// "configured but not live" reads as.
+export function upstreamStatusText() {
+  if (!state.upstreamConnected) return 'disconnected';
+  if (state.upstreamLive) return 'connected';
+  // Configured but ffmpeg idle (demand-driven teardown, or not yet spawned).
+  // A visible tab holds the stream so it's about to wake; a backgrounded tab
+  // stays idle until it foregrounds or a recording/playback acquires.
+  return (typeof document !== 'undefined' && document.visibilityState === 'visible')
+    ? 'waking…' : 'idle';
+}
+
+// Single source of truth for the connection-dot color. Recording wins over
+// health; a paused recording keeps a distinct color (the stream is still
+// live, just not writing); "configured but idle" gets its own standby color
+// so a frozen VU doesn't read as a healthy green.
 let lastHealthLevel = null; // 'green' | 'yellow' | 'red' | null
 export function updateSdot() {
   const sdot = document.getElementById('sdot');
   if (!sdot) return;
   if (state.recording) {
-    sdot.className = state.paused ? 'dot' : 'dot rec';
+    // Paused: ffmpeg is still running, the session just isn't writing to the
+    // FLAC. Show a distinct paused color rather than the same gray as
+    // "nothing configured" so a pause never reads as a dropped stream.
+    sdot.className = state.paused ? 'dot paused' : 'dot rec';
     return;
   }
-  if (!state.upstreamConnected) {
+  if (!state.upstreamConnected) {  // not configured
     sdot.className = 'dot';
+    return;
+  }
+  if (!state.upstreamLive) {  // configured but ffmpeg idle / waking
+    sdot.className = 'dot idle';
     return;
   }
   sdot.className = lastHealthLevel === 'yellow' ? 'dot warn'

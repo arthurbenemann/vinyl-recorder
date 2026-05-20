@@ -9,7 +9,7 @@ import { fmt } from './util.js';
 import { parseError } from './api.js';
 import { toast } from './log.js';
 import { state } from './state.js';
-import { updateSdot } from './upstream.js';
+import { updateSdot, upstreamStatusText } from './upstream.js';
 
 let recStartTimeMs = 0;        // local clock anchor for the elapsed timer
 let recDurationSec = 0;        // 0 = unlimited
@@ -214,7 +214,7 @@ export function applyRecordState({ active, paused: isPaused, sid, durationSec, e
     tickRecTimer();
   } else {
     if (recTimerInterval) { clearInterval(recTimerInterval); recTimerInterval = null; }
-    stext.textContent = state.upstreamConnected ? 'connected' : 'disconnected';
+    stext.textContent = upstreamStatusText();
     hint.textContent = 'click ● to start recording';
     prog.style.width = '0%';
     document.getElementById('timer').textContent = fmt(0);

@@ -15,6 +15,11 @@ export const state = {
   sessionId: null,
   paused: false,
   upstreamConnected: false,
+  // `upstreamConnected` mirrors the server's `configured` (URL set up).
+  // `upstreamLive` mirrors `connected`/`live` (ffmpeg subprocess actually
+  // running right now). They differ under the demand-driven lifecycle:
+  // configured stays true while ffmpeg idles between holders.
+  upstreamLive: false,
   // Local — each tab decides its own playback volume.
   muted: true,
   audioEl: null,
