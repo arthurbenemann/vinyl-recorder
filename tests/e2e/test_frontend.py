@@ -106,3 +106,33 @@ def test_record_then_stop_creates_library_row(stack, page):
         initial_rows + 1, timeout=15_000,
     )
     expect(page.locator("#stext")).to_have_text("connected", timeout=5_000)
+
+
+def test_paused_recording_keeps_a_live_dot_not_gray(stack, page):
+    """A paused recording must NOT paint the status dot the same gray as
+    "nothing configured" — ffmpeg is still live, the session just isn't
+    writing. Regression guard for the connection-state UX fix: pause should
+    flip the dot to `.dot.paused`, and the status text to "paused"."""
+    page.goto(RECORDER_URL)
+    expect(page.locator("#connect-btn")).to_have_text("disconnect", timeout=WS_SETTLE_MS)
+
+    page.locator("#recbtn").click()
+    expect(page.locator("#stext")).to_have_text("recording", timeout=5_000)
+    # Recording (not paused): the dot blinks red via `.dot.rec`.
+    expect(page.locator("#sdot")).to_have_class(re.compile(r"\brec\b"), timeout=5_000)
+
+    # Pause — the pause button reveals once recording is active.
+    page.locator("#pausebtn").click()
+    expect(page.locator("#stext")).to_have_text("paused", timeout=5_000)
+    # The fix: paused paints `.dot.paused`, NOT a bare `dot` (which would be
+    # indistinguishable from the disconnected state).
+    sdot = page.locator("#sdot")
+    expect(sdot).to_have_class(re.compile(r"\bpaused\b"), timeout=5_000)
+    klass = sdot.get_attribute("class") or ""
+    assert klass.strip() != "dot", "paused dot fell back to the gray disconnected style"
+
+    # Resume + stop so the session doesn't leak into later tests.
+    page.locator("#pausebtn").click()
+    expect(page.locator("#stext")).to_have_text("recording", timeout=5_000)
+    page.locator("#recbtn").click()
+    expect(page.locator("#stext")).not_to_have_text("recording", timeout=10_000)
