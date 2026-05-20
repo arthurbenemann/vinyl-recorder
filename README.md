@@ -29,6 +29,33 @@ once instead of per-side.*
 *Wave editor: auto-detected silences seed track splits; nudge the markers
 and label each track before exporting.*
 
+## How it works
+
+A vinyl rip moves through three stages, each its own row in the
+[library](images/library.png) and its own folder under `./output/`:
+
+1. **Raw** — capture each side. Hit **record** while connected to the
+   audio stream (the Pi rig below, or any HTTP source) to drop a side
+   into `raw/`. Already have side recordings? Copy `*.flac` straight into
+   `output/raw/` and they show up the same way.
+2. **In-progress** — [combine](images/album-combine.png) the sides of one
+   record into a single album, then tag it once (artist / album / year).
+   A MusicBrainz + Discogs lookup auto-fills the metadata and cover art so
+   you usually just confirm. The album lives in `in-progress/` until you
+   split it.
+3. **Music** — open the [wave editor](images/split-editor.png) to slice
+   the album into per-track FLACs (auto-detected silences seed the cuts),
+   then export to `music/<Artist>/<Album (Year)>/` — a tagged, Jellyfin-ready
+   tree. Drop an already-tagged album into that same layout and it's
+   auto-imported as a locked row, no editing required.
+
+```text
+output/
+├── raw/          # individual side recordings
+├── in-progress/  # combined + tagged albums, awaiting split
+└── music/        # finished per-track FLACs (<Artist>/<Album (Year)>/)
+```
+
 ## Run it
 
 Requires Docker or Podman with `compose` support.
