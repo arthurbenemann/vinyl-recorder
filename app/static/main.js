@@ -50,6 +50,9 @@ import {
 import {
   openPiDeploy, closePiDeploy, runPiDeploy,
 } from './modules/pi-deploy.js';
+import {
+  openOnboarding, closeOnboarding, initOnboarding,
+} from './modules/onboarding.js';
 import { wsConnect, sendVisibility } from './modules/ws.js';
 import { applyConfig } from './modules/config.js';
 import { parseError, withJobProgress, showBar, hideBar } from './modules/api.js';
@@ -143,6 +146,10 @@ window.openPiDeploy = openPiDeploy;
 window.closePiDeploy = closePiDeploy;
 window.runPiDeploy = runPiDeploy;
 
+// onboarding overlay
+window.openOnboarding = openOnboarding;
+window.closeOnboarding = closeOnboarding;
+
 // Globals consumed by wave-editor.js (a classic script that used to share
 // script-scope with the old monolithic main.js). The name on `window` is
 // the same name wave-editor.js reads. Only the names actually referenced
@@ -200,6 +207,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   _startLibPoll();
   setInterval(refreshDiskFree, 30000);
+
+  // First-run onboarding overlay. Fires after the main init sequence so
+  // the app behind it is already wired; a no-op once the `vr.onboarded`
+  // localStorage flag is set, so returning users never see it.
+  initOnboarding();
 
   // Polling pauses while the tab is hidden — a backgrounded laptop or
   // tabbed-out user shouldn't keep firing fetches. `visibilitychange` fires

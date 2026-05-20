@@ -27,6 +27,7 @@
     <div class="header-menu">
       <button class="header-menu-btn" id="header-menu-btn" onclick="toggleHeaderMenu(event)" aria-haspopup="true" aria-expanded="false" title="More">⋮</button>
       <div class="header-menu-pop" id="header-menu-pop" hidden role="menu">
+        <button class="header-menu-item" id="how-it-works-btn" role="menuitem" onclick="openOnboarding(); closeHeaderMenu()">how it works</button>
         <button class="header-menu-item" id="pi-deploy-btn" role="menuitem" onclick="openPiDeploy(); closeHeaderMenu()">deploy to pi…</button>
       </div>
     </div>
@@ -563,6 +564,51 @@
     </div>
 
     <div class="pi-deploy-log" id="pi-deploy-log" hidden></div>
+  </div>
+</div>
+
+<!-- First-run onboarding overlay — explains the Raw → Album → Music
+     pipeline. Auto-shown once (gated on the vr.onboarded localStorage
+     flag) and re-openable from the header ⋮ menu's "how it works" item. -->
+<div class="modal-backdrop" id="onboarding-modal" hidden role="dialog" aria-modal="true" aria-labelledby="onboarding-title" onclick="if(event.target===this)closeOnboarding()">
+  <div class="modal onboarding-card">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="onboarding-title">Welcome to vinyl-recorder</div>
+        <div class="modal-sub">Here's how vinyl-recorder turns sides into tagged tracks.</div>
+      </div>
+      <button class="btn-small" id="onboarding-close" onclick="closeOnboarding()" aria-label="Close">✕</button>
+    </div>
+
+    <ol class="onboarding-steps">
+      <li class="onboarding-step">
+        <span class="onboarding-step-num">1</span>
+        <div class="onboarding-step-body">
+          <div class="onboarding-step-title">Raw</div>
+          <div class="onboarding-step-desc">Capture or import each side as a recording.</div>
+        </div>
+      </li>
+      <li class="onboarding-arrow" aria-hidden="true">→</li>
+      <li class="onboarding-step">
+        <span class="onboarding-step-num">2</span>
+        <div class="onboarding-step-body">
+          <div class="onboarding-step-title">Album</div>
+          <div class="onboarding-step-desc">Combine the sides into one album, then tag it from MusicBrainz or Discogs.</div>
+        </div>
+      </li>
+      <li class="onboarding-arrow" aria-hidden="true">→</li>
+      <li class="onboarding-step">
+        <span class="onboarding-step-num">3</span>
+        <div class="onboarding-step-body">
+          <div class="onboarding-step-title">Music</div>
+          <div class="onboarding-step-desc">Split the album into tracks — finished, tagged FLACs.</div>
+        </div>
+      </li>
+    </ol>
+
+    <div class="action-row" style="margin-top:18px">
+      <button class="btn primary" id="onboarding-got-it" onclick="closeOnboarding()">Got it</button>
+    </div>
   </div>
 </div>
 
