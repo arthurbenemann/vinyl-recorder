@@ -139,7 +139,7 @@ export function refreshLibRender() {
   updateSortHeaders();
   if (!files.length) {
     const msg = total === 0
-      ? 'No recordings yet. Drop the needle!'
+      ? 'No recordings yet. Set a stream URL on the left and hit ● to capture a side — or drop FLAC files into <code>output/raw/</code>.'
       : 'No matches for current filter.';
     setTbodyIfChanged(tbody, `<tr><td colspan="9" class="empty-lib">${msg}</td></tr>`);
     updateBulkBar();

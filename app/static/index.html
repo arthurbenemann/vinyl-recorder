@@ -170,7 +170,8 @@
     <div id="lib-search-status" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
     <details class="lib-section" id="raw-section" open>
-      <summary class="label" style="margin-bottom:12px">Raw — <span id="lib-count">loading…</span></summary>
+      <summary class="label" style="margin-bottom:12px">① Raw — <span id="lib-count">loading…</span></summary>
+      <p class="section-subtitle">Individual sides, straight off the turntable. Select sides and <span class="emph">Combine</span> them into an album to tag and split. <span class="step-flow">① Raw → ② Album → ③ Music</span></p>
       <div style="background:var(--surface);border:0.5px solid var(--border);border-radius:8px">
         <div class="bulk-bar hidden" id="bulk-bar">
           <span><span id="bulk-count">0</span> selected</span>
@@ -204,14 +205,15 @@
             </tr>
           </thead>
           <tbody id="lib-tbody">
-            <tr><td colspan="10" class="empty-lib">No recordings yet.</td></tr>
+            <tr><td colspan="10" class="empty-lib">Loading…</td></tr>
           </tbody>
         </table>
       </div>
     </details>
 
     <details class="lib-section" id="in-progress-section" open>
-      <summary class="label" style="margin-bottom:12px">In-progress — <span id="in-progress-count">0</span></summary>
+      <summary class="label" style="margin-bottom:12px">② In-progress — <span id="in-progress-count">0</span></summary>
+      <p class="section-subtitle">Albums being prepared. <span class="emph">Tag</span> them, then <span class="emph">Split into tracks</span> to finish.</p>
       <div style="background:var(--surface);border:0.5px solid var(--border);border-radius:8px">
         <div class="bulk-bar hidden" id="albums-bulk-bar">
           <span><span id="albums-bulk-count">0</span> selected</span>
@@ -245,7 +247,8 @@
     </details>
 
     <details class="lib-section" id="music-section" open>
-      <summary class="label" style="margin-bottom:12px">Music — <span id="music-count">0</span></summary>
+      <summary class="label" style="margin-bottom:12px">③ Music — <span id="music-count">0</span></summary>
+      <p class="section-subtitle">Finished, tagged albums. Files live in <code>music/&lt;Artist&gt;/&lt;Album&gt;/</code>.</p>
       <div style="background:var(--surface);border:0.5px solid var(--border);border-radius:8px">
         <div class="bulk-bar hidden" id="music-bulk-bar">
           <span><span id="music-bulk-count">0</span> selected</span>
