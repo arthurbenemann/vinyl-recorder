@@ -29,6 +29,26 @@ pytestmark = pytest.mark.e2e
 WS_SETTLE_MS = 10_000
 
 
+def test_slash_focuses_library_search(stack, page):
+    """The "/" shortcut jumps focus to the library filter (GitHub-style),
+    but only when not already typing in a field."""
+    page.goto(RECORDER_URL)
+    page.wait_for_load_state("networkidle")
+    # Drop any default focus, then "/" should land on the library filter.
+    page.evaluate(
+        "() => document.activeElement && document.activeElement.blur"
+        " && document.activeElement.blur()"
+    )
+    page.keyboard.press("/")
+    focused = page.evaluate("() => document.activeElement && document.activeElement.id")
+    assert focused == "lib-search", f"expected lib-search focused, got {focused!r}"
+    # While focus is already in the field, "/" types literally (the handler
+    # bails when the target is an input) — it must not be swallowed.
+    page.fill("#lib-search", "")
+    page.keyboard.type("a/b")
+    assert page.input_value("#lib-search") == "a/b"
+
+
 def test_page_loads_with_main_controls(stack, page):
     """Bare-minimum smoke: page renders and the controls the user touches
     first are all visible and labelled."""

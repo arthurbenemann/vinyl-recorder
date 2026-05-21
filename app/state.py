@@ -119,6 +119,16 @@ DISCOGS_TOKEN    = os.getenv("DISCOGS_TOKEN",    "").strip()
 
 DEFAULT_SPLIT_NORMALIZE = os.getenv("DEFAULT_SPLIT_NORMALIZE", "true").strip().lower() in ("1", "true", "yes", "on")
 DEFAULT_SPLIT_TARGET_PEAK_DB = float(os.getenv("DEFAULT_SPLIT_TARGET_PEAK_DB", "-1.0"))
+# ReplayGain 2.0 tagging on FLAC split output. When on, after the per-track
+# encode the orchestrator runs a single `metaflac --add-replay-gain` pass
+# over all emitted tracks, writing per-track gain (REPLAYGAIN_TRACK_GAIN/
+# _PEAK) AND a shared album gain (REPLAYGAIN_ALBUM_GAIN/_PEAK). Players read
+# these to normalise loudness at playback without ever touching the audio —
+# the album values keep the LP's intra-side dynamics intact. FLAC only
+# (metaflac is the writer); other containers skip the pass. Defaults on:
+# vinyl side-to-side and rip-to-rip levels vary widely and RG is
+# non-destructive, so it's the right default for a music-server library.
+DEFAULT_SPLIT_REPLAYGAIN = os.getenv("DEFAULT_SPLIT_REPLAYGAIN", "true").strip().lower() in ("1", "true", "yes", "on")
 DEFAULT_SPLIT_BIT_DEPTH = int(os.getenv("DEFAULT_SPLIT_BIT_DEPTH", "0"))
 # Allowed output sample rates for the wave-editor split. 0 means "keep
 # source" — the route skips the resample step entirely. Anything else must
@@ -184,6 +194,10 @@ class Session:
     silence_ms_smoothed:  float = 0.0
     silence_armed:        bool  = False
     silence_since:        Optional[float] = None
+    # Latched once the "recording but no input signal" warning has been
+    # emitted, so the watcher warns at most once per session (cleared
+    # implicitly — a session is one recording).
+    no_signal_warned:     bool  = False
 
 
 class RecordingSessionManager:
@@ -383,6 +397,11 @@ class SplitRequest(BaseModel):
     normalize: bool = False           # apply gain to hit target peak across all tracks
     target_peak_db: float = -1.0      # only used when normalize=True
     measured_peak_db: Optional[float] = None  # peak from /api/album/measure; required for normalize
+    # Write ReplayGain track+album tags after a FLAC split (one metaflac
+    # --add-replay-gain pass over all tracks). Non-destructive; FLAC only.
+    # Defaults False on the model so a hand-crafted POST is conservative —
+    # the UI sends the real value seeded from DEFAULT_SPLIT_REPLAYGAIN.
+    replaygain: bool = False
     bit_depth: int = 0                # 0 = keep source, 16, or 24
     # 0 = keep source, otherwise resample to one of the allowed Hz values.
     # The route validates the value against ALLOWED_SPLIT_SAMPLE_RATES so a
@@ -422,6 +441,7 @@ class PlanUpdateRequest(BaseModel):
     bit_depth:        Optional[int]    = None
     sample_rate:      Optional[int]    = None
     output_format:    Optional[str]    = None
+    replaygain:       Optional[bool]   = None
     # Optimistic-concurrency token. When supplied, the server compares it
     # against the manifest's current `plan_version` and returns 409 on
     # mismatch so two tabs can't silently clobber each other. Omit it to
