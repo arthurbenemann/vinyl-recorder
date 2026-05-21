@@ -228,6 +228,30 @@ def test_split_ffmpeg_failure_surfaces_as_500(monkeypatch):
         _cleanup_album(aid)
 
 
+def test_split_writes_rip_log_sidecar(monkeypatch):
+    """A successful split drops a human-readable vinyl-rip.log next to the
+    tracks, naming the album, output settings, and the track list."""
+    from state import MUSIC_DIR
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B", "year": "1999"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 300},
+                       {"title": "T2", "duration_seconds": 300}],
+        })
+        assert r.status_code == 200, r.text
+        relpath = r.json()["music_relpath"]
+        log = MUSIC_DIR / relpath / "vinyl-rip.log"
+        assert log.exists()
+        text = log.read_text()
+        assert "vinyl-recorder rip log" in text
+        assert "A — B (1999)" in text
+        assert "Tracks (2):" in text
+    finally:
+        _cleanup_album(aid)
+
+
 # ── Cursor walk: track-end clamps to total, last extends ─────────────────
 
 def test_split_last_track_extends_to_total(monkeypatch):
