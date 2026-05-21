@@ -1287,8 +1287,19 @@ function renderTracks() {
     const titleAttrs = (skipped || unfit)
       ? 'disabled'
       : `oninput="weSetTitle(${i}, this.value)"`;
-    const rangeText = unfit ? "doesn't fit" : fmtMMSS(end - start);
-    const rangeTitle = unfit ? 'Track from Discogs is longer than the recording — not exported' : '';
+    // Advisory length flag (short stray cut / over-long missed cut). Folded
+    // into the existing `.range` cell — the row is a fixed-column grid, so a
+    // separate badge cell would break the layout + its nth-child reflow.
+    const lenHint = unfit ? '' : _weTrackLengthHint(end - start, skipped);
+    const rangeText = unfit
+      ? "doesn't fit"
+      : (lenHint ? '⚠ ' : '') + fmtMMSS(end - start);
+    const rangeTitle = unfit
+      ? 'Track from Discogs is longer than the recording — not exported'
+      : lenHint === 'short' ? 'Very short — a stray or mis-detected cut?'
+      : lenHint === 'long'  ? 'Longer than a typical LP side — did you miss a cut?'
+      : '';
+    const rangeCls = 'range' + (lenHint ? ' ' + lenHint : '');
     const rowClass = ['wave-track'];
     if (skipped) rowClass.push('skip');
     if (unfit)   rowClass.push('unfit');
@@ -1304,7 +1315,7 @@ function renderTracks() {
                ${isFirst || unfit ? 'disabled' : ''}
                aria-label="${htmlEscape('Start time of track ' + num)}"
                onchange="weSetCutAt(${i}, parseMMSS(this.value))">
-        <span class="range" title="${rangeTitle}">${rangeText}</span>
+        <span class="${rangeCls}" title="${htmlEscape(rangeTitle)}">${rangeText}</span>
         <button class="skip-btn ${skipped ? 'on' : ''}"
                 title="${skipped ? 'Restore region as a track (S toggles the region at the playhead)' : 'Skip — drop region from output and measurement (S toggles the region at the playhead)'}"
                 aria-label="${htmlEscape((skipped ? 'Restore track ' : 'Skip track ') + ctx)}"

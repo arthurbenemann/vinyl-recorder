@@ -36,6 +36,16 @@ def js() -> str:
     return "\n".join(parts)
 
 
+def test_track_length_hint_wired(css):
+    # renderTracks flags short/long regions via the existing .range cell;
+    # the helper + the CSS must both be present.
+    we_js = (REPO_ROOT / "app" / "static" / "wave-editor.js").read_text(encoding="utf-8")
+    ts_js = (REPO_ROOT / "app" / "static" / "modules" / "timeline-state.js").read_text(encoding="utf-8")
+    assert "_weTrackLengthHint" in ts_js   # helper defined + exported
+    assert "_weTrackLengthHint(" in we_js   # used by renderTracks
+    assert ".range.short" in css and ".range.long" in css
+
+
 def test_wave_canvas_is_keyboard_focusable(html):
     # The canvas has rich key handlers — exposing it to keyboard nav requires
     # tabindex + role + aria-label so screen readers announce it.

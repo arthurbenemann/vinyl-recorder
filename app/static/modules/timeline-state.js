@@ -309,6 +309,21 @@ function _weCutGroupSpan(i) {
   return { i, last, sideLo, sideHi };
 }
 
+// Advisory length flag for a track region, surfaced in the track list so an
+// obvious mistake gets caught before export: a sub-10s region is almost
+// always a stray / mis-detected cut, and a region longer than any single LP
+// side (>25 min) usually means a missed cut spanning a side break. Returns
+// '' (no flag), 'short', or 'long'. Skipped regions and sub-0.5s "doesn't
+// fit" rows never flag (handled elsewhere). Purely advisory — never blocks.
+function _weTrackLengthHint(seconds, skip) {
+  if (skip) return '';
+  const d = Number(seconds) || 0;
+  if (d < 0.5) return '';
+  if (d < 10) return 'short';
+  if (d > 1500) return 'long';
+  return '';
+}
+
 // ── Expose on window for wave-editor.js + unit tests ─────────────────────
 if (typeof window !== 'undefined') {
   window._weRemapForSides      = _weRemapForSides;
@@ -318,4 +333,5 @@ if (typeof window !== 'undefined') {
   window._weEffectivePositions = _weEffectivePositions;
   window._weSideBounds         = _weSideBounds;
   window._weCutGroupSpan       = _weCutGroupSpan;
+  window._weTrackLengthHint    = _weTrackLengthHint;
 }
