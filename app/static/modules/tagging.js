@@ -119,6 +119,10 @@ export function openTag(fname) {
     isCombine ? 'Combine into album' : 'Tag album';
   document.getElementById('tag-apply-btn').textContent =
     isCombine ? 'combine' : 'apply tags';
+  // "combine & edit" only makes sense when creating a new album from sides;
+  // hidden for retag/promote where there's nothing fresh to go split.
+  const applyEditBtn = document.getElementById('tag-apply-edit-btn');
+  if (applyEditBtn) applyEditBtn.hidden = !isCombine;
   document.getElementById('combine-sides-section').hidden = !isCombine;
   if (isCombine) {
     const n = tagPanelTarget.filenames.length;
@@ -729,7 +733,7 @@ export async function pickCandidate(i) {
   }
 }
 
-export async function applyTagPanel() {
+export async function applyTagPanel(thenEdit = false) {
   const fname = document.getElementById('tag-modal').dataset.fname;
   if (!fname) return;
   // The textarea may carry the "M:SS - Title" preview format when the
@@ -769,7 +773,7 @@ export async function applyTagPanel() {
       })
     });
     if (!r.ok) throw new Error(await parseError(r));
-    await r.json();
+    const result = await r.json();   // { album_id }
     if (isCombine) {
       const n = target.filenames.length;
       toast(`✓ Combined ${n} side${n === 1 ? '' : 's'} · ${fields.artist} — ${fields.album}`, 'ok');
@@ -779,6 +783,15 @@ export async function applyTagPanel() {
     }
     closeTag();
     refreshLib();
-    refreshAlbums();
+    const albumsReady = refreshAlbums();
+    // "& edit" jumps straight into the split editor on the new album, saving
+    // a trip back to the library to find the row. openWaveEditor reads the
+    // album from `albumsByName`, so wait for the refresh to land it first.
+    if (thenEdit && result && result.album_id) {
+      await albumsReady;
+      if (typeof window.openWaveEditor === 'function') {
+        window.openWaveEditor(result.album_id);
+      }
+    }
   } catch (e) { toast('✗ ' + e.message, 'err'); }
 }

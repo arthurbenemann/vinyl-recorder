@@ -341,6 +341,60 @@ def _combine_then_open_editor(page, sides, *, artist, album, year="2026"):
     return album_id
 
 
+def test_combine_and_edit_opens_editor_directly(stack, page):
+    """The opt-in "combine & edit" button combines the sides and jumps
+    straight into the split editor — no trip back to the library row."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        side_names = [s.name for s in sides]
+        page.wait_for_function(
+            f"() => document.querySelectorAll('input.row-check[data-fname]').length >= {len(sides)}",
+            timeout=10_000,
+        )
+        page.evaluate(
+            """(names) => {
+                for (const n of names) {
+                    const cb = document.querySelector(`input.row-check[data-fname="${n}"]`);
+                    if (!cb.checked) cb.click();
+                }
+            }""",
+            side_names,
+        )
+        page.wait_for_selector('#combine-btn:not([disabled])', timeout=5_000)
+        page.click('#combine-btn')
+        page.wait_for_selector('#tag-modal:not([hidden])')
+        page.wait_for_selector('#combine-sides-section:not([hidden])')
+        # The "combine & edit" button is revealed in combine mode.
+        page.wait_for_selector('#tag-apply-edit-btn:not([hidden])')
+        page.fill('#t-artist', "CombineEditArtist")
+        page.fill('#t-album',  "CombineEditAlbum")
+        page.fill('#t-year',   "2026")
+        page.click('#tag-apply-edit-btn')
+        # Tag modal closes and the editor opens directly on the new album.
+        page.wait_for_function(
+            "() => document.getElementById('tag-modal').hasAttribute('hidden')",
+            timeout=20_000,
+        )
+        page.wait_for_selector('#we-modal:not([hidden])')
+        page.wait_for_function(
+            "() => typeof we !== 'undefined' && we.loaded === true && we.total > 0",
+            timeout=20_000,
+        )
+        # The editor is bound to a real, freshly-combined album.
+        album_id = page.evaluate("() => we.albumId")
+        assert album_id, "editor opened with no album bound"
+        bound = page.evaluate(
+            "(id) => !!(window.albumsByName && window.albumsByName[id])", album_id)
+        assert bound, "editor album not present in albumsByName"
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
 # ── PR B: ghost-plan guard ───────────────────────────────────────────────
 def test_wave_editor_open_close_does_not_write_default_plan(stack, page):
     """Reproduces the "ghost plan" issue: opening + closing the editor on

@@ -494,6 +494,7 @@
         <div class="field"><label>Tracks (from picked release)</label><textarea id="t-tracks" rows="6" readonly tabindex="-1" aria-readonly="true"></textarea></div>
         <div class="action-row">
           <button class="btn primary" id="tag-apply-btn" onclick="applyTagPanel()">apply tags</button>
+          <button class="btn" id="tag-apply-edit-btn" hidden onclick="applyTagPanel(true)" title="Combine these sides into the album, then open the split editor right away">combine &amp; edit ▸</button>
           <span class="unsaved-badge" id="tag-unsaved-badge" hidden title="Form has unsaved changes">unsaved</span>
           <button class="btn" onclick="closeTag()">cancel</button>
         </div>
