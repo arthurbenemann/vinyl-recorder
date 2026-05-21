@@ -58,7 +58,7 @@ import { applyConfig } from './modules/config.js';
 import { parseError, withJobProgress, showBar, hideBar } from './modules/api.js';
 import { toast } from './modules/log.js';
 import {
-  htmlEscape, fmtSourceFormat, fmtDuration,
+  htmlEscape, fmtSourceFormat, fmtDuration, toastWithUndo,
 } from './modules/util.js';
 
 // ── window-attached entry points ─────────────────────────────────────────
@@ -156,6 +156,8 @@ window.closeOnboarding = closeOnboarding;
 // by wave-editor.js / peaks.js / inline onclick handlers are exposed —
 // other util helpers stay module-scoped.
 window.toast = toast;
+// Exposed for the classic-script wave-editor.js (clear-cuts undo).
+window.toastWithUndo = toastWithUndo;
 window.parseError = parseError;
 window.withJobProgress = withJobProgress;
 window.showBar = showBar;

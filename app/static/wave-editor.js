@@ -994,11 +994,30 @@ function weAddCutAtPlayhead() {
 
 function weClearCuts() {
   if (!we.cuts.length) return;
-  if (!confirm(`Clear all ${we.cuts.length} cuts?`)) return;
-  we.cuts = [];
-  we.titles = ['Track 1'];
-  we.skipped = [false];
-  we.positions = [''];
+  // Non-blocking instead of a confirm() dialog: clear immediately and offer
+  // a 5 s Undo (matches the library's delete-undo pattern). Snapshot the
+  // full region state so undo restores cuts, titles, skip flags AND the
+  // sleeve-position labels exactly — not just the cut offsets.
+  const n = we.cuts.length;
+  const snap = {
+    cuts:      we.cuts.slice(),
+    titles:    we.titles.slice(),
+    skipped:   we.skipped.slice(),
+    positions: we.positions.slice(),
+  };
+  _weApplyRegionState({ cuts: [], titles: ['Track 1'], skipped: [false], positions: [''] });
+  if (typeof window !== 'undefined' && typeof window.toastWithUndo === 'function') {
+    window.toastWithUndo(`Cleared ${n} cut${n === 1 ? '' : 's'}`, () => _weApplyRegionState(snap));
+  }
+}
+
+// Replace the editor's region state in one shot and re-render. Shared by
+// clear-cuts and its undo so both paths stay perfectly in sync.
+function _weApplyRegionState(s) {
+  we.cuts      = s.cuts.slice();
+  we.titles    = s.titles.slice();
+  we.skipped   = s.skipped.slice();
+  we.positions = s.positions.slice();
   we.dirty = true;
   invalidateMeasure();
   renderWaveformOverlay();

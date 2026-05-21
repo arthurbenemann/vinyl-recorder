@@ -788,3 +788,36 @@ def test_music_row_expands_into_track_list(stack, page):
         for p in sides:
             try: p.unlink(missing_ok=True)
             except Exception: pass
+
+
+# ── Clear-cuts is a non-blocking, undoable toast (not a confirm dialog) ───
+def test_clear_cuts_is_undoable(stack, page):
+    """`clear cuts` wipes the cuts immediately and offers a 5 s Undo toast;
+    clicking Undo restores them. No confirm() dialog blocks the flow."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="ClearUndoArtist", album="ClearUndoAlbum",
+        )
+        # Plant a couple of cuts (no dependency on the add-cut shortcut).
+        page.evaluate(
+            "() => { weAddCutAtTime(we.total * 0.33);"
+            " weAddCutAtTime(we.total * 0.66); }"
+        )
+        page.wait_for_function("() => we.cuts.length === 2", timeout=5_000)
+
+        page.get_by_role("button", name="clear cuts").click()
+        page.wait_for_function("() => we.cuts.length === 0", timeout=5_000)
+        undo = page.locator(".toast-with-undo")
+        expect(undo).to_be_visible(timeout=5_000)
+
+        # Undo restores the exact cut set.
+        page.locator(".toast-with-undo .toast-undo").click()
+        page.wait_for_function("() => we.cuts.length === 2", timeout=5_000)
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass

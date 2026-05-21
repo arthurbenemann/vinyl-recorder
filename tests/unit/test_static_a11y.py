@@ -85,6 +85,15 @@ def test_canvas_focus_visible_outline(css):
     assert "#we-canvas:focus-visible" in css
 
 
+def test_clear_cuts_uses_toast_undo(js):
+    # The destructive "clear all cuts" is a non-blocking toast-undo now,
+    # not a blocking confirm() dialog.
+    we_js = (REPO_ROOT / "app" / "static" / "wave-editor.js").read_text(encoding="utf-8")
+    assert "toastWithUndo" in we_js            # undo path present
+    assert "Clear all" not in we_js            # old confirm() message gone
+    assert "window.toastWithUndo" in js        # bridged to the classic script
+
+
 def test_focus_trap_helper_present(js):
     assert "function trapModalFocus" in js
     # The Esc handler must accept a modal id so it can also wire the trap —
