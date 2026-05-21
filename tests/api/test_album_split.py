@@ -228,6 +228,45 @@ def test_split_ffmpeg_failure_surfaces_as_500(monkeypatch):
         _cleanup_album(aid)
 
 
+def test_split_writes_folder_cover(monkeypatch):
+    """When the album has cover art, the split drops a folder-level cover.jpg
+    next to the tracks (so non-FLAC outputs + music servers get album art)."""
+    from services import albums_fs
+    from state import MUSIC_DIR
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    albums_fs.write_cover(aid, b"\xff\xd8\xff\xe0fake-jpeg-bytes")
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 300}],
+        })
+        assert r.status_code == 200, r.text
+        relpath = r.json()["music_relpath"]
+        cover = MUSIC_DIR / relpath / "cover.jpg"
+        assert cover.exists()
+        assert cover.read_bytes() == b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_no_cover_no_folder_cover(monkeypatch):
+    """No album art → no stray empty cover.jpg in the music dir."""
+    from state import MUSIC_DIR
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 300}],
+        })
+        assert r.status_code == 200, r.text
+        relpath = r.json()["music_relpath"]
+        assert not (MUSIC_DIR / relpath / "cover.jpg").exists()
+    finally:
+        _cleanup_album(aid)
+
+
 # ── Cursor walk: track-end clamps to total, last extends ─────────────────
 
 def test_split_last_track_extends_to_total(monkeypatch):
