@@ -184,6 +184,10 @@ class Session:
     silence_ms_smoothed:  float = 0.0
     silence_armed:        bool  = False
     silence_since:        Optional[float] = None
+    # Latched once the "recording but no input signal" warning has been
+    # emitted, so the watcher warns at most once per session (cleared
+    # implicitly — a session is one recording).
+    no_signal_warned:     bool  = False
 
 
 class RecordingSessionManager:
