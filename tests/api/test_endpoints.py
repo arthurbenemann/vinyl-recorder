@@ -34,7 +34,7 @@ def test_config_returns_known_shape():
     # lockstep with applyConfig() in static/main.js.
     expected_keys = {
         "default_stream_url", "auto_connect", "default_gain_db", "version",
-        "low_space_gb", "default_split_normalize",
+        "low_space_gb", "default_split_normalize", "default_split_replaygain",
         "default_split_target_peak_db", "default_split_bit_depth",
     }
     assert expected_keys <= set(body.keys())
@@ -47,6 +47,7 @@ def test_config_reflects_env_var_overrides(monkeypatch):
     body = _client().get("/api/config").json()
     assert isinstance(body["auto_connect"], bool)
     assert isinstance(body["default_split_normalize"], bool)
+    assert isinstance(body["default_split_replaygain"], bool)
     assert isinstance(body["default_split_target_peak_db"], (int, float))
     assert isinstance(body["default_split_bit_depth"], int)
     assert isinstance(body["low_space_gb"], (int, float))

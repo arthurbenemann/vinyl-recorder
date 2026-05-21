@@ -159,10 +159,12 @@ async function _savePlanNow() {
   const outputFormat = document.getElementById('we-format')?.value || 'flac';
   const bitDepth     = parseInt(document.getElementById('we-bitdepth')?.value, 10);
   const sampleRate   = parseInt(document.getElementById('we-sample-rate')?.value, 10);
+  const replaygain   = document.getElementById('we-replaygain');
   const planBody = { tracks, expected_version: we.planVersion };
   if (!Number.isNaN(bitDepth))   planBody.bit_depth     = bitDepth;
   if (!Number.isNaN(sampleRate)) planBody.sample_rate   = sampleRate;
   if (outputFormat)              planBody.output_format = outputFormat;
+  if (replaygain)                planBody.replaygain    = !!replaygain.checked;
   // Clear dirty BEFORE awaiting the fetch. The body we're about to POST
   // is already a snapshot of we.* at this point, so we've "consumed" the
   // current dirt. Any edit that lands while the fetch is in flight will
@@ -519,6 +521,8 @@ async function weLoadExistingSplit(fname) {
     if (bdSel && plan.bit_depth != null) bdSel.value = String(plan.bit_depth);
     const srSel = document.getElementById('we-sample-rate');
     if (srSel && plan.sample_rate != null) srSel.value = String(plan.sample_rate);
+    const rgChk = document.getElementById('we-replaygain');
+    if (rgChk && typeof plan.replaygain === 'boolean') rgChk.checked = plan.replaygain;
     drawAll();
   } catch (e) { /* nothing existing — leave the empty state */ }
   finally {
@@ -1672,6 +1676,7 @@ async function weApplySplit() {
     }));
   if (!tracks.length || tracks.every(t => t.skip)) return;
   const normalize = !!document.getElementById('we-normalize').checked;
+  const replaygain = !!document.getElementById('we-replaygain')?.checked;
   const bitDepth = parseInt(document.getElementById('we-bitdepth').value, 10) || 0;
   const sampleRate = parseInt(document.getElementById('we-sample-rate').value, 10) || 0;
   const outputFormat = document.getElementById('we-format')?.value || 'flac';
@@ -1689,7 +1694,7 @@ async function weApplySplit() {
   showBar(bar, 'encoding tracks');
   try {
     const d = await withJobProgress(bar, async (jobId) => {
-      const body = { album_id: we.albumId, tracks, bit_depth: bitDepth, sample_rate: sampleRate, output_format: outputFormat, job_id: jobId };
+      const body = { album_id: we.albumId, tracks, bit_depth: bitDepth, sample_rate: sampleRate, output_format: outputFormat, replaygain, job_id: jobId };
       if (normalize) {
         body.normalize         = true;
         body.target_peak_db    = we.targetPeakDb;
