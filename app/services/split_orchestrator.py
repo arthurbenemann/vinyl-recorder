@@ -65,6 +65,47 @@ def _wav_codec_for_bits(bits: Optional[int]) -> str:
     return "pcm_s24le" if bits == 24 else "pcm_s16le"
 
 
+def build_audio_filters(*, apply_gain: bool, gain_db: float,
+                        target_rate: Optional[int],
+                        sample_fmt: Optional[str], lossless: bool) -> list[str]:
+    """Build the ordered ffmpeg `-af` chain for one track encode.
+
+    Order: gain → resample / bit-depth (aresample) → 24-bit set (aformat).
+
+    The reduction to 16-bit goes through `aresample` with shaped TPDF dither
+    (`dither_method=triangular_hp`): truncating a 24-bit capture to 16-bit
+    *without* dither leaves audible quantisation distortion in quiet
+    passages — exactly what a vinyl rip is full of (fade-outs, runout,
+    inter-track gaps). aresample also carries the SoX rate conversion, so a
+    96→44.1 kHz + 24→16-bit job resamples in high precision and dithers once
+    on the final format step. Going *to* (or keeping) 24-bit is lossless and
+    needs no dither, so that path stays on a plain `aformat`. Dither / bit-
+    depth selection only applies to lossless output; lossy codecs pick their
+    own internal precision."""
+    af: list[str] = []
+    if apply_gain:
+        af.append(f"volume={gain_db:.4f}dB")
+    reduce_to_16 = lossless and sample_fmt == "s16"
+    resample_opts: list[str] = []
+    if target_rate:
+        # SoX resampler at 28-bit precision — well above 24-bit headroom so
+        # the resample itself is inaudible.
+        resample_opts.append("resampler=soxr:precision=28")
+    if reduce_to_16:
+        # Let aresample do the 24→16 step WITH dither: `osf` sets the output
+        # sample format so libswresample applies the shaped dither on the
+        # way down (a bare `aformat=s16` would hard-truncate instead).
+        resample_opts.append("osf=s16")
+        resample_opts.append("dither_method=triangular_hp")
+    if resample_opts:
+        af.append("aresample=" + ":".join(resample_opts))
+    # 24-bit output: set the depth via aformat (lossless increase → no
+    # dither). The 16-bit path is handled by the dithering aresample above.
+    if lossless and sample_fmt == "s32":
+        af.append(f"aformat=sample_fmts={sample_fmt}")
+    return af
+
+
 def _media_type_for(ext: str) -> str:
     """Map an audio file extension to the HTTP `Content-Type` used by
     `download_track`. Falls back to octet-stream so an unknown extension
@@ -223,19 +264,10 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
     settings = _FORMAT_SETTINGS[req.output_format]
     track_name = f"{str(out_idx).zfill(pad)} - {safe_path_component(t.title) or 'Track'}{settings['ext']}"
     out = music_dir / track_name
-    af = []
-    if apply_gain:
-        af.append(f"volume={gain_db:.4f}dB")
-    if target_rate:
-        # SoX resampler at 28-bit precision — well above 24-bit FLAC headroom
-        # so quantisation from the resample is inaudible. Placed BEFORE
-        # aformat so the bit-depth conversion happens after the rate change.
-        af.append("aresample=resampler=soxr:precision=28")
-    if sample_fmt and settings["lossless"]:
-        # aformat-driven bit-depth selection only makes sense for the lossless
-        # codec path. WAV's bit depth is the codec choice itself (handled
-        # below); lossy codecs would silently ignore aformat.
-        af.append(f"aformat=sample_fmts={sample_fmt}")
+    af = build_audio_filters(
+        apply_gain=apply_gain, gain_db=gain_db, target_rate=target_rate,
+        sample_fmt=sample_fmt, lossless=settings["lossless"],
+    )
     # The concat demuxer presents the full album as one virtual input
     # stream so -ss/-to act in album time, including across side boundaries
     # — same behaviour as the old concat.flac input but no on-disk artifact.
