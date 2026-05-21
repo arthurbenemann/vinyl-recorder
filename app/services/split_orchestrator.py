@@ -65,6 +65,17 @@ def _wav_codec_for_bits(bits: Optional[int]) -> str:
     return "pcm_s24le" if bits == 24 else "pcm_s16le"
 
 
+def _is_compilation(tags: dict) -> bool:
+    """Whether to stamp the COMPILATION flag that music servers (Jellyfin,
+    Navidrome, …) read to file an album under a single "Various Artists"
+    heading instead of fragmenting it into one album per track artist.
+
+    Heuristic: the album's ARTIST is literally "Various Artists" (the
+    convention MusicBrainz/Discogs use for compilations). Case-insensitive
+    so a hand-typed "various artists" still triggers it."""
+    return (tags.get("artist") or "").strip().lower() == "various artists"
+
+
 def _media_type_for(ext: str) -> str:
     """Map an audio file extension to the HTTP `Content-Type` used by
     `download_track`. Falls back to octet-stream so an unknown extension
@@ -90,16 +101,21 @@ def _ffmpeg_metadata_args(title: str, out_idx: int, out_total: int,
     too."""
     args: list[str] = []
     pairs = [
-        ("artist",      tags.get("artist", "")),
-        ("album",       tags.get("album", "")),
-        ("date",        tags.get("year", "")),
-        ("genre",       tags.get("genre", "")),
-        ("publisher",   tags.get("label", "")),
-        ("title",       title),
-        ("track",       f"{out_idx}/{out_total}"),
+        ("artist",       tags.get("artist", "")),
+        # album_artist groups the album in every music server; without it a
+        # multi-artist or "feat." track scatters the album across artists.
+        # Defaults to the album ARTIST (correct for single-artist LPs).
+        ("album_artist", tags.get("artist", "")),
+        ("album",        tags.get("album", "")),
+        ("date",         tags.get("year", "")),
+        ("genre",        tags.get("genre", "")),
+        ("publisher",    tags.get("label", "")),
+        ("title",        title),
+        ("track",        f"{out_idx}/{out_total}"),
     ]
     if tags.get("composer"):  pairs.append(("composer",  tags["composer"]))
     if tags.get("conductor"): pairs.append(("conductor", tags["conductor"]))
+    if _is_compilation(tags):  pairs.append(("compilation", "1"))
     for k, v in pairs:
         if v != "":
             args += ["-metadata", f"{k}={v}"]
@@ -174,10 +190,16 @@ def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
 
     Distinct from `services.ffmpeg.write_tags` (which writes the side-level
     tag set used during apply-tags). This one is the per-track flavour: it
-    additionally sets TITLE / TRACKNUMBER / TRACKTOTAL plus the optional
+    additionally sets ALBUMARTIST / TITLE / TRACKNUMBER / TRACKTOTAL, the
+    COMPILATION flag on Various-Artists albums, plus the optional
     MUSICBRAINZ_ALBUMID / DISCOGS_RELEASE_ID, and embeds a cover."""
     tag_args = ["metaflac", "--remove-all-tags",
                 f"--set-tag=ARTIST={tags.get('artist', '')}",
+                # ALBUMARTIST is what every music server groups an album by.
+                # Defaults to ARTIST (right for single-artist LPs); a
+                # "Various Artists" ARTIST additionally trips COMPILATION
+                # below so comps file under one heading instead of splitting.
+                f"--set-tag=ALBUMARTIST={tags.get('artist', '')}",
                 f"--set-tag=ALBUM={tags.get('album', '')}",
                 f"--set-tag=DATE={tags.get('year', '')}",
                 f"--set-tag=GENRE={tags.get('genre', '')}",
@@ -187,6 +209,9 @@ def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
                 f"--set-tag=TITLE={title}",
                 f"--set-tag=TRACKNUMBER={out_idx}",
                 f"--set-tag=TRACKTOTAL={out_total}"]
+    # Compilation flag — only on Various-Artists albums (see _is_compilation).
+    if _is_compilation(tags):
+        tag_args.append("--set-tag=COMPILATION=1")
     # Optional classical-style tags — only emit when present so we don't
     # leave empty COMPOSER=/CONDUCTOR= entries on every track.
     if tags.get("composer"):

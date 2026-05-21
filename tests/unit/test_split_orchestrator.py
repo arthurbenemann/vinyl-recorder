@@ -215,6 +215,8 @@ def test_write_track_tags_emits_required_set(monkeypatch, tmp_path):
     assert cmd[0] == "metaflac"
     assert "--remove-all-tags" in cmd
     assert "--set-tag=ARTIST=A" in cmd
+    # ALBUMARTIST defaults to ARTIST so music servers group the album.
+    assert "--set-tag=ALBUMARTIST=A" in cmd
     assert "--set-tag=ALBUM=B" in cmd
     assert "--set-tag=DATE=2020" in cmd
     assert "--set-tag=GENRE=Rock" in cmd
@@ -250,6 +252,31 @@ def test_write_track_tags_skips_optional_tags_when_blank(monkeypatch, tmp_path):
     assert not any("CONDUCTOR=" in a for a in cmd)
     assert not any("MUSICBRAINZ_ALBUMID=" in a for a in cmd)
     assert not any("DISCOGS_RELEASE_ID=" in a for a in cmd)
+    # A single-artist album is NOT a compilation.
+    assert not any("COMPILATION=" in a for a in cmd)
+
+
+def test_write_track_tags_sets_compilation_for_various_artists(monkeypatch, tmp_path):
+    """A "Various Artists" album gets COMPILATION=1 and an ALBUMARTIST of
+    "Various Artists" so music servers file it under one heading instead of
+    splitting it per track artist. Case-insensitive on the ARTIST value."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 12,
+                     tags={"artist": "various artists"}, cover_file=None)
+    cmd = calls[0]
+    assert "--set-tag=COMPILATION=1" in cmd
+    assert "--set-tag=ALBUMARTIST=various artists" in cmd
 
 
 def test_write_track_tags_includes_optional_tags_when_set(monkeypatch, tmp_path):
