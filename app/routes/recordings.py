@@ -844,6 +844,34 @@ def _silence_should_autostop(s, now: float) -> bool:
     return (now - since) >= s.silence_seconds
 
 
+# "Recording but no input signal" guard. The auto-stop-on-silence detector
+# only fires AFTER it has seen signal (silence_armed) — so a take that never
+# has any signal (turntable off, wrong input, unplugged phono) never trips
+# it and silently records a dead 20-minute file. This warns instead.
+#
+# The threshold is generous on purpose: the pre-roll workflow means it's
+# NORMAL to hit record, then walk over and drop the needle several seconds
+# later — so a short window would false-positive on every careful capture.
+# 30 s comfortably exceeds needle-cueing while still catching a dead take
+# long before a side finishes. The peak floor (~-50 dBFS amplitude) is well
+# below any real groove (even a quiet lead-in is louder) so genuine audio
+# always clears it.
+NO_SIGNAL_WARN_SECONDS = 30.0
+_NO_SIGNAL_PEAK_FLOOR = 0.003
+
+
+def _should_warn_no_signal(signal_seen: bool, elapsed: float, paused: bool,
+                           already_warned: bool) -> bool:
+    """Decide whether the watcher should emit the no-signal warning now.
+
+    Pure so unit tests can drive the truth table. Fires once when a
+    recording has run `NO_SIGNAL_WARN_SECONDS` without the upstream peak
+    ever rising above the floor — i.e. nothing is coming in."""
+    if already_warned or paused or signal_seen:
+        return False
+    return elapsed >= NO_SIGNAL_WARN_SECONDS
+
+
 def _duration_cap_reached(s, now: float) -> bool:
     """Pure decision function: should the watcher finalize `s` with
     reason="auto" right now because the duration cap has elapsed?
@@ -911,6 +939,10 @@ def _watch_session(sid: str) -> None:
     if not s:
         return
     proc = s.proc
+    # Latches true the first tick the upstream peak clears the floor — read
+    # from the always-on upstream VU peaks, so this never touches the sink
+    # hot path and works even when auto-stop-on-silence is disabled.
+    signal_seen = False
     while True:
         try:
             proc.wait(timeout=_WATCH_TICK_SECONDS)
@@ -924,6 +956,17 @@ def _watch_session(sid: str) -> None:
             # user-stop / disconnect finalized us between ticks
             return
         now = time.monotonic()
+        if max(upstream.peak_l or 0.0, upstream.peak_r or 0.0) > _NO_SIGNAL_PEAK_FLOOR:
+            signal_seen = True
+        if _should_warn_no_signal(signal_seen, now - live.start_time,
+                                  live.paused, live.no_signal_warned):
+            live.no_signal_warned = True
+            bus.log(
+                "⚠ Recording, but no audio detected — check the turntable / input",
+                "err",
+            )
+            bus.publish({"type": "record", "event": "no_signal",
+                         "session_id": sid})
         # Surface the silence-countdown for the UI to render a progress
         # bar that fills as silence accumulates toward the auto-stop
         # threshold. Emitted every tick (~2 Hz) so the bar moves with the

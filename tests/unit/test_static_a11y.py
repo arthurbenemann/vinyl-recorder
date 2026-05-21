@@ -98,6 +98,14 @@ def test_canvas_focus_visible_outline(css):
     assert "#we-canvas:focus-visible" in css
 
 
+def test_no_signal_warning_wired(js):
+    # ws.js surfaces the server's record:no_signal warning as a toast and
+    # auto-clears it when signal returns / recording ends.
+    assert "no_signal" in js
+    assert "no audio detected" in js
+    assert "NO_SIGNAL_TOAST_ID" in js
+
+
 def test_focus_trap_helper_present(js):
     assert "function trapModalFocus" in js
     # The Esc handler must accept a modal id so it can also wire the trap —
