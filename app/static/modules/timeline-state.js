@@ -309,6 +309,26 @@ function _weCutGroupSpan(i) {
   return { i, last, sideLo, sideHi };
 }
 
+// ── _weEvenCuts ───────────────────────────────────────────────────────────
+// Evenly-spaced internal cut times that divide [0, total] into `n` equal
+// tracks — the fallback for a gapless side (live set, DJ mix, attacca
+// classical) where silence detection finds nothing to cut on. Returns the
+// n-1 interior boundaries, rounded to ms and clamped inside (0, total) so
+// they survive the same dedupe/clamp the silence path applies. Empty when
+// the length is unknown or n < 2. These are *seed* cuts: the user drags them
+// onto the real boundaries using the waveform + audition.
+function _weEvenCuts(total, n) {
+  const count = Math.floor(Number(n));
+  if (!(total > 0) || !(count >= 2)) return [];
+  const cuts = [];
+  for (let i = 1; i < count; i++) {
+    const t = Math.round((total * i / count) * 1000) / 1000;
+    if (t > 0.01 && t < total - 0.01) cuts.push(t);
+  }
+  return cuts;
+}
+
+
 // ── Expose on window for wave-editor.js + unit tests ─────────────────────
 if (typeof window !== 'undefined') {
   window._weRemapForSides      = _weRemapForSides;
@@ -318,4 +338,5 @@ if (typeof window !== 'undefined') {
   window._weEffectivePositions = _weEffectivePositions;
   window._weSideBounds         = _weSideBounds;
   window._weCutGroupSpan       = _weCutGroupSpan;
+  window._weEvenCuts           = _weEvenCuts;
 }
