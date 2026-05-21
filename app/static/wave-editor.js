@@ -1019,6 +1019,24 @@ function _nearestCutIndex(t) {
   return best;
 }
 
+// Nudge the cut nearest the playhead by `delta` seconds, clamped so it can't
+// cross a neighbour (which would reorder we.cuts and misalign the per-region
+// title/skip arrays). The playhead follows the cut so repeated nudges keep
+// targeting it and the move is visible.
+function weNudgeNearestCut(delta) {
+  if (!we.cuts.length) return;
+  const i = _nearestCutIndex(weAudio.currentTime || 0);
+  const next = window._weNudgedCutValue(we.cuts, i, delta, we.total);
+  if (next == null || next === we.cuts[i]) return;
+  we.cuts[i] = next;
+  we.dirty = true;
+  invalidateMeasure();
+  if (weAudio.hasSrc) weAudio.seek(next);
+  renderWaveformOverlay();
+  renderMinimapOverlay();
+  renderTracks();
+}
+
 function weKeyDown(e) {
   // Tab cycles inside the open modal so AT / keyboard users can't lose
   // context to the underlying library page. trapModalFocus is defined in
@@ -1054,11 +1072,20 @@ function weKeyDown(e) {
     }
     case 'ArrowLeft':
     case 'ArrowRight': {
-      if (!weAudio.hasSrc) return;
+      // Nudge the cut nearest the playhead ±0.1s (±1s with shift) — matches
+      // the on-canvas help + aria contract. Position with j/k first, then
+      // fine-tune the boundary with the arrows. No-op when there are no cuts.
+      if (!we.cuts.length) return;
       e.preventDefault();
       const step = (e.shiftKey ? 1.0 : 0.1) * (e.key === 'ArrowLeft' ? -1 : 1);
-      weAudio.seek(Math.max(0, Math.min(we.total, t + step)));
-      renderWaveformOverlay();
+      weNudgeNearestCut(step);
+      return;
+    }
+    case 'c':
+    case 'C': {
+      // Drop a cut at the playhead — the listen-and-tap split workflow.
+      e.preventDefault();
+      weAddCutAtPlayhead();
       return;
     }
     case 'j':

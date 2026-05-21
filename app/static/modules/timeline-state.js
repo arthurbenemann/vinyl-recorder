@@ -309,6 +309,20 @@ function _weCutGroupSpan(i) {
   return { i, last, sideLo, sideHi };
 }
 
+// New album-time position for cut `i` after nudging it by `delta` seconds,
+// clamped so it can't cross either neighbouring cut (which would reorder
+// we.cuts and misalign the title/skip/position arrays indexed by region)
+// or the [0, total] album bounds. Returns the clamped value (equal to
+// cuts[i] when the nudge is fully absorbed by the clamp), or null for an
+// out-of-range index. Pure — drives the keyboard ←/→ cut nudge.
+function _weNudgedCutValue(cuts, i, delta, total) {
+  if (!Array.isArray(cuts) || i < 0 || i >= cuts.length) return null;
+  const EPS = 0.001;
+  const lo = (i > 0 ? cuts[i - 1] : 0) + EPS;
+  const hi = (i < cuts.length - 1 ? cuts[i + 1] : total) - EPS;
+  return Math.max(lo, Math.min(hi, cuts[i] + delta));
+}
+
 // ── Expose on window for wave-editor.js + unit tests ─────────────────────
 if (typeof window !== 'undefined') {
   window._weRemapForSides      = _weRemapForSides;
@@ -318,4 +332,5 @@ if (typeof window !== 'undefined') {
   window._weEffectivePositions = _weEffectivePositions;
   window._weSideBounds         = _weSideBounds;
   window._weCutGroupSpan       = _weCutGroupSpan;
+  window._weNudgedCutValue     = _weNudgedCutValue;
 }

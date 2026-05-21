@@ -788,3 +788,45 @@ def test_music_row_expands_into_track_list(stack, page):
         for p in sides:
             try: p.unlink(missing_ok=True)
             except Exception: pass
+
+
+# ── Keyboard: add cut at playhead (c) + nudge nearest cut (←/→) ───────────
+def test_wave_editor_keyboard_add_and_nudge_cut(stack, page):
+    """`c` drops a cut at the playhead and ←/→ nudges the nearest cut — the
+    keyboard-driven split workflow. Asserts against `we.cuts` directly."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="KeysArtist", album="KeysAlbum",
+        )
+        before = page.evaluate("we.cuts.length")
+        # Focus the canvas so the global keydown handler sees a non-input
+        # target, then drop a cut at the playhead with `c`.
+        page.evaluate("document.getElementById('we-canvas').focus()")
+        page.keyboard.press("c")
+        page.wait_for_function(
+            f"() => we.cuts.length === {before} + 1", timeout=5_000,
+        )
+        # Park the playhead on that cut so it's the nearest, capture its
+        # position, then nudge it right with ArrowRight.
+        pos = page.evaluate(
+            "() => { const c = we.cuts[we.cuts.length - 1];"
+            " weAudio.seek(c); return c; }"
+        )
+        page.keyboard.press("ArrowRight")
+        page.wait_for_function(
+            f"() => we.cuts.some(c => c > {pos} + 0.05)", timeout=5_000,
+        )
+        # And ArrowLeft moves it back below the nudged position.
+        page.keyboard.press("ArrowLeft")
+        page.wait_for_function(
+            f"() => we.cuts.some(c => Math.abs(c - {pos}) < 0.05)",
+            timeout=5_000,
+        )
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
