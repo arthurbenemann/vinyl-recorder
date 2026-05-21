@@ -402,6 +402,12 @@ function openWaveEditor(fname) {
   const srSelReset  = document.getElementById('we-sample-rate');
   if (srSelReset)  srSelReset.value = '0';
   _weApplyFormatUI();
+  // Seed the silence-detection controls from the user's last-used values.
+  // Unlike the encoder selectors (reset to a clean slate each open), the
+  // detection thresholds track the listener's hardware chain — noise floor,
+  // gap length, side-flip length — which stays put across a stack of rips,
+  // so remembering them removes per-album re-tuning.
+  _weHydrateDetectSettings();
   // Reset the auto-save indicator. Each open starts hidden; the first
   // successful debounced save flips it to "saved just now".
   _stopSavedTicker();
@@ -1540,6 +1546,45 @@ async function _weAutoLoadFromIds(a) {
         _weApplyTracklist(d.track_details, 'auto-loaded from saved MBID');
       }
     } catch (e) { /* nothing more to try */ }
+  }
+}
+
+// Persisted silence-detection settings. Keyed like the other namespaced
+// prefs (lib.sortBy, autoStopSilenceSeconds): a raw value per control.
+const WE_DETECT_PREFS = [
+  { id: 'we-noise',    key: 'we.noiseInt8',  def: 8,   min: 1,   max: 127 },
+  { id: 'we-mindur',   key: 'we.minSilence', def: 1.5, min: 0.2, max: null },
+  { id: 'we-skiplong', key: 'we.skipLong',   def: 15,  min: 2,   max: null },
+];
+
+function _weStoredPref(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+
+function _weSavePref(key, value) {
+  try { localStorage.setItem(key, String(value)); } catch (e) {}
+}
+
+// Seed the detection controls from localStorage (clamped/validated) and wire
+// a one-time change listener per input so every tweak is remembered for the
+// next album. Wiring is idempotent — guarded by a dataset flag — because
+// openWaveEditor runs on each open while the inputs live for the page's life.
+function _weHydrateDetectSettings() {
+  for (const f of WE_DETECT_PREFS) {
+    const el = document.getElementById(f.id);
+    if (!el) continue;
+    el.value = _weDetectSettingValue(_weStoredPref(f.key), f.def, f.min, f.max);
+    if (!el.dataset.persistWired) {
+      el.dataset.persistWired = '1';
+      el.addEventListener('change', () => _weSavePref(f.key, el.value));
+    }
+  }
+  // Re-sync the dB readout to the (re-seeded) noise slider — the inline
+  // oninput only fires on user drag, not on this programmatic set.
+  const noise   = document.getElementById('we-noise');
+  const readout = document.getElementById('we-noise-readout');
+  if (noise && readout && typeof weNoiseSliderDb === 'function') {
+    readout.textContent = weNoiseSliderDb(noise.value) + ' dB';
   }
 }
 
