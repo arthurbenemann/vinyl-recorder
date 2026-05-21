@@ -30,6 +30,7 @@ from services.split_orchestrator import (
     SplitNotFoundError,
     SplitProcessingError,
     SplitValidationError,
+    add_replay_gain,
     kept_duration_total,
     wipe_prior_music_dir,
     write_track_tags,
@@ -302,6 +303,43 @@ def test_write_track_tags_imports_cover_as_separate_call(monkeypatch, tmp_path):
     assert cmd2[0] == "metaflac"
     assert any(a.startswith("--import-picture-from=") for a in cmd2)
     assert cmd2[-1] == str(out)
+
+
+# ── add_replay_gain ──────────────────────────────────────────────────────
+def test_add_replay_gain_single_pass_over_all_tracks(monkeypatch, tmp_path):
+    """One metaflac --add-replay-gain invocation listing every track, so
+    metaflac computes the shared album gain across the set (not per file)."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    paths = [tmp_path / "01 - A.flac", tmp_path / "02 - B.flac"]
+    for p in paths:
+        p.write_bytes(b"")
+    add_replay_gain(paths)
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert cmd[0] == "metaflac"
+    assert "--add-replay-gain" in cmd
+    # Every track path is listed in the one invocation.
+    assert str(paths[0]) in cmd
+    assert str(paths[1]) in cmd
+
+
+def test_add_replay_gain_noop_on_empty(monkeypatch):
+    """No tracks → no subprocess (avoids a bare `metaflac --add-replay-gain`
+    with no files, which would error)."""
+    calls = []
+    monkeypatch.setattr(so.subprocess, "run",
+                        lambda *a, **k: calls.append(a))
+    add_replay_gain([])
+    assert calls == []
 
 
 # ── split_album validation paths ─────────────────────────────────────────
@@ -682,3 +720,102 @@ def test_split_album_cleans_playlist_after_run(monkeypatch, tmp_path):
     manifest = so.albums_fs.read_manifest(album_id)
     _run_split(req, manifest)
     assert not playlist.exists()
+
+
+# ── split_album: ReplayGain post-pass ────────────────────────────────────
+def _setup_split_fixture(monkeypatch, tmp_path, album_id, output_format="flac"):
+    """Shared scaffolding for the ReplayGain integration tests: stubs the
+    concat playlist, disk-space, durations, cover, source bit-depth probe,
+    and _emit_track (which just touches an output file with the right ext)."""
+    inp = tmp_path / "in-progress"
+    music = tmp_path / "music"
+    inp.mkdir(); music.mkdir()
+    (inp / album_id).mkdir()
+    playlist = tmp_path / "pl.txt"
+    playlist.write_text("")
+    side = tmp_path / "side.flac"
+    side.write_bytes(b"x" * 16)
+    ext = so._FORMAT_SETTINGS[output_format]["ext"]
+
+    monkeypatch.setattr(so, "MUSIC_DIR", music)
+    monkeypatch.setattr(so.albums_fs, "MUSIC_DIR", music)
+    monkeypatch.setattr(so.albums_fs, "IN_PROGRESS_DIR", inp)
+    monkeypatch.setattr(so.albums_fs, "album_concat_playlist",
+                        lambda aid: (playlist, [side]))
+    monkeypatch.setattr(so, "disk_space_error", lambda need, op: None)
+    monkeypatch.setattr(so, "flac_duration_seconds", lambda p: 30.0)
+    monkeypatch.setattr(so.albums_fs, "cover_path", lambda aid: None)
+    monkeypatch.setattr(so.subprocess, "check_output", lambda *a, **k: "16\n44100\n")
+
+    async def fake_emit_track(**kw):
+        out_dir = kw["music_dir"]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"{kw['out_idx']:02d} - T{ext}"
+        out.write_bytes(b"")
+        return {"filename": out.name, "duration_seconds": 1.0, "size_mb": 0.0}
+
+    monkeypatch.setattr(so, "_emit_track", fake_emit_track)
+    (inp / album_id / "album.json").write_text(json.dumps({
+        "schema_version": 2,
+        "tags": {"artist": "X", "album": "Y", "year": "2001"},
+        "sides": ["side.flac"], "cover": None, "plan": None,
+        "music_relpath": None,
+    }))
+
+
+def test_split_album_runs_replaygain_when_enabled_for_flac(monkeypatch, tmp_path):
+    """replaygain=True + FLAC output → one add_replay_gain pass over the
+    emitted track files."""
+    album_id = "rgaaaaaa"
+    _setup_split_fixture(monkeypatch, tmp_path, album_id, "flac")
+    captured = []
+    monkeypatch.setattr(so, "add_replay_gain", lambda paths: captured.append(list(paths)))
+
+    req = SplitRequest(
+        album_id=album_id,
+        tracks=[SplitTrack(title="One", duration_seconds=15.0),
+                SplitTrack(title="Two", duration_seconds=15.0)],
+        output_format="flac", replaygain=True,
+    )
+    manifest = so.albums_fs.read_manifest(album_id)
+    _run_split(req, manifest)
+    assert len(captured) == 1
+    # Both emitted tracks were passed in a single pass.
+    assert len(captured[0]) == 2
+    assert all(str(p).endswith(".flac") for p in captured[0])
+    # Persisted plan records the flag for re-edit reload.
+    assert so.albums_fs.read_manifest(album_id)["plan"]["replaygain"] is True
+
+
+def test_split_album_skips_replaygain_when_disabled(monkeypatch, tmp_path):
+    album_id = "rgbbbbbb"
+    _setup_split_fixture(monkeypatch, tmp_path, album_id, "flac")
+    captured = []
+    monkeypatch.setattr(so, "add_replay_gain", lambda paths: captured.append(paths))
+
+    req = SplitRequest(
+        album_id=album_id,
+        tracks=[SplitTrack(title="One", duration_seconds=30.0)],
+        output_format="flac", replaygain=False,
+    )
+    manifest = so.albums_fs.read_manifest(album_id)
+    _run_split(req, manifest)
+    assert captured == []
+
+
+def test_split_album_skips_replaygain_for_non_flac(monkeypatch, tmp_path):
+    """ReplayGain is a metaflac feature — a WAV/MP3 split must not attempt
+    it even when the flag is on."""
+    album_id = "rgcccccc"
+    _setup_split_fixture(monkeypatch, tmp_path, album_id, "wav")
+    captured = []
+    monkeypatch.setattr(so, "add_replay_gain", lambda paths: captured.append(paths))
+
+    req = SplitRequest(
+        album_id=album_id,
+        tracks=[SplitTrack(title="One", duration_seconds=30.0)],
+        output_format="wav", replaygain=True,
+    )
+    manifest = so.albums_fs.read_manifest(album_id)
+    _run_split(req, manifest)
+    assert captured == []

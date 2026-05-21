@@ -402,6 +402,10 @@
         <label class="we-process-toggle">
           <input type="checkbox" id="we-normalize"> normalize album
         </label>
+        <label class="we-process-toggle"
+               title="Write ReplayGain track + album loudness tags (FLAC only). Players normalise volume on playback; the audio itself is untouched.">
+          <input type="checkbox" id="we-replaygain"> ReplayGain tags
+        </label>
         <label class="we-process-bits">
           output format
           <select id="we-format" onchange="weOnFormatChange()">

@@ -151,6 +151,31 @@ def wipe_prior_music_dir(prior_relpath: Optional[str], new_relpath: str) -> None
             pass
 
 
+def add_replay_gain(track_paths: list[Path]) -> None:
+    """Compute and write ReplayGain 2.0 tags over a set of FLAC tracks in a
+    single metaflac pass.
+
+    One `metaflac --add-replay-gain` invocation over ALL of an album's
+    tracks writes both the per-track gain (REPLAYGAIN_TRACK_GAIN/_PEAK) and
+    a shared album gain (REPLAYGAIN_ALBUM_GAIN/_PEAK) computed across the
+    whole set — album gain preserves the LP's intra-side dynamics while
+    letting players normalise the library. The audio is never touched, so
+    this is fully reversible (`metaflac --remove-replay-gain`).
+
+    metaflac requires the files to share sample rate + channel count; every
+    track emitted from one split does, so that precondition holds. Failure
+    is non-fatal (the tracks already exist and play fine) — we swallow it
+    the same way `write_track_tags` does, rather than abort a finished
+    split over a missing-loudness-tag. FLAC only; the caller gates on
+    output_format."""
+    if not track_paths:
+        return
+    subprocess.run(
+        ["metaflac", "--add-replay-gain", *[str(p) for p in track_paths]],
+        check=False, stderr=subprocess.DEVNULL,
+    )
+
+
 def kept_duration_total(tracks: list, total: float) -> float:
     """Total seconds of audio that will actually land in `music/` (skip
     tracks excluded). Drives the constant-rate progress bar across the
@@ -303,6 +328,7 @@ def _persist_split_plan(req, relpath: str) -> None:
         "bit_depth":        req.bit_depth,
         "sample_rate":      req.sample_rate,
         "output_format":    req.output_format,
+        "replaygain":       req.replaygain,
     }
     manifest = albums_fs.read_manifest(req.album_id)
     manifest["plan"] = plan
@@ -431,6 +457,13 @@ async def split_album(req, manifest: dict) -> dict:
             created.append(entry)
     finally:
         playlist.unlink(missing_ok=True)
+
+    # ReplayGain is a post-encode tag pass over the finished FLACs — one
+    # metaflac call computes per-track + shared album gain. FLAC only
+    # (metaflac is the writer); lossy/WAV/ALAC outputs skip it.
+    if req.replaygain and req.output_format == "flac" and created:
+        track_paths = [music_dir / e["filename"] for e in created]
+        await asyncio.to_thread(add_replay_gain, track_paths)
 
     _persist_split_plan(req, relpath)
     finish_job(req.job_id)

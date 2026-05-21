@@ -36,6 +36,19 @@ def js() -> str:
     return "\n".join(parts)
 
 
+def test_replaygain_toggle_present_and_wired(html, js):
+    """The ReplayGain split toggle exists in the wave-editor process row and
+    is wired both ways: config seeds its default, and the editor reads it
+    into the split / draft-save payloads."""
+    assert 'id="we-replaygain"' in html
+    # config.js (a module, in the `js` fixture) seeds it from config.
+    assert "default_split_replaygain" in js
+    # wave-editor.js is a classic script, not bundled into `js` — read it.
+    we_js = (REPO_ROOT / "app" / "static" / "wave-editor.js").read_text(encoding="utf-8")
+    assert "we-replaygain" in we_js
+    assert "replaygain" in we_js
+
+
 def test_wave_canvas_is_keyboard_focusable(html):
     # The canvas has rich key handlers — exposing it to keyboard nav requires
     # tabindex + role + aria-label so screen readers announce it.
