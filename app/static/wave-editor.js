@@ -1083,6 +1083,13 @@ function weKeyDown(e) {
       weDeleteCut(i);
       return;
     }
+    case 'p':
+    case 'P': {
+      // Audition the nearest cut (play around the boundary, then auto-stop).
+      e.preventDefault();
+      wePreviewCut();
+      return;
+    }
     case 's':
     case 'S': {
       // Toggle skip on the region containing the playhead.
@@ -1398,6 +1405,26 @@ function wePlayTrack(i) {
   document.getElementById('we-play').textContent = '⏸';
   we.isPlaying = true;
   renderTracks();
+}
+
+// Audition the cut nearest the playhead: play a couple seconds before to a
+// couple after, then auto-stop. Reuses the `playingEnd` watcher (same
+// mechanism as wePlayTrack), so no extra timer — and because playingEnd is
+// set, _jumpOverSkippedFromHere is bypassed, so the boundary plays through
+// even when an adjacent region is marked skip (which is what you want when
+// checking the cut).
+function wePreviewCut() {
+  if (!we.cuts.length || !weAudio.hasSrc) return;
+  const i = _nearestCutIndex(weAudio.currentTime || 0);
+  const { start, end } = window._wePreviewWindow(we.cuts[i], we.total, 2, 2);
+  if (end <= start) return;
+  weAudio.seek(start);
+  we.playingTrack = null;
+  we.playingEnd   = end;
+  weAudio.play();
+  document.getElementById('we-play').textContent = '⏸';
+  we.isPlaying = true;
+  renderWaveformOverlay();
 }
 
 function stopPlayback() {

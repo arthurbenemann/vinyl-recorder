@@ -309,6 +309,19 @@ function _weCutGroupSpan(i) {
   return { i, last, sideLo, sideHi };
 }
 
+// The playback window for auditing a cut: `pre` seconds before to `post`
+// seconds after the cut, clamped to [0, total]. Lets the user hear whether
+// a track boundary lands cleanly without manual scrubbing. Pure — drives
+// the wave-editor's "preview cut" key/button.
+function _wePreviewWindow(cut, total, pre, post) {
+  const t = Math.max(0, Number(total) || 0);
+  const c = Math.max(0, Math.min(t, Number(cut) || 0));
+  return {
+    start: Math.max(0, c - (Number(pre)  || 0)),
+    end:   Math.min(t, c + (Number(post) || 0)),
+  };
+}
+
 // ── Expose on window for wave-editor.js + unit tests ─────────────────────
 if (typeof window !== 'undefined') {
   window._weRemapForSides      = _weRemapForSides;
@@ -318,4 +331,5 @@ if (typeof window !== 'undefined') {
   window._weEffectivePositions = _weEffectivePositions;
   window._weSideBounds         = _weSideBounds;
   window._weCutGroupSpan       = _weCutGroupSpan;
+  window._wePreviewWindow      = _wePreviewWindow;
 }

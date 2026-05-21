@@ -788,3 +788,36 @@ def test_music_row_expands_into_track_list(stack, page):
         for p in sides:
             try: p.unlink(missing_ok=True)
             except Exception: pass
+
+
+# ── Keyboard: preview the nearest cut (p) ────────────────────────────────
+def test_wave_editor_preview_cut_plays_around_boundary(stack, page):
+    """`p` auditions the nearest cut: it seeks to ~2s before the boundary,
+    starts playing, and arms the auto-stop at ~2s after."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="PreviewArtist", album="PreviewAlbum",
+        )
+        # Plant a cut in the middle (no dependency on the add-cut shortcut),
+        # park the playhead away from it, then preview with `p`.
+        cut = page.evaluate(
+            "() => { const c = we.total / 2; weAddCutAtTime(c);"
+            " weAudio.seek(0); return c; }"
+        )
+        page.evaluate("document.getElementById('we-canvas').focus()")
+        page.keyboard.press("p")
+        # Seeks to ~cut-2 and starts a bounded play (playingEnd ~ cut+2).
+        page.wait_for_function(
+            f"() => we.isPlaying === true"
+            f" && Math.abs(weAudio.currentTime - ({cut} - 2)) < 0.6"
+            f" && we.playingEnd != null && Math.abs(we.playingEnd - ({cut} + 2)) < 0.01",
+            timeout=5_000,
+        )
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass

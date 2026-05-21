@@ -300,6 +300,7 @@
 
     <div class="we-toolbar">
       <button class="play-btn" id="we-play" onclick="weTogglePlay()" title="Play / pause (Space)" aria-keyshortcuts="Space">▶</button>
+      <button class="btn-small" id="we-preview-btn" onclick="wePreviewCut()" title="Preview the nearest cut: play ~2s before to ~2s after the boundary, then stop (p)." aria-keyshortcuts="p">▶ preview cut (p)</button>
       <span class="readout">
         <strong id="we-time">0:00</strong> / <span id="we-duration">—</span>
       </span>
@@ -367,7 +368,7 @@
 
     <div class="wave-wrap" id="we-wrap"
          onwheel="weWheel(event)">
-      <canvas class="wave-img" id="we-canvas" width="2400" height="140" tabindex="0" role="application" aria-label="Album waveform — use space to play/pause, arrow keys to nudge cuts, j/k to jump between cuts"></canvas>
+      <canvas class="wave-img" id="we-canvas" width="2400" height="140" tabindex="0" role="application" aria-label="Album waveform — space to play/pause, p to preview the nearest cut, arrow keys to nudge cuts, j/k to jump between cuts"></canvas>
       <div class="wave-overlay" id="we-overlay"
            onmousemove="weHoverMove(event)"
            onmouseleave="weHoverLeave()"
@@ -381,7 +382,7 @@
     <div class="wave-axis"><span id="we-t0">0:00</span><span id="we-t1">—</span></div>
     <div class="wave-help">
       <strong>scroll</strong> zoom · <strong>shift+click</strong> add cut · drag handle to nudge (snaps to detected silences) · right-click delete · click waveform to seek.<br>
-      <strong>space</strong> play/pause · <strong>←/→</strong> nudge nearest cut ±0.1s (shift = ±1s) · <strong>j/k</strong> jump prev/next cut · <strong>s</strong> skip region at playhead · <strong>delete</strong> remove nearest cut · <strong>esc</strong> close.<br>
+      <strong>space</strong> play/pause · <strong>p</strong> preview nearest cut · <strong>←/→</strong> nudge nearest cut ±0.1s (shift = ±1s) · <strong>j/k</strong> jump prev/next cut · <strong>s</strong> skip region at playhead · <strong>delete</strong> remove nearest cut · <strong>esc</strong> close.<br>
       <span style="opacity:0.85"><span style="color:rgba(170,210,255,0.95)">┊</span> side switch (from recording) · cut handles + track rows show sleeve-style positions (e.g. A1, B2) — auto-derived from the side layout, or from Discogs when a tracklist is applied.</span>
     </div>
 
