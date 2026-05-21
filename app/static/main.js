@@ -41,7 +41,7 @@ import {
   openTag, openTagAlbum, closeTag,
   runSearch, pickCandidate, pickCollectionCandidate, refreshCollection,
   onFindInput, onFindEnter, wireFindSubtitleLive,
-  applyTagPanel, wireTagDirtyTracking,
+  applyTagPanel, wireTagDirtyTracking, onCoverFileSelected,
 } from './modules/tagging.js';
 import {
   openCombine, moveSide,
@@ -132,6 +132,7 @@ window.pickCollectionCandidate = pickCollectionCandidate;
 window.refreshCollection = refreshCollection;
 window.onFindInput = onFindInput;
 window.onFindEnter = onFindEnter;
+window.onCoverFileSelected = onCoverFileSelected;
 window.applyTagPanel = applyTagPanel;
 window.openCombine = openCombine;
 window.moveSide = moveSide;

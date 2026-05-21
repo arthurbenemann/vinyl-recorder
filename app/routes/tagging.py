@@ -1,9 +1,10 @@
 """Tagging workflow: MB+Discogs search, release detail, cover proxy, apply."""
 import asyncio
+import io
 import re
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from services import albums_fs, discogs
@@ -389,6 +390,52 @@ async def album_cover(album_id: str):
             except Exception: pass
             return StreamingResponse(iter([art]), media_type="image/jpeg")
     raise HTTPException(404, "no cover available")
+
+
+# Cap the accepted upload so a multi-hundred-MB scan can't be embedded into
+# every track's FLAC at split time. Generous for a cover (a 1500px JPEG is
+# well under 1 MB after the re-encode below).
+_MAX_COVER_UPLOAD_BYTES = 12 * 1024 * 1024
+
+
+def _normalize_cover_jpeg(raw: bytes) -> bytes:
+    """Decode an arbitrary uploaded image and re-encode it as a bounded RGB
+    JPEG. Opening it through Pillow doubles as validation — a non-image (or a
+    truncated/corrupt one) raises, which the caller turns into a 400 — and the
+    re-encode strips any non-pixel payload rather than trusting the bytes."""
+    from PIL import Image
+    img = Image.open(io.BytesIO(raw))
+    img = img.convert("RGB")
+    # Bound the longest edge: covers get embedded into every track, so a huge
+    # source scan would bloat the album many times over.
+    img.thumbnail((1500, 1500))
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=90)
+    return out.getvalue()
+
+
+@router.post("/api/file-cover/{album_id}")
+async def upload_cover(album_id: str, file: UploadFile = File(...)):
+    """Set a user-supplied cover image on an album. Useful for obscure
+    pressings that MusicBrainz / CAA and Discogs have no art for. The image is
+    re-encoded to a bounded JPEG (cover.jpg), which then flows into the split
+    output the same way an auto-fetched cover does. Upload only — the server
+    never fetches a user-supplied URL, so there's no SSRF surface."""
+    if not albums_fs.is_valid_album_id(album_id):
+        raise HTTPException(404, "album not found")
+    if not albums_fs.album_dir(album_id).is_dir():
+        raise HTTPException(404, "album not found")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "empty upload")
+    if len(raw) > _MAX_COVER_UPLOAD_BYTES:
+        raise HTTPException(413, "image too large (max 12 MB)")
+    try:
+        jpeg = await asyncio.to_thread(_normalize_cover_jpeg, raw)
+    except Exception:
+        raise HTTPException(400, "not a readable image")
+    await asyncio.to_thread(albums_fs.write_cover, album_id, jpeg)
+    return {"album_id": album_id, "cover": "cover.jpg"}
 
 
 async def _fetch_cover_bytes(
