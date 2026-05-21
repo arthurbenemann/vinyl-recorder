@@ -502,16 +502,17 @@
       <!-- Right column: find-a-release tools + candidate matches -->
       <div class="tag-col">
         <div class="col-label">Find a release</div>
-        <!-- Unified find-a-release bar. Auto-detects three modes:
+        <!-- Unified find-a-release bar. Auto-detects four modes:
               · empty + Enter → search MusicBrainz using left-column fields
               · free text     → live-filters the Discogs collection
               · Discogs URL/id pasted → fetches that release directly
+              · MusicBrainz release URL / MBID pasted → fetches it directly
              The subtitle below updates on every keystroke so the user
              always knows what the next action will do. -->
         <div class="search-wrap t-find-wrap" style="max-width:none;margin-bottom:4px">
           <svg class="search-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><line x1="10.4" y1="10.4" x2="13.5" y2="13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
           <input id="t-search" type="search"
-                 placeholder="filter collection · paste Discogs link · or Enter ↗ to search MusicBrainz"
+                 placeholder="filter collection · paste Discogs/MusicBrainz link · or Enter ↗ to search MusicBrainz"
                  autocomplete="off"
                  oninput="onFindInput(this.value)"
                  onpaste="setTimeout(()=>onFindInput(this.value),0)"
@@ -528,7 +529,7 @@
         </div>
         <div class="search-status" id="t-search-status"></div>
         <div class="candidates" id="t-candidates">
-          <div class="empty-results">Type above to filter your collection, paste a Discogs link, or hit Enter to search MusicBrainz using the Artist + Album fields on the left.</div>
+          <div class="empty-results">Type above to filter your collection, paste a Discogs or MusicBrainz link, or hit Enter to search MusicBrainz using the Artist + Album fields on the left.</div>
         </div>
       </div>
 
