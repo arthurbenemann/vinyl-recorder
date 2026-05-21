@@ -131,6 +131,26 @@ def test_release_discogs_includes_composer_and_conductor(monkeypatch):
     assert body["conductor"] == "Karajan"
 
 
+def test_release_discogs_joins_genres_and_styles_with_semicolons(monkeypatch):
+    """Genres + styles are merged into one ';'-separated string so the split
+    flow can write each as its own GENRE tag. ';' (not ',') is the separator
+    because a Discogs genre can itself contain commas."""
+    from services import discogs as ds_mod
+
+    fake = {
+        "title": "X", "year": 1990, "artists": [{"name": "A"}],
+        "labels": [], "country": "", "formats": [],
+        "genres": ["Electronic", "Folk, World, & Country"],
+        "styles": ["Techno", "House"],
+        "tracklist": [], "images": [], "extraartists": [],
+        "uri": "https://www.discogs.com/release/7",
+    }
+    monkeypatch.setattr(ds_mod, "release", lambda rid: fake)
+    body = _client().get("/api/release/discogs/7").json()
+    # ';'-joined, dedup-ordered, comma-containing genre kept whole.
+    assert body["genre"] == "Electronic; Folk, World, & Country; Techno; House"
+
+
 # ── /api/cover/{mbid} ────────────────────────────────────────────────────
 def test_cover_invalid_mbid_returns_400():
     r = _client().get("/api/cover/not-an-mbid")
