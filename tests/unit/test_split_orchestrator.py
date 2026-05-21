@@ -31,10 +31,33 @@ from services.split_orchestrator import (
     SplitProcessingError,
     SplitValidationError,
     kept_duration_total,
+    split_genres,
     wipe_prior_music_dir,
     write_track_tags,
 )
 from state import SplitRequest, SplitTrack
+
+
+# ── split_genres ─────────────────────────────────────────────────────────
+def test_split_genres_splits_on_semicolons():
+    assert split_genres("Electronic; Techno; House") == ["Electronic", "Techno", "House"]
+
+
+def test_split_genres_single_value():
+    assert split_genres("Rock") == ["Rock"]
+
+
+def test_split_genres_preserves_commas_within_a_genre():
+    # A single Discogs genre with commas must survive intact — only ';' splits.
+    assert split_genres("Folk, World, & Country") == ["Folk, World, & Country"]
+    assert split_genres("Folk, World, & Country; Techno") == [
+        "Folk, World, & Country", "Techno",
+    ]
+
+
+def test_split_genres_empty_and_blank():
+    assert split_genres("") == []
+    assert split_genres("  ;  ; ") == []
 
 
 # ── kept_duration_total ──────────────────────────────────────────────────
@@ -226,6 +249,51 @@ def test_write_track_tags_emits_required_set(monkeypatch, tmp_path):
     assert "--set-tag=TRACKTOTAL=10" in cmd
     # File path is the trailing positional arg.
     assert cmd[-1] == str(out)
+
+
+def test_write_track_tags_emits_one_genre_tag_per_value(monkeypatch, tmp_path):
+    """A ';'-joined genre string becomes repeated GENRE Vorbis comments so
+    servers browse each genre independently."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 1,
+                     tags={"artist": "A", "genre": "Electronic; Techno; House"},
+                     cover_file=None)
+    cmd = calls[0]
+    assert cmd.count("--set-tag=GENRE=Electronic") == 1
+    assert "--set-tag=GENRE=Techno" in cmd
+    assert "--set-tag=GENRE=House" in cmd
+    # Three distinct GENRE tags, not one delimited blob.
+    assert sum(1 for a in cmd if a.startswith("--set-tag=GENRE=")) == 3
+
+
+def test_write_track_tags_no_genre_tag_when_blank(monkeypatch, tmp_path):
+    """Blank genre writes no GENRE tag at all (no empty `GENRE=` litter)."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 1, tags={"artist": "A"}, cover_file=None)
+    cmd = calls[0]
+    assert not any(a.startswith("--set-tag=GENRE=") for a in cmd)
 
 
 def test_write_track_tags_skips_optional_tags_when_blank(monkeypatch, tmp_path):

@@ -27,6 +27,7 @@ parsing) stays in the route — the orchestrator's preconditions are
 documented in `split_album`'s docstring.
 """
 import asyncio
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -63,6 +64,25 @@ _AUDIO_EXTS: tuple[str, ...] = (".flac", ".wav", ".mp3", ".ogg", ".m4a")
 def _wav_codec_for_bits(bits: Optional[int]) -> str:
     """16-bit signed LE for WAV unless the user asked for 24-bit explicitly."""
     return "pcm_s24le" if bits == 24 else "pcm_s16le"
+
+
+def split_genres(genre: str) -> list[str]:
+    """Split a genre string into individual values on the `;` separator
+    (plus newlines), trimmed, blanks dropped.
+
+    Music servers (Jellyfin, Navidrome, …) want each genre as its own value,
+    not one delimited blob — a single "Electronic; Techno; House" tag shows
+    up as one nonsense genre and breaks genre browsing. The tagging flow
+    joins MusicBrainz/Discogs genres + styles with `;`, so this splits them
+    back apart at write time into repeated GENRE Vorbis comments.
+
+    Only `;` (and newlines) split — NOT commas — because a single Discogs
+    genre legitimately contains commas ("Folk, World, & Country") and must
+    survive intact as one value."""
+    if not genre:
+        return []
+    parts = re.split(r"[;\n]", genre)
+    return [p.strip() for p in parts if p.strip()]
 
 
 def _media_type_for(ext: str) -> str:
@@ -180,13 +200,17 @@ def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
                 f"--set-tag=ARTIST={tags.get('artist', '')}",
                 f"--set-tag=ALBUM={tags.get('album', '')}",
                 f"--set-tag=DATE={tags.get('year', '')}",
-                f"--set-tag=GENRE={tags.get('genre', '')}",
                 f"--set-tag=LABEL={tags.get('label', '')}",
                 f"--set-tag=CATALOGNUMBER={tags.get('catalog_number', '')}",
                 f"--set-tag=RELEASECOUNTRY={tags.get('country', '')}",
                 f"--set-tag=TITLE={title}",
                 f"--set-tag=TRACKNUMBER={out_idx}",
                 f"--set-tag=TRACKTOTAL={out_total}"]
+    # One GENRE Vorbis comment per value (servers browse by individual
+    # genre, not a delimited blob). Blank genre → no GENRE tag at all
+    # rather than an empty one.
+    for g in split_genres(tags.get("genre", "")):
+        tag_args.append(f"--set-tag=GENRE={g}")
     # Optional classical-style tags — only emit when present so we don't
     # leave empty COMPOSER=/CONDUCTOR= entries on every track.
     if tags.get("composer"):
