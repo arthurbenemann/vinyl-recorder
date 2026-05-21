@@ -36,6 +36,21 @@ def js() -> str:
     return "\n".join(parts)
 
 
+def test_wave_editor_add_cut_and_nudge_keys_wired(html):
+    """The split editor advertises + handles the `c` (add cut at playhead)
+    and ←/→ (nudge nearest cut) keyboard shortcuts."""
+    # Help text + canvas aria advertise the `c` key.
+    assert "add cut at playhead" in html
+    canvas_tag = html.split('id="we-canvas"')[1].split(">")[0]
+    assert "c to add a cut" in canvas_tag
+    # wave-editor.js handles `c` and routes arrows through the nudge helper.
+    we_js = (REPO_ROOT / "app" / "static" / "wave-editor.js").read_text(encoding="utf-8")
+    assert "case 'c':" in we_js
+    assert "weAddCutAtPlayhead()" in we_js
+    assert "weNudgeNearestCut(" in we_js
+    assert "_weNudgedCutValue(" in we_js
+
+
 def test_replaygain_toggle_present_and_wired(html, js):
     """The ReplayGain split toggle exists in the wave-editor process row and
     is wired both ways: config seeds its default, and the editor reads it

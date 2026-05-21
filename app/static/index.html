@@ -368,7 +368,7 @@
 
     <div class="wave-wrap" id="we-wrap"
          onwheel="weWheel(event)">
-      <canvas class="wave-img" id="we-canvas" width="2400" height="140" tabindex="0" role="application" aria-label="Album waveform — use space to play/pause, arrow keys to nudge cuts, j/k to jump between cuts"></canvas>
+      <canvas class="wave-img" id="we-canvas" width="2400" height="140" tabindex="0" role="application" aria-keyshortcuts="Space c j k Delete s ArrowLeft ArrowRight" aria-label="Album waveform — space to play/pause, c to add a cut at the playhead, arrow keys to nudge the nearest cut, j/k to jump between cuts"></canvas>
       <div class="wave-overlay" id="we-overlay"
            onmousemove="weHoverMove(event)"
            onmouseleave="weHoverLeave()"
@@ -381,8 +381,8 @@
     </div>
     <div class="wave-axis"><span id="we-t0">0:00</span><span id="we-t1">—</span></div>
     <div class="wave-help">
-      <strong>scroll</strong> zoom · <strong>shift+click</strong> add cut · drag handle to nudge (snaps to detected silences) · right-click delete · click waveform to seek.<br>
-      <strong>space</strong> play/pause · <strong>←/→</strong> nudge nearest cut ±0.1s (shift = ±1s) · <strong>j/k</strong> jump prev/next cut · <strong>s</strong> skip region at playhead · <strong>delete</strong> remove nearest cut · <strong>esc</strong> close.<br>
+      <strong>scroll</strong> zoom · <strong>shift+click</strong> or <strong>c</strong> add cut · drag handle to nudge (snaps to detected silences) · right-click delete · click waveform to seek.<br>
+      <strong>space</strong> play/pause · <strong>c</strong> add cut at playhead · <strong>←/→</strong> nudge nearest cut ±0.1s (shift = ±1s) · <strong>j/k</strong> jump prev/next cut · <strong>s</strong> skip region at playhead · <strong>delete</strong> remove nearest cut · <strong>esc</strong> close.<br>
       <span style="opacity:0.85"><span style="color:rgba(170,210,255,0.95)">┊</span> side switch (from recording) · cut handles + track rows show sleeve-style positions (e.g. A1, B2) — auto-derived from the side layout, or from Discogs when a tracklist is applied.</span>
     </div>
 
@@ -441,7 +441,7 @@
 
     <div class="action-row" style="margin-top:14px">
       <button class="btn primary" id="we-go" onclick="weApplySplit()" disabled title="Apply split: render the cuts above into per-track files using the chosen output format and bit depth.">apply split</button>
-      <button class="btn" onclick="weAddCutAtPlayhead()" title="Insert a cut at the current playhead position. Same as shift+click on the waveform.">+ add cut at playhead</button>
+      <button class="btn" onclick="weAddCutAtPlayhead()" title="Insert a cut at the current playhead position. Same as pressing c, or shift+click on the waveform." aria-keyshortcuts="c">+ add cut at playhead (c)</button>
       <button class="btn" onclick="weClearCuts()" title="Remove every cut. The waveform reverts to a single track.">clear cuts</button>
       <button class="btn" onclick="closeWaveEditor()" title="Close the split editor (Esc).">cancel</button>
     </div>
