@@ -277,6 +277,58 @@ def test_write_track_tags_includes_optional_tags_when_set(monkeypatch, tmp_path)
     assert "--set-tag=DISCOGS_RELEASE_ID=12345" in cmd
 
 
+def test_write_track_tags_includes_mb_ids_media_releasetype(monkeypatch, tmp_path):
+    """The stable MB identifiers + release facts are written when present
+    so music servers can match/group reliably."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    tags = {
+        "artist": "A",
+        "musicbrainz_releasegroupid": "rg-1",
+        "musicbrainz_artistid": "art-2",
+        "musicbrainz_albumartistid": "art-2",
+        "media": "Vinyl",
+        "releasetype": "Album",
+    }
+    write_track_tags(out, "Song", 1, 1, tags=tags, cover_file=None)
+    cmd = calls[0]
+    assert "--set-tag=MUSICBRAINZ_RELEASEGROUPID=rg-1" in cmd
+    assert "--set-tag=MUSICBRAINZ_ARTISTID=art-2" in cmd
+    assert "--set-tag=MUSICBRAINZ_ALBUMARTISTID=art-2" in cmd
+    assert "--set-tag=MEDIA=Vinyl" in cmd
+    assert "--set-tag=RELEASETYPE=Album" in cmd
+
+
+def test_write_track_tags_omits_mb_ids_when_absent(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 1, tags={"artist": "A"}, cover_file=None)
+    cmd = calls[0]
+    assert not any("MUSICBRAINZ_RELEASEGROUPID=" in a for a in cmd)
+    assert not any("MEDIA=" in a for a in cmd)
+    assert not any("RELEASETYPE=" in a for a in cmd)
+
+
 def test_write_track_tags_imports_cover_as_separate_call(monkeypatch, tmp_path):
     """Cover-art embed is a second metaflac call because metaflac's
     `--import-picture-from` doesn't compose with `--set-tag` flags."""

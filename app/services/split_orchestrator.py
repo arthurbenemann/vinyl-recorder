@@ -175,7 +175,8 @@ def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
     Distinct from `services.ffmpeg.write_tags` (which writes the side-level
     tag set used during apply-tags). This one is the per-track flavour: it
     additionally sets TITLE / TRACKNUMBER / TRACKTOTAL plus the optional
-    MUSICBRAINZ_ALBUMID / DISCOGS_RELEASE_ID, and embeds a cover."""
+    MUSICBRAINZ_* IDs, DISCOGS_RELEASE_ID, MEDIA, and RELEASETYPE, and
+    embeds a cover."""
     tag_args = ["metaflac", "--remove-all-tags",
                 f"--set-tag=ARTIST={tags.get('artist', '')}",
                 f"--set-tag=ALBUM={tags.get('album', '')}",
@@ -197,6 +198,18 @@ def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
         tag_args.append(f"--set-tag=MUSICBRAINZ_ALBUMID={tags['musicbrainz_albumid']}")
     if tags.get("discogs_release_id"):
         tag_args.append(f"--set-tag=DISCOGS_RELEASE_ID={tags['discogs_release_id']}")
+    # Stable MB identifiers + release facts (filled at apply-time from the
+    # chosen release). Servers use these for reliable matching/grouping and
+    # artist/album art. Each only when present.
+    for key, tagname in (
+        ("musicbrainz_releasegroupid", "MUSICBRAINZ_RELEASEGROUPID"),
+        ("musicbrainz_artistid",       "MUSICBRAINZ_ARTISTID"),
+        ("musicbrainz_albumartistid",  "MUSICBRAINZ_ALBUMARTISTID"),
+        ("media",                      "MEDIA"),
+        ("releasetype",                "RELEASETYPE"),
+    ):
+        if tags.get(key):
+            tag_args.append(f"--set-tag={tagname}={tags[key]}")
     tag_args.append(str(out))
     subprocess.run(tag_args, check=False, stderr=subprocess.DEVNULL)
     if cover_file:
