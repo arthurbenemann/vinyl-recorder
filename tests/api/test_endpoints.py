@@ -59,6 +59,9 @@ def test_status_when_idle():
     assert body["recording"] is False
     assert body["sessions"] == []
     assert "disk_free_gb" in body
+    # Headroom is exposed but None when nothing is connected (format unknown).
+    assert "headroom_minutes" in body
+    assert body["headroom_minutes"] is None
     assert body["upstream"]["connected"] is False
 
 
@@ -136,6 +139,9 @@ def test_recordings_lists_files_in_raw(tmp_path):
         names = [rec["filename"] for rec in body["files"]]
         assert "test_dummy.flac" in names
         assert "disk_free_gb" in body
+        # Headroom rides alongside disk_free; None when not connected.
+        assert "headroom_minutes" in body
+        assert body["headroom_minutes"] is None
     finally:
         fake.unlink(missing_ok=True)
 

@@ -28,7 +28,7 @@ with warnings.catch_warnings():
 from services.eventbus import bus
 from services.ffmpeg import (
     LOW_SPACE_GB, disk_free_gb, disk_space_error, find_side, list_recordings,
-    safe_name,
+    recording_headroom_minutes, safe_name,
 )
 # Process-lifecycle helpers for the proxy ffmpeg children live in their own
 # service module so the route file stays focused on HTTP glue. The
@@ -997,7 +997,12 @@ async def get_log(session_id: str):
 
 @router.get("/api/recordings")
 async def get_recordings():
-    return {"files": list_recordings(), "disk_free_gb": disk_free_gb()}
+    fmt = upstream.fmt if upstream.configured else None
+    return {
+        "files":            list_recordings(),
+        "disk_free_gb":     disk_free_gb(),
+        "headroom_minutes": recording_headroom_minutes(fmt),
+    }
 
 
 @router.post("/api/recordings/{filename}/rename")
