@@ -53,7 +53,7 @@ SCHEMA_VERSION = 2
 _TAG_KEYS: frozenset[str] = frozenset((
     "artist", "album", "year", "genre", "label",
     "catalog_number", "country", "composer", "conductor",
-    "musicbrainz_albumid", "discogs_release_id",
+    "musicbrainz_albumid", "discogs_release_id", "original_year",
 ))
 
 

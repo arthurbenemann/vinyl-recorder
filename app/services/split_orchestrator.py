@@ -100,6 +100,7 @@ def _ffmpeg_metadata_args(title: str, out_idx: int, out_total: int,
     ]
     if tags.get("composer"):  pairs.append(("composer",  tags["composer"]))
     if tags.get("conductor"): pairs.append(("conductor", tags["conductor"]))
+    if tags.get("original_year"): pairs.append(("originaldate", tags["original_year"]))
     for k, v in pairs:
         if v != "":
             args += ["-metadata", f"{k}={v}"]
@@ -193,6 +194,10 @@ def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
         tag_args.append(f"--set-tag=COMPOSER={tags['composer']}")
     if tags.get("conductor"):
         tag_args.append(f"--set-tag=CONDUCTOR={tags['conductor']}")
+    # First-release year of the album (set for MB picks). Lets libraries sort
+    # reissues by original release rather than this pressing's DATE.
+    if tags.get("original_year"):
+        tag_args.append(f"--set-tag=ORIGINALDATE={tags['original_year']}")
     if tags.get("musicbrainz_albumid"):
         tag_args.append(f"--set-tag=MUSICBRAINZ_ALBUMID={tags['musicbrainz_albumid']}")
     if tags.get("discogs_release_id"):

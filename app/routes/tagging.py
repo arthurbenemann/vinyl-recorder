@@ -41,6 +41,16 @@ def _mb_artist_relation(mb_release: dict, rel_type: str) -> str:
     return ", ".join(names)
 
 
+def _original_year(mb_release: dict) -> str:
+    """Year the album first came out, from the MB release-group's
+    `first-release-date` (present once `inc=release-groups` is requested). For
+    a reissue this is earlier than the pressing's own date; persisted as
+    `original_year` and written as ORIGINALDATE so libraries sort reissues by
+    when the music was released, not when this copy was pressed."""
+    rg = mb_release.get("release-group") or {}
+    return (rg.get("first-release-date") or "")[:4]
+
+
 def _discogs_extra_artists(release: dict, role_prefixes: tuple[str, ...]) -> str:
     """Pull credits from a Discogs release's `extraartists[]` whose role
     starts with any of the given prefixes (lowercased). Discogs uses
@@ -445,14 +455,20 @@ async def apply_tags(req: ApplyRequest):
         req.discogs_release_id if req.discogs_release_id and req.discogs_release_id > 0
         else None
     )
-    # When an MB pick is on the table but discogs_id wasn't supplied, see if
-    # MB has the Discogs link recorded for us so we can persist + use it.
-    if req.mbid and discogs_id is None:
+    # An MB pick lets us enrich from the full release (cached from the user's
+    # candidate-pick fetch, so normally free): pull the Discogs link when the
+    # client didn't supply one, plus the release-group's first-release-date as
+    # the original year so reissues carry ORIGINALDATE.
+    if req.mbid:
         try:
             mb = await asyncio.to_thread(release_full, req.mbid)
-            did = extract_discogs_id(mb)
-            if did:
-                discogs_id = did
+            if discogs_id is None:
+                did = extract_discogs_id(mb)
+                if did:
+                    discogs_id = did
+            oy = _original_year(mb)
+            if oy:
+                fields["original_year"] = oy
         except Exception:
             pass
     if discogs_id is not None:

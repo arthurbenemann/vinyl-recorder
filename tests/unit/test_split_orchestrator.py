@@ -228,6 +228,34 @@ def test_write_track_tags_emits_required_set(monkeypatch, tmp_path):
     assert cmd[-1] == str(out)
 
 
+def test_write_track_tags_emits_originaldate_when_present(monkeypatch, tmp_path):
+    """A reissue carries ORIGINALDATE (the album's first-release year) so
+    libraries can sort by original release; absent when not supplied."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 10,
+                     tags={"artist": "A", "year": "2015", "original_year": "1973"},
+                     cover_file=None)
+    cmd = calls[0]
+    assert "--set-tag=ORIGINALDATE=1973" in cmd
+    assert "--set-tag=DATE=2015" in cmd
+    # No original_year → no ORIGINALDATE.
+    calls.clear()
+    write_track_tags(out, "Song", 1, 10, tags={"artist": "A", "year": "2015"},
+                     cover_file=None)
+    assert not any(c.startswith("--set-tag=ORIGINALDATE") for c in calls[0])
+
+
 def test_write_track_tags_skips_optional_tags_when_blank(monkeypatch, tmp_path):
     """Composer/Conductor/MusicBrainz/Discogs are only emitted when the
     user provided them — otherwise empty tags would litter every track."""

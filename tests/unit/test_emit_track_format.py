@@ -79,6 +79,13 @@ def test_ffmpeg_metadata_args_uses_flag_pairs():
     assert args.count("-metadata") == len(args) // 2
 
 
+def test_ffmpeg_metadata_args_emits_originaldate_when_present():
+    args = _ffmpeg_metadata_args("Song", 1, 10, {"original_year": "1973"}, None)
+    assert "originaldate=1973" in " ".join(args)
+    # Absent when not supplied.
+    assert "originaldate=" not in " ".join(_ffmpeg_metadata_args("Song", 1, 10, {}, None))
+
+
 def test_format_settings_have_required_keys():
     for fmt, settings in _FORMAT_SETTINGS.items():
         assert "ext" in settings,         f"{fmt} missing ext"
