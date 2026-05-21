@@ -226,6 +226,50 @@ def test_write_track_tags_emits_required_set(monkeypatch, tmp_path):
     assert "--set-tag=TRACKTOTAL=10" in cmd
     # File path is the trailing positional arg.
     assert cmd[-1] == str(out)
+    # No disc args supplied → single-disc → no DISCNUMBER/DISCTOTAL.
+    assert not any(c.startswith("--set-tag=DISCNUMBER") for c in cmd)
+
+
+def test_write_track_tags_emits_disc_for_multidisc(monkeypatch, tmp_path):
+    """A 2-LP set (disc_total=2) gets DISCNUMBER/DISCTOTAL so Jellyfin groups
+    the discs; a single LP omits them."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "07 - Side C Opener.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Side C Opener", 7, 12, tags={"artist": "A"},
+                     cover_file=None, disc=2, disc_total=2)
+    cmd = calls[0]
+    assert "--set-tag=DISCNUMBER=2" in cmd
+    assert "--set-tag=DISCTOTAL=2" in cmd
+
+
+def test_write_track_tags_omits_disc_for_single_disc(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 8, tags={"artist": "A"},
+                     cover_file=None, disc=1, disc_total=1)
+    cmd = calls[0]
+    assert not any(c.startswith("--set-tag=DISCNUMBER") for c in cmd)
+    assert not any(c.startswith("--set-tag=DISCTOTAL") for c in cmd)
 
 
 def test_write_track_tags_skips_optional_tags_when_blank(monkeypatch, tmp_path):
