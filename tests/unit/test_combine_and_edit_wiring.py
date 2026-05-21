@@ -27,11 +27,14 @@ def test_apply_takes_thenedit_and_opens_editor(tagging):
     assert "window.openWaveEditor(result.album_id)" in tagging
 
 
-def test_apply_edit_button_combine_only(tagging):
-    # The button is revealed only in combine mode (nothing fresh to split
-    # after a retag/promote).
+def test_apply_edit_button_shown_for_new_albums(tagging):
+    # Revealed whenever an album is being CREATED — combine N sides or
+    # promote one — and hidden only when retagging an existing album.
     assert "tag-apply-edit-btn" in tagging
-    assert "applyEditBtn.hidden = !isCombine" in tagging
+    assert "const isNewAlbum = tagPanelTarget.album_id === undefined" in tagging
+    assert "applyEditBtn.hidden = !isNewAlbum" in tagging
+    # Label tracks the mode: "combine & edit" vs "apply & edit".
+    assert "isCombine ? 'combine & edit ▸' : 'apply & edit ▸'" in tagging
 
 
 def test_html_exposes_combine_and_edit_button():

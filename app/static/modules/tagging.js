@@ -119,10 +119,16 @@ export function openTag(fname) {
     isCombine ? 'Combine into album' : 'Tag album';
   document.getElementById('tag-apply-btn').textContent =
     isCombine ? 'combine' : 'apply tags';
-  // "combine & edit" only makes sense when creating a new album from sides;
-  // hidden for retag/promote where there's nothing fresh to go split.
+  // "& edit" applies whenever we're CREATING an album — combining N sides or
+  // promoting a single one — since both lead straight into the split editor.
+  // Hidden when retagging an existing album (album_id), where the library row
+  // already has its own "split into tracks" button.
   const applyEditBtn = document.getElementById('tag-apply-edit-btn');
-  if (applyEditBtn) applyEditBtn.hidden = !isCombine;
+  if (applyEditBtn) {
+    const isNewAlbum = tagPanelTarget.album_id === undefined;
+    applyEditBtn.hidden = !isNewAlbum;
+    applyEditBtn.textContent = isCombine ? 'combine & edit ▸' : 'apply & edit ▸';
+  }
   document.getElementById('combine-sides-section').hidden = !isCombine;
   if (isCombine) {
     const n = tagPanelTarget.filenames.length;
