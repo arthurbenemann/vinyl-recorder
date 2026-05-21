@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from routes import albums, pi_deploy, recordings, tagging, ws as ws_route
 from services.eventbus import bus
-from services.ffmpeg import LOW_SPACE_GB, disk_free_gb
+from services.ffmpeg import LOW_SPACE_GB, disk_free_gb, recording_headroom_minutes
 from services.jobs import get_job
 from services.upstream import (
     UPSTREAM_IDLE_GRACE_SECONDS, UPSTREAM_MIN_UPTIME_SECONDS,
@@ -165,10 +165,12 @@ async def status():
             "duration": s.duration,
         })
     return {
-        "recording":    len(sessions) > 0,
-        "sessions":     snapshot,
-        "disk_free_gb": disk_free_gb(),
-        "upstream":     upstream.state(),
+        "recording":      len(sessions) > 0,
+        "sessions":       snapshot,
+        "disk_free_gb":   disk_free_gb(),
+        "headroom_minutes": recording_headroom_minutes(
+            upstream.fmt if upstream.configured else None),
+        "upstream":       upstream.state(),
     }
 
 
