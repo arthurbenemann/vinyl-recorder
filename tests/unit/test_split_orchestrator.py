@@ -341,6 +341,19 @@ def test_split_album_rejects_unsupported_output_format():
     assert "output_format" in str(ei.value)
 
 
+def test_split_album_rejects_unsupported_channel_mode():
+    """A hand-crafted POST can't slip an arbitrary pan expression through —
+    channel_mode is validated against ALLOWED_CHANNEL_MODES."""
+    req = SplitRequest(
+        album_id="abc12345",
+        tracks=[SplitTrack(title="A", duration_seconds=10.0)],
+        channel_mode="quad",  # not allowed
+    )
+    with pytest.raises(SplitValidationError) as ei:
+        _run_split(req, manifest={"tags": {}})
+    assert "channel_mode" in str(ei.value)
+
+
 def test_split_album_propagates_missing_album_as_404_domain_error(monkeypatch):
     """`albums_fs.album_concat_playlist` raises `FileNotFoundError` when
     the album doesn't exist (or has no sides); the orchestrator wraps that

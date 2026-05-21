@@ -192,6 +192,7 @@ async def update_plan(album_id: str, req: PlanUpdateRequest):
     if req.bit_depth        is not None: plan["bit_depth"]        = req.bit_depth
     if req.sample_rate      is not None: plan["sample_rate"]      = req.sample_rate
     if req.output_format    is not None: plan["output_format"]    = req.output_format
+    if req.channel_mode     is not None: plan["channel_mode"]     = req.channel_mode
     manifest["plan"] = plan
     manifest["plan_version"] = current_version + 1
     albums_fs.write_manifest(album_id, manifest)

@@ -4,10 +4,33 @@ metadata flags, and media-type mapping; integration with ffmpeg is
 covered in tests/api/test_album_split.py."""
 
 from services.split_orchestrator import (
-    _FORMAT_SETTINGS, _ffmpeg_metadata_args, _media_type_for,
+    _FORMAT_SETTINGS, _ffmpeg_metadata_args, _media_type_for, _pan_filter,
     _wav_codec_for_bits,
 )
-from state import ALLOWED_OUTPUT_FORMATS
+from state import ALLOWED_CHANNEL_MODES, ALLOWED_OUTPUT_FORMATS
+
+
+# ── _pan_filter ──────────────────────────────────────────────────────────
+def test_pan_filter_stereo_is_noop():
+    assert _pan_filter("stereo") == ""
+    # Unknown / default → no filter (never smuggle a bad pan expr).
+    assert _pan_filter("bogus") == ""
+
+
+def test_pan_filter_mono_sums_channels():
+    assert _pan_filter("mono") == "pan=mono|c0=0.5*c0+0.5*c1"
+
+
+def test_pan_filter_left_and_right_pick_one_channel():
+    assert _pan_filter("left") == "pan=mono|c0=c0"
+    assert _pan_filter("right") == "pan=mono|c0=c1"
+
+
+def test_pan_filter_covers_all_non_stereo_modes():
+    # Every allowed non-stereo mode yields a filter; stereo yields none.
+    for m in ALLOWED_CHANNEL_MODES:
+        out = _pan_filter(m)
+        assert (out == "") == (m == "stereo")
 
 
 def test_allowed_formats_match_settings_keys():
