@@ -309,6 +309,22 @@ function _weCutGroupSpan(i) {
   return { i, last, sideLo, sideHi };
 }
 
+// ── _weDetectSettingValue ────────────────────────────────────────────────
+// Validate a persisted silence-detection setting (noise floor / min-silence
+// / auto-skip threshold) read back from localStorage. Returns the parsed
+// number when finite and within [min, max]; otherwise `fallback`, so a
+// corrupt or stale stored value can never seed the detector with a NaN or
+// out-of-range threshold. `max` is optional — pass null for the open-ended
+// duration fields.
+function _weDetectSettingValue(raw, fallback, min, max) {
+  const n = parseFloat(raw);
+  if (!isFinite(n)) return fallback;
+  if (n < min) return fallback;
+  if (max != null && n > max) return fallback;
+  return n;
+}
+
+
 // ── Expose on window for wave-editor.js + unit tests ─────────────────────
 if (typeof window !== 'undefined') {
   window._weRemapForSides      = _weRemapForSides;
@@ -318,4 +334,5 @@ if (typeof window !== 'undefined') {
   window._weEffectivePositions = _weEffectivePositions;
   window._weSideBounds         = _weSideBounds;
   window._weCutGroupSpan       = _weCutGroupSpan;
+  window._weDetectSettingValue = _weDetectSettingValue;
 }
