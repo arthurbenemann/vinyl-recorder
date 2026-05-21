@@ -349,6 +349,27 @@
           </div>
         </div>
       </div>
+      <div class="we-suggest">
+        <button class="btn-small" id="we-keys-btn" onclick="weToggleShortcuts()" aria-haspopup="true" aria-expanded="false" title="Keyboard & mouse shortcuts">⌨ keys ▾</button>
+        <div class="we-suggest-pop we-keys-pop" id="we-pop-keys" hidden role="dialog" aria-label="Editor shortcuts">
+          <div class="col-label">Keyboard</div>
+          <dl class="we-keys-list">
+            <dt><kbd>Space</kbd></dt><dd>play / pause</dd>
+            <dt><kbd>←</kbd><kbd>→</kbd></dt><dd>nudge playhead 0.1&nbsp;s (<kbd>Shift</kbd> = 1&nbsp;s)</dd>
+            <dt><kbd>J</kbd><kbd>K</kbd></dt><dd>jump to previous / next cut</dd>
+            <dt><kbd>Del</kbd></dt><dd>delete the nearest cut</dd>
+            <dt><kbd>S</kbd></dt><dd>skip / unskip the region at the playhead</dd>
+            <dt><kbd>Esc</kbd></dt><dd>close (or dismiss an open panel)</dd>
+          </dl>
+          <div class="col-label">Mouse</div>
+          <dl class="we-keys-list">
+            <dt>click wave</dt><dd>move the playhead</dd>
+            <dt>drag a cut</dt><dd>move it (stays within its side)</dd>
+            <dt><kbd>Shift</kbd>+drag</dt><dd>move it + every later cut on that side</dd>
+            <dt><kbd>▶</kbd> on a track</dt><dd>play just that region</dd>
+          </dl>
+        </div>
+      </div>
     </div>
 
     <!-- Sides reorder — visible only for albums with ≥2 sides. Drag handle

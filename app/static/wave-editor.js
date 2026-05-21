@@ -418,6 +418,12 @@ function openWaveEditor(fname) {
   document.getElementById('we-duration').textContent = fmtMMSS(we.total);
   document.getElementById('we-mini-end').textContent = fmtMMSS(we.total);
   document.getElementById('we-pop-silence').hidden = true;
+  const popKeysReset = document.getElementById('we-pop-keys');
+  if (popKeysReset) {
+    popKeysReset.hidden = true;
+    const kb = document.getElementById('we-keys-btn');
+    if (kb) kb.setAttribute('aria-expanded', 'false');
+  }
   document.getElementById('we-search-status').textContent = '';
   document.getElementById('we-silence-status').textContent = '';
 
@@ -1042,11 +1048,18 @@ function weKeyDown(e) {
       return;
     case 'Escape': {
       e.preventDefault();
-      // Dismiss an open suggest popover first; only close the whole editor
-      // once nothing is layered on top.
+      // Dismiss an open popover first; only close the whole editor once
+      // nothing is layered on top.
       const popSilence = document.getElementById('we-pop-silence');
       if (popSilence && !popSilence.hidden) {
         popSilence.hidden = true;
+        return;
+      }
+      const popKeys = document.getElementById('we-pop-keys');
+      if (popKeys && !popKeys.hidden) {
+        popKeys.hidden = true;
+        const kb = document.getElementById('we-keys-btn');
+        if (kb) kb.setAttribute('aria-expanded', 'false');
         return;
       }
       closeWaveEditor();
@@ -1436,7 +1449,31 @@ function onAudioTimeUpdate() {
 // Discogs / MusicBrainz id). Only the silence popover is left.
 function weToggleSuggest(which) {
   const b = document.getElementById('we-pop-silence');
-  if (which === 'silence') b.hidden = !b.hidden;
+  if (which === 'silence') {
+    b.hidden = !b.hidden;
+    // Don't let the shortcuts legend overlap the silence panel.
+    if (!b.hidden) {
+      const keys = document.getElementById('we-pop-keys');
+      if (keys) keys.hidden = true;
+    }
+  }
+}
+
+// Toggle the keyboard/mouse shortcuts legend. The editor's shortcuts (Space,
+// arrows, J/K, Del, S) otherwise live only in the canvas aria-label + a few
+// titles — invisible to sighted users. Mutually exclusive with the silence
+// popover so the two toolbar dropdowns never stack.
+function weToggleShortcuts() {
+  const pop = document.getElementById('we-pop-keys');
+  if (!pop) return;
+  const show = pop.hidden;
+  pop.hidden = !show;
+  if (show) {
+    const sil = document.getElementById('we-pop-silence');
+    if (sil) sil.hidden = true;
+  }
+  const btn = document.getElementById('we-keys-btn');
+  if (btn) btn.setAttribute('aria-expanded', String(show));
 }
 
 // Manual re-trigger for the album's saved-id tracklist fetch. _weAutoLoadFromIds
