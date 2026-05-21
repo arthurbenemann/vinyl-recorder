@@ -27,6 +27,7 @@ parsing) stays in the route — the orchestrator's preconditions are
 documented in `split_album`'s docstring.
 """
 import asyncio
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -142,6 +143,8 @@ def wipe_prior_music_dir(prior_relpath: Optional[str], new_relpath: str) -> None
             for old in prior_dir.glob(f"*{ext}"):
                 try: old.unlink()
                 except Exception: pass
+        # Our own folder-art sidecar; remove so the moved dir can be pruned.
+        (prior_dir / "cover.jpg").unlink(missing_ok=True)
         try: prior_dir.rmdir()
         except Exception: pass
         try:
@@ -398,6 +401,16 @@ async def split_album(req, manifest: dict) -> dict:
             except Exception: pass
 
     cover_file = albums_fs.cover_path(req.album_id)
+    # Drop a folder-level cover.jpg next to the tracks. Music servers read
+    # folder art directly, and — crucially — non-FLAC outputs get NO embedded
+    # art (only the FLAC path embeds via metaflac), so without this a WAV/MP3/
+    # AAC album would have no cover at all. The in-progress cover lives under
+    # in-progress/<id>/ which the server never scans, so it has to be copied.
+    if cover_file:
+        try:
+            shutil.copyfile(cover_file, music_dir / "cover.jpg")
+        except OSError:
+            pass
     out_dur_total = kept_duration_total(req.tracks, total) or 1.0
     out_total = sum(1 for t in req.tracks if not t.skip)
     pad = max(2, len(str(out_total)))
