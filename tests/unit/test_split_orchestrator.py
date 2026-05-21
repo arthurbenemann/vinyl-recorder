@@ -144,21 +144,34 @@ def test_wipe_prior_music_dir_unlinks_audio_and_prunes_parent(tmp_path, monkeypa
     assert not (tmp_path / "OldArtist").exists()
 
 
-def test_wipe_prior_music_dir_leaves_non_audio_files_blocking_rmdir(tmp_path, monkeypatch):
-    """A stray non-audio file (cover.jpg the orchestrator hasn't moved
-    yet, README, etc.) keeps the dir alive — the unlink loop only targets
-    known audio extensions, then the rmdir fails silently. Documenting
-    behaviour, not asserting correctness — refactors can change this."""
+def test_wipe_prior_music_dir_leaves_foreign_files_blocking_rmdir(tmp_path, monkeypatch):
+    """A truly-foreign file (a user's README/notes) keeps the dir alive —
+    the cleanup only targets known audio extensions + our own cover.jpg
+    sidecar, then the rmdir fails silently. Documenting behaviour, not
+    asserting correctness — refactors can change this."""
     monkeypatch.setattr(so, "MUSIC_DIR", tmp_path)
     prior_dir = tmp_path / "X" / "Y"
     prior_dir.mkdir(parents=True)
     (prior_dir / "01.flac").write_bytes(b"")
-    (prior_dir / "cover.jpg").write_bytes(b"art")
+    (prior_dir / "notes.txt").write_bytes(b"mine")
     wipe_prior_music_dir("X/Y", "Z/W")
-    # FLAC gone, JPG survives, dir survives because rmdir of non-empty fails.
+    # FLAC gone, foreign file survives, dir survives (rmdir of non-empty fails).
     assert not (prior_dir / "01.flac").exists()
-    assert (prior_dir / "cover.jpg").exists()
+    assert (prior_dir / "notes.txt").exists()
     assert prior_dir.is_dir()
+
+
+def test_wipe_prior_music_dir_removes_folder_cover(tmp_path, monkeypatch):
+    """The folder-art cover.jpg the split writes is ours to manage — it gets
+    cleaned with the audio so a moved album's old dir can be pruned."""
+    monkeypatch.setattr(so, "MUSIC_DIR", tmp_path)
+    prior_dir = tmp_path / "Old" / "Album"
+    prior_dir.mkdir(parents=True)
+    (prior_dir / "01.flac").write_bytes(b"")
+    (prior_dir / "cover.jpg").write_bytes(b"art")
+    wipe_prior_music_dir("Old/Album", "New/Album")
+    assert not prior_dir.exists()
+    assert not (tmp_path / "Old").exists()
 
 
 def test_wipe_prior_music_dir_handles_missing_prior(tmp_path, monkeypatch):
