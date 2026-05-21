@@ -30,6 +30,10 @@ export async function applyConfig() {
     if (typeof c.default_split_normalize === 'boolean') {
       document.getElementById('we-normalize').checked = c.default_split_normalize;
     }
+    if (typeof c.default_split_replaygain === 'boolean') {
+      const rg = document.getElementById('we-replaygain');
+      if (rg) rg.checked = c.default_split_replaygain;
+    }
     if (typeof c.default_split_target_peak_db === 'number' && window.we) {
       window.we.targetPeakDb = c.default_split_target_peak_db;
     }

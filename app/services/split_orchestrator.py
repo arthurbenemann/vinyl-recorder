@@ -28,6 +28,7 @@ documented in `split_album`'s docstring.
 """
 import asyncio
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -84,6 +85,36 @@ def _wav_codec_for_bits(bits: Optional[int]) -> str:
     return "pcm_s24le" if bits == 24 else "pcm_s16le"
 
 
+def split_genres(genre: str) -> list[str]:
+    """Split a genre string into individual values on the `;` separator
+    (plus newlines), trimmed, blanks dropped.
+
+    Music servers (Jellyfin, Navidrome, …) want each genre as its own value,
+    not one delimited blob — a single "Electronic; Techno; House" tag shows
+    up as one nonsense genre and breaks genre browsing. The tagging flow
+    joins MusicBrainz/Discogs genres + styles with `;`, so this splits them
+    back apart at write time into repeated GENRE Vorbis comments.
+
+    Only `;` (and newlines) split — NOT commas — because a single Discogs
+    genre legitimately contains commas ("Folk, World, & Country") and must
+    survive intact as one value."""
+    if not genre:
+        return []
+    parts = re.split(r"[;\n]", genre)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _is_compilation(tags: dict) -> bool:
+    """Whether to stamp the COMPILATION flag that music servers (Jellyfin,
+    Navidrome, …) read to file an album under a single "Various Artists"
+    heading instead of fragmenting it into one album per track artist.
+
+    Heuristic: the album's ARTIST is literally "Various Artists" (the
+    convention MusicBrainz/Discogs use for compilations). Case-insensitive
+    so a hand-typed "various artists" still triggers it."""
+    return (tags.get("artist") or "").strip().lower() == "various artists"
+
+
 def _media_type_for(ext: str) -> str:
     """Map an audio file extension to the HTTP `Content-Type` used by
     `download_track`. Falls back to octet-stream so an unknown extension
@@ -109,16 +140,21 @@ def _ffmpeg_metadata_args(title: str, out_idx: int, out_total: int,
     too."""
     args: list[str] = []
     pairs = [
-        ("artist",      tags.get("artist", "")),
-        ("album",       tags.get("album", "")),
-        ("date",        tags.get("year", "")),
-        ("genre",       tags.get("genre", "")),
-        ("publisher",   tags.get("label", "")),
-        ("title",       title),
-        ("track",       f"{out_idx}/{out_total}"),
+        ("artist",       tags.get("artist", "")),
+        # album_artist groups the album in every music server; without it a
+        # multi-artist or "feat." track scatters the album across artists.
+        # Defaults to the album ARTIST (correct for single-artist LPs).
+        ("album_artist", tags.get("artist", "")),
+        ("album",        tags.get("album", "")),
+        ("date",         tags.get("year", "")),
+        ("genre",        tags.get("genre", "")),
+        ("publisher",    tags.get("label", "")),
+        ("title",        title),
+        ("track",        f"{out_idx}/{out_total}"),
     ]
     if tags.get("composer"):  pairs.append(("composer",  tags["composer"]))
     if tags.get("conductor"): pairs.append(("conductor", tags["conductor"]))
+    if _is_compilation(tags):  pairs.append(("compilation", "1"))
     for k, v in pairs:
         if v != "":
             args += ["-metadata", f"{k}={v}"]
@@ -161,6 +197,8 @@ def wipe_prior_music_dir(prior_relpath: Optional[str], new_relpath: str) -> None
             for old in prior_dir.glob(f"*{ext}"):
                 try: old.unlink()
                 except Exception: pass
+        # Our own folder-art sidecar; remove so the moved dir can be pruned.
+        (prior_dir / "cover.jpg").unlink(missing_ok=True)
         try: prior_dir.rmdir()
         except Exception: pass
         try:
@@ -168,6 +206,31 @@ def wipe_prior_music_dir(prior_relpath: Optional[str], new_relpath: str) -> None
                 prior_dir.parent.rmdir()
         except Exception:
             pass
+
+
+def add_replay_gain(track_paths: list[Path]) -> None:
+    """Compute and write ReplayGain 2.0 tags over a set of FLAC tracks in a
+    single metaflac pass.
+
+    One `metaflac --add-replay-gain` invocation over ALL of an album's
+    tracks writes both the per-track gain (REPLAYGAIN_TRACK_GAIN/_PEAK) and
+    a shared album gain (REPLAYGAIN_ALBUM_GAIN/_PEAK) computed across the
+    whole set — album gain preserves the LP's intra-side dynamics while
+    letting players normalise the library. The audio is never touched, so
+    this is fully reversible (`metaflac --remove-replay-gain`).
+
+    metaflac requires the files to share sample rate + channel count; every
+    track emitted from one split does, so that precondition holds. Failure
+    is non-fatal (the tracks already exist and play fine) — we swallow it
+    the same way `write_track_tags` does, rather than abort a finished
+    split over a missing-loudness-tag. FLAC only; the caller gates on
+    output_format."""
+    if not track_paths:
+        return
+    subprocess.run(
+        ["metaflac", "--add-replay-gain", *[str(p) for p in track_paths]],
+        check=False, stderr=subprocess.DEVNULL,
+    )
 
 
 def kept_duration_total(tracks: list, total: float) -> float:
@@ -193,19 +256,33 @@ def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
 
     Distinct from `services.ffmpeg.write_tags` (which writes the side-level
     tag set used during apply-tags). This one is the per-track flavour: it
-    additionally sets TITLE / TRACKNUMBER / TRACKTOTAL plus the optional
-    MUSICBRAINZ_ALBUMID / DISCOGS_RELEASE_ID, and embeds a cover."""
+    additionally sets ALBUMARTIST / TITLE / TRACKNUMBER / TRACKTOTAL, the
+    COMPILATION flag on Various-Artists albums, plus the optional
+    MUSICBRAINZ_* IDs, DISCOGS_RELEASE_ID, MEDIA, and RELEASETYPE, and
+    embeds a cover."""
     tag_args = ["metaflac", "--remove-all-tags",
                 f"--set-tag=ARTIST={tags.get('artist', '')}",
+                # ALBUMARTIST is what every music server groups an album by.
+                # Defaults to ARTIST (right for single-artist LPs); a
+                # "Various Artists" ARTIST additionally trips COMPILATION
+                # below so comps file under one heading instead of splitting.
+                f"--set-tag=ALBUMARTIST={tags.get('artist', '')}",
                 f"--set-tag=ALBUM={tags.get('album', '')}",
                 f"--set-tag=DATE={tags.get('year', '')}",
-                f"--set-tag=GENRE={tags.get('genre', '')}",
                 f"--set-tag=LABEL={tags.get('label', '')}",
                 f"--set-tag=CATALOGNUMBER={tags.get('catalog_number', '')}",
                 f"--set-tag=RELEASECOUNTRY={tags.get('country', '')}",
                 f"--set-tag=TITLE={title}",
                 f"--set-tag=TRACKNUMBER={out_idx}",
                 f"--set-tag=TRACKTOTAL={out_total}"]
+    # One GENRE Vorbis comment per value (servers browse by individual
+    # genre, not a delimited blob). Blank genre → no GENRE tag at all
+    # rather than an empty one.
+    for g in split_genres(tags.get("genre", "")):
+        tag_args.append(f"--set-tag=GENRE={g}")
+    # Compilation flag — only on Various-Artists albums (see _is_compilation).
+    if _is_compilation(tags):
+        tag_args.append("--set-tag=COMPILATION=1")
     # Sort names — only when a leading article actually moves (otherwise the
     # sort form equals the display form and the tag is pure litter). Files
     # "The Beatles" under B in servers that sort by *SORT tags. Album-artist
@@ -224,6 +301,18 @@ def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
         tag_args.append(f"--set-tag=MUSICBRAINZ_ALBUMID={tags['musicbrainz_albumid']}")
     if tags.get("discogs_release_id"):
         tag_args.append(f"--set-tag=DISCOGS_RELEASE_ID={tags['discogs_release_id']}")
+    # Stable MB identifiers + release facts (filled at apply-time from the
+    # chosen release). Servers use these for reliable matching/grouping and
+    # artist/album art. Each only when present.
+    for key, tagname in (
+        ("musicbrainz_releasegroupid", "MUSICBRAINZ_RELEASEGROUPID"),
+        ("musicbrainz_artistid",       "MUSICBRAINZ_ARTISTID"),
+        ("musicbrainz_albumartistid",  "MUSICBRAINZ_ALBUMARTISTID"),
+        ("media",                      "MEDIA"),
+        ("releasetype",                "RELEASETYPE"),
+    ):
+        if tags.get(key):
+            tag_args.append(f"--set-tag={tagname}={tags[key]}")
     tag_args.append(str(out))
     subprocess.run(tag_args, check=False, stderr=subprocess.DEVNULL)
     if cover_file:
@@ -330,6 +419,7 @@ def _persist_split_plan(req, relpath: str) -> None:
         "bit_depth":        req.bit_depth,
         "sample_rate":      req.sample_rate,
         "output_format":    req.output_format,
+        "replaygain":       req.replaygain,
     }
     manifest = albums_fs.read_manifest(req.album_id)
     manifest["plan"] = plan
@@ -425,6 +515,16 @@ async def split_album(req, manifest: dict) -> dict:
             except Exception: pass
 
     cover_file = albums_fs.cover_path(req.album_id)
+    # Drop a folder-level cover.jpg next to the tracks. Music servers read
+    # folder art directly, and — crucially — non-FLAC outputs get NO embedded
+    # art (only the FLAC path embeds via metaflac), so without this a WAV/MP3/
+    # AAC album would have no cover at all. The in-progress cover lives under
+    # in-progress/<id>/ which the server never scans, so it has to be copied.
+    if cover_file:
+        try:
+            shutil.copyfile(cover_file, music_dir / "cover.jpg")
+        except OSError:
+            pass
     out_dur_total = kept_duration_total(req.tracks, total) or 1.0
     out_total = sum(1 for t in req.tracks if not t.skip)
     pad = max(2, len(str(out_total)))
@@ -458,6 +558,13 @@ async def split_album(req, manifest: dict) -> dict:
             created.append(entry)
     finally:
         playlist.unlink(missing_ok=True)
+
+    # ReplayGain is a post-encode tag pass over the finished FLACs — one
+    # metaflac call computes per-track + shared album gain. FLAC only
+    # (metaflac is the writer); lossy/WAV/ALAC outputs skip it.
+    if req.replaygain and req.output_format == "flac" and created:
+        track_paths = [music_dir / e["filename"] for e in created]
+        await asyncio.to_thread(add_replay_gain, track_paths)
 
     _persist_split_plan(req, relpath)
     finish_job(req.job_id)

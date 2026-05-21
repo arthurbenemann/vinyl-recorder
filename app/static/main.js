@@ -248,14 +248,26 @@ function _stopLibPoll() {
 // and would otherwise see two interpretations of the same keystroke. The
 // record button's title + aria-label advertise the shortcut.
 document.addEventListener('keydown', (e) => {
-  if (e.key !== 'r' && e.key !== 'R') return;
+  if (e.key !== 'r' && e.key !== 'R' && e.key !== '/') return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const t = e.target;
   if (t && t.matches && t.matches('input, textarea, select, [contenteditable="true"]')) return;
   // Modals scope their own shortcuts (Escape to close, Tab to cycle); skip
-  // R to avoid stepping on text input inside them.
+  // these to avoid stepping on text input inside them.
   const openModal = document.querySelector('.modal-backdrop:not([hidden])');
   if (openModal) return;
+  // "/" jumps focus to the library filter — quick keyboard nav for large
+  // libraries, matching the convention in GitHub/Gmail/etc.
+  if (e.key === '/') {
+    const search = document.getElementById('lib-search');
+    if (search) {
+      e.preventDefault();
+      search.focus();
+      if (typeof search.select === 'function') search.select();
+    }
+    return;
+  }
+  // "R" toggles recording.
   e.preventDefault();
   if (typeof toggleRec === 'function') toggleRec();
 });
