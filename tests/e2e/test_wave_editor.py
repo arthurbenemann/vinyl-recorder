@@ -448,6 +448,98 @@ def test_wave_editor_reopen_restores_cut_skip_title(stack, page):
             except Exception: pass
 
 
+def _open_silence_popover(page):
+    page.click('button:has-text("suggest from silence")')
+    page.wait_for_selector('#we-pop-silence:not([hidden])')
+
+
+def test_silence_detection_settings_persist_across_reload(stack, page):
+    """The noise-floor / min-silence / auto-skip controls track the
+    listener's hardware chain, so they're saved per-change and re-seeded on
+    open — surviving a full page reload, not just close+reopen within a
+    session. This is the cross-reload guarantee the unit test (pure helper)
+    and static test (wiring present) can't prove on their own."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        # Start from a known-clean slate so a prior test's saved prefs don't
+        # mask a regression where hydration silently does nothing.
+        page.evaluate(
+            "() => ['we.noiseInt8','we.minSilence','we.skipLong']"
+            ".forEach(k => localStorage.removeItem(k))"
+        )
+        album_id = _combine_then_open_editor(
+            page, sides, artist="PrefArtist", album="PrefAlbum"
+        )
+        _open_silence_popover(page)
+        # Sanity: the controls start at their HTML defaults (nothing stored).
+        defaults = page.evaluate(
+            "() => ({ noise: document.getElementById('we-noise').value, "
+            "min: document.getElementById('we-mindur').value, "
+            "skip: document.getElementById('we-skiplong').value })"
+        )
+        assert defaults == {"noise": "8", "min": "1.5", "skip": "15"}, defaults
+        # Change all three and fire `change` so the persist listener runs
+        # (mirrors the user dragging the slider / blurring a number field).
+        page.evaluate(
+            """
+            () => {
+                const set = (id, v) => {
+                    const el = document.getElementById(id);
+                    el.value = v;
+                    el.dispatchEvent(new Event('change'));
+                };
+                set('we-noise', '24');
+                set('we-mindur', '3.2');
+                set('we-skiplong', '40');
+            }
+            """
+        )
+        stored = page.evaluate(
+            "() => ({ noise: localStorage.getItem('we.noiseInt8'), "
+            "min: localStorage.getItem('we.minSilence'), "
+            "skip: localStorage.getItem('we.skipLong') })"
+        )
+        assert stored == {"noise": "24", "min": "3.2", "skip": "40"}, stored
+        expected_readout = page.evaluate("() => weNoiseSliderDb(24) + ' dB'")
+
+        # Full reload wipes in-page `we` state; localStorage is the only
+        # carrier. Reopen the same album's editor and reveal the popover.
+        page.reload()
+        page.wait_for_load_state("networkidle")
+        page.wait_for_function(
+            f'() => document.querySelector(\'tr[data-album-id="{album_id}"]\') '
+            "!== null",
+            timeout=10_000,
+        )
+        page.click(
+            f'tr[data-album-id="{album_id}"] button[title*="plit into tracks"], '
+            f'tr[data-album-id="{album_id}"] button[title*="e-edit splits"]'
+        )
+        page.wait_for_selector('#we-modal:not([hidden])')
+        page.wait_for_function("() => we.loaded === true", timeout=20_000)
+        _open_silence_popover(page)
+
+        seeded = page.evaluate(
+            "() => ({ noise: document.getElementById('we-noise').value, "
+            "min: document.getElementById('we-mindur').value, "
+            "skip: document.getElementById('we-skiplong').value, "
+            "readout: document.getElementById('we-noise-readout').textContent })"
+        )
+        assert seeded["noise"] == "24", seeded
+        assert seeded["min"] == "3.2", seeded
+        assert seeded["skip"] == "40", seeded
+        # The dB readout must reflect the seeded slider, not the -24.0 dB the
+        # static HTML ships (the inline oninput only fires on user drag).
+        assert seeded["readout"] == expected_readout, seeded
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
 # ── PR: split with cuts that straddle side boundaries ────────────────────
 def test_split_with_cuts_across_side_boundaries(stack, page):
     """The per-side concat-demuxer playlist has to handle the case where
