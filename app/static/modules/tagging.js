@@ -119,6 +119,16 @@ export function openTag(fname) {
     isCombine ? 'Combine into album' : 'Tag album';
   document.getElementById('tag-apply-btn').textContent =
     isCombine ? 'combine' : 'apply tags';
+  // "& edit" applies whenever we're CREATING an album — combining N sides or
+  // promoting a single one — since both lead straight into the split editor.
+  // Hidden when retagging an existing album (album_id), where the library row
+  // already has its own "split into tracks" button.
+  const applyEditBtn = document.getElementById('tag-apply-edit-btn');
+  if (applyEditBtn) {
+    const isNewAlbum = tagPanelTarget.album_id === undefined;
+    applyEditBtn.hidden = !isNewAlbum;
+    applyEditBtn.textContent = isCombine ? 'combine & edit ▸' : 'apply & edit ▸';
+  }
   document.getElementById('combine-sides-section').hidden = !isCombine;
   if (isCombine) {
     const n = tagPanelTarget.filenames.length;
@@ -143,7 +153,7 @@ export function openTag(fname) {
   // "Enter to search MB for «…»" preview if Artist/Album are filled.
   _updateFindSubtitle(_findMode(''));
   document.getElementById('t-candidates').innerHTML =
-    '<div class="empty-results">Type above to filter your collection, paste a Discogs link, or hit Enter to search MusicBrainz using the Artist + Album fields on the left.</div>';
+    '<div class="empty-results">Type above to filter your collection, paste a Discogs or MusicBrainz link, or hit Enter to search MusicBrainz using the Artist + Album fields on the left.</div>';
   document.getElementById('t-search-status').textContent = '';
   document.getElementById('tag-modal').dataset.fname = fname;
   // Snapshot the freshly-loaded form so we can detect divergence for the
@@ -285,6 +295,24 @@ function _parseDiscogsId(s) {
          || t.match(/\[r(\d+)\]/i)
          || t.match(/^(\d{3,})$/);
   return m ? parseInt(m[1], 10) : null;
+}
+
+// Tease a MusicBrainz *release* MBID out of pasted text. Accepts:
+//   - https://musicbrainz.org/release/<uuid> (any subdomain, slug, query)
+//   - a bare 8-4-4-4-12 UUID
+// Returns the lowercased uuid or null. Deliberately requires `/release/`
+// before the uuid (not /release-group/, /recording/, /artist/) so a pasted
+// link to some other entity isn't fed to /api/release/{mbid} as if it were
+// a release. The bare-UUID branch only fires when the whole input is a
+// single MBID, so a UUID buried in unrelated text won't trigger a fetch.
+const _MBID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const _MB_URL_RE = new RegExp(`musicbrainz\\.org/release/(${_MBID})`, 'i');
+const _MB_BARE_RE = new RegExp(`^(${_MBID})$`, 'i');
+function _parseMbReleaseMbid(s) {
+  const t = String(s || '').trim();
+  if (!t) return null;
+  const m = t.match(_MB_URL_RE) || t.match(_MB_BARE_RE);
+  return m ? m[1].toLowerCase() : null;
 }
 
 function _normalizeForFilter(s) {
@@ -450,6 +478,8 @@ function _findMode(raw) {
   if (!t) return { kind: 'mb' };
   const id = _parseDiscogsId(t);
   if (id) return { kind: 'discogs', id };
+  const mbid = _parseMbReleaseMbid(t);
+  if (mbid) return { kind: 'mb-release', mbid };
   return { kind: 'filter', text: t };
 }
 
@@ -460,6 +490,11 @@ function _updateFindSubtitle(mode) {
   if (mode.kind === 'discogs') {
     el.classList.add('mode-discogs');
     el.innerHTML = `→ fetch Discogs release <span class="t-find-emph">${mode.id}</span> · <span class="t-find-emph">Enter</span> to load`;
+    return;
+  }
+  if (mode.kind === 'mb-release') {
+    el.classList.add('mode-mb');
+    el.innerHTML = `→ fetch MusicBrainz release <span class="t-find-emph">${mode.mbid.slice(0, 8)}…</span> · <span class="t-find-emph">Enter</span> to load`;
     return;
   }
   if (mode.kind === 'filter') {
@@ -545,10 +580,18 @@ export function onFindInput(v) {
     if (status && status.textContent.includes('from your collection')) status.textContent = '';
     return;
   }
+  if (mode.kind === 'mb-release') {
+    if (list && list.querySelector('.empty-results')) {
+      list.innerHTML = '<div class="empty-results">Press <strong>Enter</strong> to fetch this MusicBrainz release and fill the tags on the left.</div>';
+    }
+    if (status && status.textContent.startsWith('No collection')) status.textContent = '';
+    if (status && status.textContent.includes('from your collection')) status.textContent = '';
+    return;
+  }
   // mb mode (empty bar). Wipe a stale filter-mode hint; keep candidate
   // cards that the user can still click on.
   if (list && list.querySelector('.empty-results')) {
-    list.innerHTML = '<div class="empty-results">Type above to filter your collection, paste a Discogs link, or hit <strong>Enter</strong> to search MusicBrainz using the Artist + Album fields on the left.</div>';
+    list.innerHTML = '<div class="empty-results">Type above to filter your collection, paste a Discogs or MusicBrainz link, or hit <strong>Enter</strong> to search MusicBrainz using the Artist + Album fields on the left.</div>';
   }
   if (status && status.textContent.includes('from your collection')) status.textContent = '';
 }
@@ -559,6 +602,11 @@ export async function onFindEnter() {
   const mode = _findMode(inp ? inp.value : '');
   if (mode.kind === 'discogs') {
     await _fetchDiscogsRelease(mode.id);
+    if (inp) { inp.value = ''; onFindInput(''); }
+    return;
+  }
+  if (mode.kind === 'mb-release') {
+    await _fetchMbReleaseByMbid(mode.mbid);
     if (inp) { inp.value = ''; onFindInput(''); }
     return;
   }
@@ -690,20 +738,13 @@ export async function refreshCollection() {
   }
 }
 
-export async function pickCandidate(i) {
-  const c = tagPanelCandidates[i];
-  if (!c) return;
-  // Match by data-i, not DOM-position: when both a "From your collection"
-  // and a "MusicBrainz" section are rendered, the MB cards live below the
-  // collection cards in the list, so a position-based comparison would
-  // light up the collection card at the same offset instead of the MB
-  // card the user clicked. Collection cards have no data-i, so their
-  // Number(undefined) → NaN never equals i.
-  document.querySelectorAll('.candidate').forEach(el =>
-    el.classList.toggle('active', Number(el.dataset.i) === i));
-  document.getElementById('t-search-status').textContent = `loading ${c.title}…`;
+// Fetch a full MB release, fill the left-hand tag fields, embed the cover,
+// and write the result status. Shared by the candidate-pick path and the
+// paste-an-MBID path; `source` only changes the status wording.
+async function _loadMbRelease(mbid, source) {
+  const status = document.getElementById('t-search-status');
   try {
-    const r = await fetch(`/api/release/${c.mbid}`);
+    const r = await fetch(`/api/release/${encodeURIComponent(mbid)}`);
     if (!r.ok) throw new Error(await parseError(r));
     const d = await r.json();
     tagPanelMbid = d.mbid;
@@ -723,14 +764,40 @@ export async function pickCandidate(i) {
       `<a class="ext-link" href="${mbHref}" target="_blank" rel="noopener">↗ MusicBrainz</a>`,
       d.discogs_url ? `<a class="ext-link" href="${d.discogs_url}" target="_blank" rel="noopener">↗ Discogs</a>` : '',
     ].filter(Boolean).join(' · ');
-    document.getElementById('t-search-status').innerHTML =
-      `${d.discogs_id ? 'loaded · enriched from Discogs' : 'loaded · MB only'} · ${links}`;
+    const lead = source === 'paste'
+      ? 'loaded · from MusicBrainz paste'
+      : (d.discogs_id ? 'loaded · enriched from Discogs' : 'loaded · MB only');
+    status.innerHTML = `${lead} · ${links}`;
   } catch (e) {
-    document.getElementById('t-search-status').textContent = 'load failed: ' + e.message;
+    status.textContent = 'load failed: ' + e.message;
   }
 }
 
-export async function applyTagPanel() {
+// Paste path: user dropped a musicbrainz.org/release/<id> URL or a bare
+// MBID into the find bar. Mirrors _fetchDiscogsRelease — there's no
+// candidate card to highlight, so just load by id.
+async function _fetchMbReleaseByMbid(mbid) {
+  document.getElementById('t-search-status').textContent =
+    `fetching MusicBrainz release ${mbid.slice(0, 8)}…`;
+  await _loadMbRelease(mbid, 'paste');
+}
+
+export async function pickCandidate(i) {
+  const c = tagPanelCandidates[i];
+  if (!c) return;
+  // Match by data-i, not DOM-position: when both a "From your collection"
+  // and a "MusicBrainz" section are rendered, the MB cards live below the
+  // collection cards in the list, so a position-based comparison would
+  // light up the collection card at the same offset instead of the MB
+  // card the user clicked. Collection cards have no data-i, so their
+  // Number(undefined) → NaN never equals i.
+  document.querySelectorAll('.candidate').forEach(el =>
+    el.classList.toggle('active', Number(el.dataset.i) === i));
+  document.getElementById('t-search-status').textContent = `loading ${c.title}…`;
+  await _loadMbRelease(c.mbid, 'candidate');
+}
+
+export async function applyTagPanel(thenEdit = false) {
   const fname = document.getElementById('tag-modal').dataset.fname;
   if (!fname) return;
   // The textarea may carry the "M:SS - Title" preview format when the
@@ -770,7 +837,7 @@ export async function applyTagPanel() {
       })
     });
     if (!r.ok) throw new Error(await parseError(r));
-    await r.json();
+    const result = await r.json();   // { album_id }
     if (isCombine) {
       const n = target.filenames.length;
       toast(`✓ Combined ${n} side${n === 1 ? '' : 's'} · ${fields.artist} — ${fields.album}`, 'ok');
@@ -780,6 +847,15 @@ export async function applyTagPanel() {
     }
     closeTag();
     refreshLib();
-    refreshAlbums();
+    const albumsReady = refreshAlbums();
+    // "& edit" jumps straight into the split editor on the new album, saving
+    // a trip back to the library to find the row. openWaveEditor reads the
+    // album from `albumsByName`, so wait for the refresh to land it first.
+    if (thenEdit && result && result.album_id) {
+      await albumsReady;
+      if (typeof window.openWaveEditor === 'function') {
+        window.openWaveEditor(result.album_id);
+      }
+    }
   } catch (e) { toast('✗ ' + e.message, 'err'); }
 }
