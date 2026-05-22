@@ -478,8 +478,11 @@ def test_split_aformat_skipped_when_target_matches_source(monkeypatch):
         _cleanup_album(aid)
 
 
-def test_split_aformat_added_for_bit_depth_change(monkeypatch):
-    """24-bit source → user wants 16-bit output → aformat=sample_fmts=s16."""
+def test_split_16bit_downconvert_dithers_via_aresample(monkeypatch):
+    """24-bit source → 16-bit output → the reduction goes through aresample
+    with shaped TPDF dither (osf=s16 + dither_method), not a hard-truncating
+    aformat. Truncating without dither leaves audible quantisation noise in
+    the quiet passages a vinyl rip is full of."""
     env = _MockSplitEnv(monkeypatch, src_bit_depth=24)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
@@ -491,7 +494,11 @@ def test_split_aformat_added_for_bit_depth_change(monkeypatch):
         assert r.status_code == 200
         cmd = env.ffmpeg_calls[0]
         af = cmd[cmd.index("-af") + 1]
-        assert "aformat=sample_fmts=s16" in af
+        assert "aresample=" in af
+        assert "osf=s16" in af
+        assert "dither_method=triangular_hp" in af
+        # No hard-truncating aformat=s16 on the 16-bit path.
+        assert "aformat=sample_fmts=s16" not in af
     finally:
         _cleanup_album(aid)
 
@@ -541,9 +548,9 @@ def test_split_sample_rate_adds_ar_and_soxr_filter(monkeypatch):
 
 
 def test_split_sample_rate_combines_with_bit_depth(monkeypatch):
-    """Both knobs together: aresample BEFORE aformat in the filter chain
-    (so the bit-depth conversion happens after rate change), and `-ar`
-    still lands on the output side."""
+    """Both knobs together: a single aresample carries the SoX rate change
+    AND the dithered 24→16 reduction (resample in high precision, then dither
+    once on the final s16 step), and `-ar` still lands on the output side."""
     env = _MockSplitEnv(monkeypatch, src_bit_depth=24)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
@@ -558,10 +565,8 @@ def test_split_sample_rate_combines_with_bit_depth(monkeypatch):
         assert cmd[cmd.index("-ar") + 1] == "48000"
         af = cmd[cmd.index("-af") + 1]
         assert "aresample=resampler=soxr" in af
-        assert "aformat=sample_fmts=s16" in af
-        # aresample appears before aformat so bit-depth conversion follows
-        # the rate change.
-        assert af.index("aresample") < af.index("aformat")
+        assert "osf=s16" in af
+        assert "dither_method=triangular_hp" in af
     finally:
         _cleanup_album(aid)
 
