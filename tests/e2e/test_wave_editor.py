@@ -665,10 +665,6 @@ def test_shortcuts_legend_toggles_and_is_mutually_exclusive(stack, page):
         for p in sides:
             try: p.unlink(missing_ok=True)
             except Exception: pass
-    finally:
-        for p in sides:
-            try: p.unlink(missing_ok=True)
-            except Exception: pass
 
 
 # ── PR: split with cuts that straddle side boundaries ────────────────────

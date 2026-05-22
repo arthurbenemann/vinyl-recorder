@@ -1622,6 +1622,7 @@ function weSplitEvenly() {
     status.textContent =
       `${cuts.length + 1} equal tracks · drag the cuts onto the real boundaries`;
   }
+}
 
 // Manual re-trigger for the album's saved-id tracklist fetch. _weAutoLoadFromIds
 // runs once on open; this button lets the user re-run it after re-tagging,
