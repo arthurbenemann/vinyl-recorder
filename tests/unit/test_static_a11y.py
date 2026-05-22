@@ -36,6 +36,47 @@ def js() -> str:
     return "\n".join(parts)
 
 
+def test_wave_editor_add_cut_and_nudge_keys_wired(html):
+    """The split editor advertises + handles the `c` (add cut at playhead)
+    and ←/→ (nudge nearest cut) keyboard shortcuts."""
+    # Help text + canvas aria advertise the `c` key.
+    assert "add cut at playhead" in html
+    canvas_tag = html.split('id="we-canvas"')[1].split(">")[0]
+    assert "c to add a cut" in canvas_tag
+    # wave-editor.js handles `c` and routes arrows through the nudge helper.
+    we_js = (REPO_ROOT / "app" / "static" / "wave-editor.js").read_text(encoding="utf-8")
+    assert "case 'c':" in we_js
+    assert "weAddCutAtPlayhead()" in we_js
+    assert "weNudgeNearestCut(" in we_js
+    assert "_weNudgedCutValue(" in we_js
+
+
+def test_replaygain_toggle_present_and_wired(html, js):
+    """The ReplayGain split toggle exists in the wave-editor process row and
+    is wired both ways: config seeds its default, and the editor reads it
+    into the split / draft-save payloads."""
+    assert 'id="we-replaygain"' in html
+    # config.js (a module, in the `js` fixture) seeds it from config.
+    assert "default_split_replaygain" in js
+    # wave-editor.js is a classic script, not bundled into `js` — read it.
+    we_js = (REPO_ROOT / "app" / "static" / "wave-editor.js").read_text(encoding="utf-8")
+    assert "we-replaygain" in we_js
+    assert "replaygain" in we_js
+
+
+def test_wave_editor_preview_cut_wired(html):
+    """The split editor advertises + handles the `p` preview-cut shortcut
+    and exposes a preview button."""
+    assert 'id="we-preview-btn"' in html
+    assert "preview nearest cut" in html
+    canvas_tag = html.split('id="we-canvas"')[1].split(">")[0]
+    assert "p to preview the nearest cut" in canvas_tag
+    we_js = (REPO_ROOT / "app" / "static" / "wave-editor.js").read_text(encoding="utf-8")
+    assert "case 'p':" in we_js
+    assert "function wePreviewCut(" in we_js
+    assert "_wePreviewWindow(" in we_js
+
+
 def test_wave_canvas_is_keyboard_focusable(html):
     # The canvas has rich key handlers — exposing it to keyboard nav requires
     # tabindex + role + aria-label so screen readers announce it.
@@ -83,6 +124,14 @@ def test_canvas_focus_visible_outline(css):
     # Wave canvas is reached via Tab; without a focus ring keyboard users
     # can't see where they are.
     assert "#we-canvas:focus-visible" in css
+
+
+def test_no_signal_warning_wired(js):
+    # ws.js surfaces the server's record:no_signal warning as a toast and
+    # auto-clears it when signal returns / recording ends.
+    assert "no_signal" in js
+    assert "no audio detected" in js
+    assert "NO_SIGNAL_TOAST_ID" in js
 
 
 def test_focus_trap_helper_present(js):

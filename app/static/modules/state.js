@@ -34,6 +34,9 @@ export const state = {
   // Disk space thresholds (overwritten from /api/config).
   lowSpaceGb: 2.0,
   warnSpaceGb: 10.0,
+  // Estimated minutes of recording headroom at the upstream PCM rate, from
+  // /api/status + /api/recordings. null when not connected (format unknown).
+  diskHeadroomMin: null,
 
   // Persisted across reloads; restored at boot, written from setSort/onLibSearchInput.
   sortBy:  localStorage.getItem('lib.sortBy')  || 'date',
