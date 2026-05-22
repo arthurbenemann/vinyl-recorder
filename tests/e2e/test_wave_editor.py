@@ -659,7 +659,7 @@ def test_shortcuts_legend_toggles_and_is_mutually_exclusive(stack, page):
         assert page.is_hidden('#we-pop-silence')
         # Esc dismisses the legend (without closing the editor).
         page.keyboard.press('Escape')
-        page.wait_for_selector('#we-pop-keys[hidden]', timeout=3_000)
+        page.wait_for_selector('#we-pop-keys', state="hidden", timeout=3_000)
         assert page.is_visible('#we-modal')
     finally:
         for p in sides:
