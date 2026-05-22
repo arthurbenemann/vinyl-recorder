@@ -53,7 +53,8 @@
     <div class="sb-section">
       <div class="label">Stream source</div>
       <div class="stream-row">
-        <input id="stream-url" value="https://ice1.somafm.com/groovesalad-256-mp3" placeholder="http://host:port/stream" />
+        <input id="stream-url" value="https://ice1.somafm.com/groovesalad-256-mp3" placeholder="http://host:port/stream" list="stream-url-recent" autocomplete="off" />
+        <datalist id="stream-url-recent"></datalist>
         <button class="btn-small" id="connect-btn" onclick="toggleConnect()" title="Server-side: pulls the upstream stream — shared across all tabs.">connect</button>
         <button class="btn-small" id="mute-btn" onclick="toggleMute()" title="Local playback only. The VU meter keeps working when muted.">🔈 unmute</button>
       </div>

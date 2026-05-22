@@ -15,7 +15,7 @@ import { startMeterIdleTicker, clearClip } from './modules/meter.js';
 import {
   toggleConnect, toggleMute, ensureAudioGraph, applyMuteState,
   wireGainSlider, toggleHeaderMenu, closeHeaderMenu, toggleHealthPanel,
-  toggleSidebar, restoreSidebarState,
+  toggleSidebar, restoreSidebarState, renderStreamUrlRecent,
 } from './modules/upstream.js';
 import { toggleRec, togglePause, wireSilenceSel, wireDurationSel } from './modules/recording.js';
 import { wireLogCollapse } from './modules/log.js';
@@ -189,6 +189,7 @@ document.addEventListener('DOMContentLoaded', () => {
   startMeterIdleTicker();
   wireGainSlider();
   restoreSidebarState();
+  renderStreamUrlRecent();
   wireTagDirtyTracking();
   wireFindSubtitleLive();
   wireSectionCollapse();
