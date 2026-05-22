@@ -306,6 +306,11 @@ function _albumRowHtml(a, opts) {
         glyph: '🗜',
       })
     : '';
+  // Download the finished album as a zip — only split albums have tracks in
+  // music/ to bundle. The web-only path to pull a rip off the server.
+  const downloadBtn = a.split
+    ? `<a class="icon-btn" href="/api/album/${encodeURIComponent(a.album_id)}/download" download title="Download album (.zip)" aria-label="${htmlEscape('Download album ' + ctx + ' as a zip')}">⬇</a>`
+    : '';
   const delBtn = actionBtn('deleteAlbum', a.album_id, {label: 'Delete album', ariaLabel: 'Delete album ' + ctx, glyph: '✕', danger: true});
   const checkboxAria = htmlEscape('Select ' + ctx + ' for bulk action');
   return `
@@ -325,7 +330,7 @@ function _albumRowHtml(a, opts) {
     <td data-col="size" style="color:var(--muted)">${a.size_mb} MB</td>
     <td data-col="fmt" style="color:var(--muted);font-variant-numeric:tabular-nums" title="N-bit / M kHz">${fmtSourceFormat(a)}</td>
     <td data-col="status" style="color:var(--muted)">${countCell}</td>
-    <td data-col="actions" style="white-space:nowrap;text-align:right">${tagBtn}${splitBtn}${demBtn}${purgeBtn}${delBtn}</td>
+    <td data-col="actions" style="white-space:nowrap;text-align:right">${tagBtn}${downloadBtn}${splitBtn}${demBtn}${purgeBtn}${delBtn}</td>
   </tr>`;
 }
 
