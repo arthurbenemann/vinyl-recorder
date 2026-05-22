@@ -4,7 +4,7 @@ metadata flags, and media-type mapping; integration with ffmpeg is
 covered in tests/api/test_album_split.py."""
 
 from services.split_orchestrator import (
-    _FORMAT_SETTINGS, _ffmpeg_metadata_args, _media_type_for,
+    _FORMAT_SETTINGS, _ffmpeg_metadata_args, _is_compilation, _media_type_for,
     _wav_codec_for_bits,
 )
 from state import ALLOWED_OUTPUT_FORMATS
@@ -52,6 +52,33 @@ def test_ffmpeg_metadata_args_omits_empty_fields():
     assert "album=X" in flat
     assert "date=" not in flat   # year was empty
     assert "genre=" not in flat
+
+
+def test_ffmpeg_metadata_args_sets_album_artist_from_artist():
+    """Non-FLAC encodes bake ALBUMARTIST in via the ffmpeg `album_artist`
+    metadata key (TPE2 / aART / vorbis ALBUMARTIST), defaulting to ARTIST so
+    the album groups correctly in music servers."""
+    args = _ffmpeg_metadata_args("Song", 1, 10, {"artist": "A"}, None)
+    flat = " ".join(args)
+    assert "album_artist=A" in flat
+    # Single-artist album: no compilation flag.
+    assert "compilation=" not in flat
+
+
+def test_ffmpeg_metadata_args_sets_compilation_for_various_artists():
+    args = _ffmpeg_metadata_args(
+        "Song", 1, 10, {"artist": "Various Artists"}, None,
+    )
+    flat = " ".join(args)
+    assert "album_artist=Various Artists" in flat
+    assert "compilation=1" in flat
+
+
+def test_is_compilation_detects_various_artists():
+    assert _is_compilation({"artist": "Various Artists"}) is True
+    assert _is_compilation({"artist": "various artists"}) is True
+    assert _is_compilation({"artist": "The Beatles"}) is False
+    assert _is_compilation({}) is False
 
 
 def test_ffmpeg_metadata_args_includes_composer_conductor():

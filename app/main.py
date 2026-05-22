@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from routes import albums, pi_deploy, recordings, tagging, ws as ws_route
 from services.eventbus import bus
-from services.ffmpeg import LOW_SPACE_GB, disk_free_gb
+from services.ffmpeg import LOW_SPACE_GB, disk_free_gb, recording_headroom_minutes
 from services.jobs import get_job
 from services.upstream import (
     UPSTREAM_IDLE_GRACE_SECONDS, UPSTREAM_MIN_UPTIME_SECONDS,
@@ -22,7 +22,7 @@ from services.upstream import (
 from state import (
     AUTO_CONNECT, ConnectRequest, DEFAULT_AUTO_STOP_ON_SILENCE,
     DEFAULT_GAIN_DB, DEFAULT_SILENCE_SECONDS,
-    DEFAULT_SPLIT_BIT_DEPTH, DEFAULT_SPLIT_NORMALIZE,
+    DEFAULT_SPLIT_BIT_DEPTH, DEFAULT_SPLIT_NORMALIZE, DEFAULT_SPLIT_REPLAYGAIN,
     DEFAULT_SPLIT_TARGET_PEAK_DB, DEFAULT_STREAM_URL, DISCOGS_USERNAME,
     PRE_ROLL_SECONDS, sessions, upstream,
 )
@@ -126,6 +126,7 @@ async def get_config():
         "version":                      VERSION,
         "low_space_gb":                 LOW_SPACE_GB,
         "default_split_normalize":      DEFAULT_SPLIT_NORMALIZE,
+        "default_split_replaygain":     DEFAULT_SPLIT_REPLAYGAIN,
         "default_split_target_peak_db": DEFAULT_SPLIT_TARGET_PEAK_DB,
         "default_split_bit_depth":      DEFAULT_SPLIT_BIT_DEPTH,
         "pre_roll_seconds":             PRE_ROLL_SECONDS,
@@ -165,10 +166,12 @@ async def status():
             "duration": s.duration,
         })
     return {
-        "recording":    len(sessions) > 0,
-        "sessions":     snapshot,
-        "disk_free_gb": disk_free_gb(),
-        "upstream":     upstream.state(),
+        "recording":      len(sessions) > 0,
+        "sessions":       snapshot,
+        "disk_free_gb":   disk_free_gb(),
+        "headroom_minutes": recording_headroom_minutes(
+            upstream.fmt if upstream.configured else None),
+        "upstream":       upstream.state(),
     }
 
 
