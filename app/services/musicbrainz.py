@@ -125,9 +125,22 @@ def search_releases(artist: str = "", album: str = "", limit: int = 5,
             "catalog_number": catno,
             "country":        r.get("country", "") or "",
             "format":         (r.get("media") or [{}])[0].get("format", "") or "",
+            "track_count":    _release_track_count(r),
             "score":          r.get("score"),
         })
     return out
+
+
+def _release_track_count(r: dict) -> Optional[int]:
+    """Total track count for an MB release-search hit, for the candidate
+    picker — matching the count to the user's rip is a key way to tell
+    pressings/editions apart. MB gives a top-level `track-count`; fall back
+    to summing the per-medium counts. None when unknown."""
+    tc = r.get("track-count")
+    if tc:
+        return tc
+    total = sum((m.get("track-count") or 0) for m in (r.get("media") or []))
+    return total or None
 
 
 # ── release_full cache ────────────────────────────────────────────────────

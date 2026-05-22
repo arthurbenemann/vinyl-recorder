@@ -846,6 +846,10 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .wave-track.unfit { opacity: 0.6; }
 .wave-track.unfit input { font-style: italic; color: var(--muted); }
 .wave-track.unfit .range { color: var(--accent2); font-style: italic; }
+/* Advisory length flags: a sub-10s region (likely a stray cut) or one
+   longer than an LP side (likely a missed cut). The ⚠ glyph + amber colour
+   live inside the existing range cell so the fixed grid layout is untouched. */
+.wave-track .range.short, .wave-track .range.long { color: var(--accent2); font-weight: 500; cursor: help; }
 
 /* Narrow-modal track-row layout (Option A).
    At full width the row is one line: pn / play / title / start / range / skip / del.

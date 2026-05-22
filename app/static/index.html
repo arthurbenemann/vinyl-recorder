@@ -162,6 +162,7 @@
       <div class="search-wrap lib-search-wrap">
         <svg class="search-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><line x1="10.4" y1="10.4" x2="13.5" y2="13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
         <input id="lib-search" class="lib-search" type="search" placeholder="search albums, artists, labels…"
+               title="Press / to jump here" aria-keyshortcuts="/"
                oninput="onLibSearchInput(this.value)" />
         <button class="search-clear" id="lib-filter-clear" type="button" onclick="clearLibFilter()" hidden aria-label="clear search">×</button>
       </div>
@@ -300,6 +301,7 @@
 
     <div class="we-toolbar">
       <button class="play-btn" id="we-play" onclick="weTogglePlay()" title="Play / pause (Space)" aria-keyshortcuts="Space">▶</button>
+      <button class="btn-small" id="we-preview-btn" onclick="wePreviewCut()" title="Preview the nearest cut: play ~2s before to ~2s after the boundary, then stop (p)." aria-keyshortcuts="p">▶ preview cut (p)</button>
       <span class="readout">
         <strong id="we-time">0:00</strong> / <span id="we-duration">—</span>
       </span>
@@ -383,7 +385,7 @@
 
     <div class="wave-wrap" id="we-wrap"
          onwheel="weWheel(event)">
-      <canvas class="wave-img" id="we-canvas" width="2400" height="140" tabindex="0" role="application" aria-label="Album waveform — use space to play/pause, arrow keys to nudge cuts, j/k to jump between cuts"></canvas>
+      <canvas class="wave-img" id="we-canvas" width="2400" height="140" tabindex="0" role="application" aria-keyshortcuts="Space c p j k Delete s ArrowLeft ArrowRight" aria-label="Album waveform — space to play/pause, c to add a cut at the playhead, p to preview the nearest cut, arrow keys to nudge the nearest cut, j/k to jump between cuts"></canvas>
       <div class="wave-overlay" id="we-overlay"
            onmousemove="weHoverMove(event)"
            onmouseleave="weHoverLeave()"
@@ -396,8 +398,8 @@
     </div>
     <div class="wave-axis"><span id="we-t0">0:00</span><span id="we-t1">—</span></div>
     <div class="wave-help">
-      <strong>scroll</strong> zoom · <strong>shift+click</strong> add cut · drag handle to nudge (snaps to detected silences) · right-click delete · click waveform to seek.<br>
-      <strong>space</strong> play/pause · <strong>←/→</strong> nudge nearest cut ±0.1s (shift = ±1s) · <strong>j/k</strong> jump prev/next cut · <strong>s</strong> skip region at playhead · <strong>delete</strong> remove nearest cut · <strong>esc</strong> close.<br>
+      <strong>scroll</strong> zoom · <strong>shift+click</strong> or <strong>c</strong> add cut · drag handle to nudge (snaps to detected silences) · right-click delete · click waveform to seek.<br>
+      <strong>space</strong> play/pause · <strong>c</strong> add cut at playhead · <strong>p</strong> preview nearest cut · <strong>←/→</strong> nudge nearest cut ±0.1s (shift = ±1s) · <strong>j/k</strong> jump prev/next cut · <strong>s</strong> skip region at playhead · <strong>delete</strong> remove nearest cut · <strong>esc</strong> close.<br>
       <span style="opacity:0.85"><span style="color:rgba(170,210,255,0.95)">┊</span> side switch (from recording) · cut handles + track rows show sleeve-style positions (e.g. A1, B2) — auto-derived from the side layout, or from Discogs when a tracklist is applied.</span>
     </div>
 
@@ -418,6 +420,10 @@
         <label class="we-process-toggle">
           <input type="checkbox" id="we-normalize"> normalize album
         </label>
+        <label class="we-process-toggle"
+               title="Write ReplayGain track + album loudness tags (FLAC only). Players normalise volume on playback; the audio itself is untouched.">
+          <input type="checkbox" id="we-replaygain"> ReplayGain tags
+        </label>
         <label class="we-process-bits">
           output format
           <select id="we-format" onchange="weOnFormatChange()">
@@ -437,6 +443,16 @@
             <option value="24">24-bit</option>
           </select>
         </label>
+        <label class="we-process-bits"
+               title="Stereo keeps the capture as-is. Mono (L+R) suits genuine mono pressings — it cancels out-of-phase groove noise. Left / Right rescue a single good channel from a damaged or miswired side.">
+          output channels
+          <select id="we-channels">
+            <option value="stereo" selected>stereo (keep)</option>
+            <option value="mono">mono (L+R sum)</option>
+            <option value="left">left only</option>
+            <option value="right">right only</option>
+          </select>
+        </label>
         <label class="we-process-bits">
           output sample rate
           <select id="we-sample-rate">
@@ -452,7 +468,7 @@
 
     <div class="action-row" style="margin-top:14px">
       <button class="btn primary" id="we-go" onclick="weApplySplit()" disabled title="Apply split: render the cuts above into per-track files using the chosen output format and bit depth.">apply split</button>
-      <button class="btn" onclick="weAddCutAtPlayhead()" title="Insert a cut at the current playhead position. Same as shift+click on the waveform.">+ add cut at playhead</button>
+      <button class="btn" onclick="weAddCutAtPlayhead()" title="Insert a cut at the current playhead position. Same as pressing c, or shift+click on the waveform." aria-keyshortcuts="c">+ add cut at playhead (c)</button>
       <button class="btn" onclick="weClearCuts()" title="Remove every cut. The waveform reverts to a single track.">clear cuts</button>
       <button class="btn" onclick="closeWaveEditor()" title="Close the split editor (Esc).">cancel</button>
     </div>
@@ -510,6 +526,7 @@
         <div class="field"><label>Tracks (from picked release)</label><textarea id="t-tracks" rows="6" readonly tabindex="-1" aria-readonly="true"></textarea></div>
         <div class="action-row">
           <button class="btn primary" id="tag-apply-btn" onclick="applyTagPanel()">apply tags</button>
+          <button class="btn" id="tag-apply-edit-btn" hidden onclick="applyTagPanel(true)" title="Combine these sides into the album, then open the split editor right away">combine &amp; edit ▸</button>
           <span class="unsaved-badge" id="tag-unsaved-badge" hidden title="Form has unsaved changes">unsaved</span>
           <button class="btn" onclick="closeTag()">cancel</button>
         </div>
@@ -518,16 +535,17 @@
       <!-- Right column: find-a-release tools + candidate matches -->
       <div class="tag-col">
         <div class="col-label">Find a release</div>
-        <!-- Unified find-a-release bar. Auto-detects three modes:
+        <!-- Unified find-a-release bar. Auto-detects four modes:
               · empty + Enter → search MusicBrainz using left-column fields
               · free text     → live-filters the Discogs collection
               · Discogs URL/id pasted → fetches that release directly
+              · MusicBrainz release URL / MBID pasted → fetches it directly
              The subtitle below updates on every keystroke so the user
              always knows what the next action will do. -->
         <div class="search-wrap t-find-wrap" style="max-width:none;margin-bottom:4px">
           <svg class="search-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><line x1="10.4" y1="10.4" x2="13.5" y2="13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
           <input id="t-search" type="search"
-                 placeholder="filter collection · paste Discogs link · or Enter ↗ to search MusicBrainz"
+                 placeholder="filter collection · paste Discogs/MusicBrainz link · or Enter ↗ to search MusicBrainz"
                  autocomplete="off"
                  oninput="onFindInput(this.value)"
                  onpaste="setTimeout(()=>onFindInput(this.value),0)"
@@ -544,7 +562,7 @@
         </div>
         <div class="search-status" id="t-search-status"></div>
         <div class="candidates" id="t-candidates">
-          <div class="empty-results">Type above to filter your collection, paste a Discogs link, or hit Enter to search MusicBrainz using the Artist + Album fields on the left.</div>
+          <div class="empty-results">Type above to filter your collection, paste a Discogs or MusicBrainz link, or hit Enter to search MusicBrainz using the Artist + Album fields on the left.</div>
         </div>
       </div>
 

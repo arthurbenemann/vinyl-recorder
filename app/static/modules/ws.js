@@ -20,6 +20,12 @@ import { parseError } from './api.js';
 // can dismiss it by name without having to track DOM references.
 const RECONNECT_TOAST_ID = 'upstream-reconnect';
 
+// Stable id for the "recording but no input signal" warning so it shows
+// once and any tab can dismiss it by name when signal returns / recording
+// ends. Mirrors the floor the server's watcher uses (~-50 dBFS amplitude).
+const NO_SIGNAL_TOAST_ID = 'rec-no-signal';
+const NO_SIGNAL_PEAK_FLOOR = 0.003;
+
 // Trigger the reconnect prompt. Captured the URL the server told us about
 // at the time the WS hello arrived — if the user blanked the input after
 // a drop we still know what to reconnect to.
@@ -169,6 +175,10 @@ function handleWsEvent(m) {
       // Server is the source of truth for clip latches; mirror.
       setClipBadge('L', !!m.clipped_l);
       setClipBadge('R', !!m.clipped_r);
+      // Signal is back above the floor — clear any no-signal warning.
+      if ((m.peak_l || 0) > NO_SIGNAL_PEAK_FLOOR || (m.peak_r || 0) > NO_SIGNAL_PEAK_FLOOR) {
+        dismissActionToast(NO_SIGNAL_TOAST_ID);
+      }
       break;
     case 'clip':
       setClipBadge('L', !!m.clipped_l);
@@ -198,11 +208,24 @@ function handleWsEvent(m) {
           active: true, paused: false, sid: m.session_id,
           durationSec: m.duration, elapsedSec: 0,
         });
+        // Fresh recording — clear a stale no-signal warning from a prior take.
+        dismissActionToast(NO_SIGNAL_TOAST_ID);
         // Server emits the log line via bus.log so it lands in the ring
         // buffer and replays to fresh tabs; record-state UI is the visible
         // feedback (red dot + timer), so no toast needed here.
+      } else if (m.event === 'no_signal') {
+        // The server's watcher saw no input for NO_SIGNAL_WARN_SECONDS while
+        // recording — surface it prominently so the user doesn't capture a
+        // silent dead take. Auto-clears on the next above-floor `vu` frame,
+        // or on record start/stop.
+        toastAction({
+          id: NO_SIGNAL_TOAST_ID, kind: 'err',
+          msg: 'Recording, but no audio detected — check the turntable / input.',
+          actionLabel: 'Dismiss', onClick: async () => {},
+        });
       } else if (m.event === 'stop') {
         applyRecordState({ active: false });
+        dismissActionToast(NO_SIGNAL_TOAST_ID);
         refreshLib().catch(() => {});
         // If this tab started the recording, open the tag panel as before.
         if (m.session_id && m.session_id === state.sessionId) openTag(m.filename);

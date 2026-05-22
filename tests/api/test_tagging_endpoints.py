@@ -131,6 +131,26 @@ def test_release_discogs_includes_composer_and_conductor(monkeypatch):
     assert body["conductor"] == "Karajan"
 
 
+def test_release_discogs_joins_genres_and_styles_with_semicolons(monkeypatch):
+    """Genres + styles are merged into one ';'-separated string so the split
+    flow can write each as its own GENRE tag. ';' (not ',') is the separator
+    because a Discogs genre can itself contain commas."""
+    from services import discogs as ds_mod
+
+    fake = {
+        "title": "X", "year": 1990, "artists": [{"name": "A"}],
+        "labels": [], "country": "", "formats": [],
+        "genres": ["Electronic", "Folk, World, & Country"],
+        "styles": ["Techno", "House"],
+        "tracklist": [], "images": [], "extraartists": [],
+        "uri": "https://www.discogs.com/release/7",
+    }
+    monkeypatch.setattr(ds_mod, "release", lambda rid: fake)
+    body = _client().get("/api/release/discogs/7").json()
+    # ';'-joined, dedup-ordered, comma-containing genre kept whole.
+    assert body["genre"] == "Electronic; Folk, World, & Country; Techno; House"
+
+
 # ── /api/cover/{mbid} ────────────────────────────────────────────────────
 def test_cover_invalid_mbid_returns_400():
     r = _client().get("/api/cover/not-an-mbid")
@@ -239,6 +259,52 @@ def test_apply_strips_tracks_from_manifest_tags(monkeypatch):
         assert "tracks" not in manifest["tags"], (
             f"tags polluted with tracklist: {manifest['tags']!r}"
         )
+    finally:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_apply_persists_mb_ids_media_releasetype(monkeypatch):
+    """Applying an MB pick persists the stable MB IDs + media + releasetype
+    into album.json (so the split writes them onto every track). They flow
+    in from release_full at apply-time, not from the user's edit fields."""
+    import json
+
+    from routes import tagging as tg
+    from state import IN_PROGRESS_DIR
+
+    fake_mb = {
+        "release-group": {"id": "rg-xyz", "primary-type": "Album"},
+        "artist-credit": [{"artist": {"id": "art-xyz", "name": "A"}}],
+        "media": [{"format": "Vinyl"}],
+        "relations": [],  # no Discogs link → extract_discogs_id → None
+    }
+    monkeypatch.setattr(tg, "release_full", lambda mbid: fake_mb)
+    monkeypatch.setattr(tg, "caa_front", lambda mbid: None)
+
+    album_id = "mbidsalbum1"
+    d = IN_PROGRESS_DIR / album_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "side1.flac").write_bytes(b"")
+    (d / "album.json").write_text(json.dumps({
+        "schema_version": 2, "tags": {"artist": "A"},
+        "sides": ["side1.flac"], "cover": None, "plan": None,
+        "music_relpath": None,
+    }))
+    try:
+        r = _client().post("/api/apply", json={
+            "album_id": album_id,
+            "mbid": _VALID_MBID,
+            "fields": {"artist": "A", "album": "B"},
+        })
+        assert r.status_code == 200
+        tags = json.loads((d / "album.json").read_text())["tags"]
+        assert tags["musicbrainz_albumid"] == _VALID_MBID
+        assert tags["musicbrainz_releasegroupid"] == "rg-xyz"
+        assert tags["musicbrainz_artistid"] == "art-xyz"
+        assert tags["musicbrainz_albumartistid"] == "art-xyz"
+        assert tags["media"] == "Vinyl"
+        assert tags["releasetype"] == "Album"
     finally:
         import shutil
         shutil.rmtree(d, ignore_errors=True)

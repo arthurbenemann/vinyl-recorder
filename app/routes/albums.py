@@ -13,12 +13,16 @@ The split flow's domain logic (music-dir computation, prior-output
 cleanup, per-track encode + tag, plan persistence) lives in
 `services.split_orchestrator`. This module stays an HTTP layer."""
 import asyncio
+import os
 import re
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.background import BackgroundTask
 
 from services import albums_fs, split_orchestrator
 from services.ffmpeg import (
@@ -192,6 +196,8 @@ async def update_plan(album_id: str, req: PlanUpdateRequest):
     if req.bit_depth        is not None: plan["bit_depth"]        = req.bit_depth
     if req.sample_rate      is not None: plan["sample_rate"]      = req.sample_rate
     if req.output_format    is not None: plan["output_format"]    = req.output_format
+    if req.channel_mode     is not None: plan["channel_mode"]     = req.channel_mode
+    if req.replaygain       is not None: plan["replaygain"]       = req.replaygain
     manifest["plan"] = plan
     manifest["plan_version"] = current_version + 1
     albums_fs.write_manifest(album_id, manifest)
@@ -512,3 +518,45 @@ async def download_track(album_id: str, trackname: str):
     if not p.exists():
         raise HTTPException(404)
     return FileResponse(str(p), media_type=_media_type_for(p.suffix), filename=trackname)
+
+
+@router.get("/api/album/{album_id}/download")
+async def download_album(album_id: str):
+    """Bundle a split album's tracks (+ cover.jpg) into one .zip and stream
+    it — the web-only way to pull a finished rip off the server when there's
+    no filesystem access. 404 until the album has actually been split."""
+    manifest = _require_album(album_id)
+    relpath = manifest.get("music_relpath") or ""
+    if not relpath:
+        raise HTTPException(404, "album has not been split yet")
+    src = MUSIC_DIR / relpath
+    if not src.is_dir():
+        raise HTTPException(404, "music folder missing")
+    members = sorted(
+        f for f in src.iterdir()
+        if f.is_file() and (f.suffix.lower() in _AUDIO_EXTS or f.name == "cover.jpg")
+    )
+    if not members:
+        raise HTTPException(404, "no tracks to download")
+
+    def _build_zip() -> str:
+        # FLAC/MP3/etc. are already compressed, so STORED skips a pointless
+        # second pass while still bundling the folder into one file. Written
+        # to a temp file (not in-memory) so a large multi-LP set can't spike
+        # RSS; FileResponse deletes it after the body is sent.
+        tmp = tempfile.NamedTemporaryFile(prefix="album-", suffix=".zip", delete=False)
+        try:
+            with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as zf:
+                for m in members:
+                    zf.write(m, arcname=m.name)
+        finally:
+            tmp.close()
+        return tmp.name
+
+    zip_path = await asyncio.to_thread(_build_zip)
+    # "Artist/Album (Year)" → "Artist - Album (Year).zip" for the download.
+    zip_name = safe_path_component(relpath.replace("/", " - ")) + ".zip"
+    return FileResponse(
+        zip_path, media_type="application/zip", filename=zip_name,
+        background=BackgroundTask(os.unlink, zip_path),
+    )
