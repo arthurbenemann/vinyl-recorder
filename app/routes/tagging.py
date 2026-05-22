@@ -41,6 +41,37 @@ def _mb_artist_relation(mb_release: dict, rel_type: str) -> str:
     return ", ".join(names)
 
 
+def _mb_extra_tags(mb: dict) -> dict:
+    """Pull the stable MusicBrainz identifiers + release facts a music
+    server keys on for reliable matching/grouping. Only non-empty values
+    are returned so blank tags never get written.
+
+    - `musicbrainz_releasegroupid` / `musicbrainz_artistid` /
+      `musicbrainz_albumartistid` — servers dedup releases and fetch
+      artist/album art by these IDs. albumartistid mirrors artistid here:
+      a single album-artist credit is the vinyl norm and all we can know
+      from the release's primary artist-credit.
+    - `media` — the medium format ("Vinyl"), so the library can tell a
+      needledrop from a CD rip.
+    - `releasetype` — the release-group primary type ("Album"/"Single"/
+      "Compilation"/"Live"/…) used for browse grouping."""
+    out: dict = {}
+    rg = mb.get("release-group") or {}
+    if _str(rg, "id"):
+        out["musicbrainz_releasegroupid"] = _str(rg, "id")
+    if _str(rg, "primary-type"):
+        out["releasetype"] = _str(rg, "primary-type")
+    ac = mb.get("artist-credit") or []
+    artist = (ac[0].get("artist") or {}) if ac else {}
+    if _str(artist, "id"):
+        out["musicbrainz_artistid"] = _str(artist, "id")
+        out["musicbrainz_albumartistid"] = _str(artist, "id")
+    media = mb.get("media") or []
+    if media and _str(media[0], "format"):
+        out["media"] = _str(media[0], "format")
+    return out
+
+
 def _discogs_extra_artists(release: dict, role_prefixes: tuple[str, ...]) -> str:
     """Pull credits from a Discogs release's `extraartists[]` whose role
     starts with any of the given prefixes (lowercased). Discogs uses
@@ -228,7 +259,7 @@ async def release_detail_discogs(release_id: int):
         "catalog_number": catno,
         "country":        country,
         "format":         fmt,
-        "genre":          ", ".join(genres),
+        "genre":          "; ".join(genres),
         "composer":       composer,
         "conductor":      conductor,
         "tracks":         tracks,
@@ -333,7 +364,7 @@ async def release_detail(mbid: str):
         "catalog_number": catno,
         "country":        country,
         "format":         fmt,
-        "genre":          ", ".join(genres),
+        "genre":          "; ".join(genres),
         "composer":       composer,
         "conductor":      conductor,
         "tracks":         tracks,
@@ -436,25 +467,28 @@ async def apply_tags(req: ApplyRequest):
         )
 
     fields = {k: v for k, v in req.fields.dict().items() if v is not None}
-    if req.mbid:
-        if not re.fullmatch(r"[0-9a-f-]{36}", req.mbid):
-            raise HTTPException(400, "invalid mbid")
-        fields["musicbrainz_albumid"] = req.mbid
-
     discogs_id = (
         req.discogs_release_id if req.discogs_release_id and req.discogs_release_id > 0
         else None
     )
-    # When an MB pick is on the table but discogs_id wasn't supplied, see if
-    # MB has the Discogs link recorded for us so we can persist + use it.
-    if req.mbid and discogs_id is None:
+    if req.mbid:
+        if not re.fullmatch(r"[0-9a-f-]{36}", req.mbid):
+            raise HTTPException(400, "invalid mbid")
+        fields["musicbrainz_albumid"] = req.mbid
+        # Fetch the full release once: it carries the Discogs link AND the
+        # stable IDs / media / releasetype we persist for the music server.
+        # release_full memoizes ~5 min, so this is normally a cache hit from
+        # the /api/release/{mbid} call the user just made to pick it.
         try:
             mb = await asyncio.to_thread(release_full, req.mbid)
-            did = extract_discogs_id(mb)
-            if did:
-                discogs_id = did
         except Exception:
-            pass
+            mb = None
+        if mb:
+            if discogs_id is None:
+                did = extract_discogs_id(mb)
+                if did:
+                    discogs_id = did
+            fields.update(_mb_extra_tags(mb))
     if discogs_id is not None:
         fields["discogs_release_id"] = discogs_id
 

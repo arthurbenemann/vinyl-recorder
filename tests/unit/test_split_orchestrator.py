@@ -30,11 +30,59 @@ from services.split_orchestrator import (
     SplitNotFoundError,
     SplitProcessingError,
     SplitValidationError,
+    add_replay_gain,
     kept_duration_total,
+    sort_name,
+    split_genres,
     wipe_prior_music_dir,
     write_track_tags,
 )
 from state import SplitRequest, SplitTrack
+
+
+# ── sort_name ────────────────────────────────────────────────────────────
+def test_sort_name_moves_leading_article():
+    assert sort_name("The Beatles") == "Beatles, The"
+    assert sort_name("A Tribe Called Quest") == "Tribe Called Quest, A"
+    assert sort_name("An Album") == "Album, An"
+
+
+def test_sort_name_case_insensitive_article_preserves_case():
+    assert sort_name("the doors") == "doors, the"
+
+
+def test_sort_name_no_article_unchanged():
+    assert sort_name("Radiohead") == "Radiohead"
+    # "The" with nothing after stays put (no trailing-article move).
+    assert sort_name("The") == "The"
+    # An article-like word that's part of the name, not a leading article.
+    assert sort_name("Theory of a Deadman") == "Theory of a Deadman"
+
+
+def test_sort_name_empty():
+    assert sort_name("") == ""
+
+
+# ── split_genres ─────────────────────────────────────────────────────────
+def test_split_genres_splits_on_semicolons():
+    assert split_genres("Electronic; Techno; House") == ["Electronic", "Techno", "House"]
+
+
+def test_split_genres_single_value():
+    assert split_genres("Rock") == ["Rock"]
+
+
+def test_split_genres_preserves_commas_within_a_genre():
+    # A single Discogs genre with commas must survive intact — only ';' splits.
+    assert split_genres("Folk, World, & Country") == ["Folk, World, & Country"]
+    assert split_genres("Folk, World, & Country; Techno") == [
+        "Folk, World, & Country", "Techno",
+    ]
+
+
+def test_split_genres_empty_and_blank():
+    assert split_genres("") == []
+    assert split_genres("  ;  ; ") == []
 
 
 # ── kept_duration_total ──────────────────────────────────────────────────
@@ -143,21 +191,34 @@ def test_wipe_prior_music_dir_unlinks_audio_and_prunes_parent(tmp_path, monkeypa
     assert not (tmp_path / "OldArtist").exists()
 
 
-def test_wipe_prior_music_dir_leaves_non_audio_files_blocking_rmdir(tmp_path, monkeypatch):
-    """A stray non-audio file (cover.jpg the orchestrator hasn't moved
-    yet, README, etc.) keeps the dir alive — the unlink loop only targets
-    known audio extensions, then the rmdir fails silently. Documenting
-    behaviour, not asserting correctness — refactors can change this."""
+def test_wipe_prior_music_dir_leaves_foreign_files_blocking_rmdir(tmp_path, monkeypatch):
+    """A truly-foreign file (a user's README/notes) keeps the dir alive —
+    the cleanup only targets known audio extensions + our own cover.jpg
+    sidecar, then the rmdir fails silently. Documenting behaviour, not
+    asserting correctness — refactors can change this."""
     monkeypatch.setattr(so, "MUSIC_DIR", tmp_path)
     prior_dir = tmp_path / "X" / "Y"
     prior_dir.mkdir(parents=True)
     (prior_dir / "01.flac").write_bytes(b"")
-    (prior_dir / "cover.jpg").write_bytes(b"art")
+    (prior_dir / "notes.txt").write_bytes(b"mine")
     wipe_prior_music_dir("X/Y", "Z/W")
-    # FLAC gone, JPG survives, dir survives because rmdir of non-empty fails.
+    # FLAC gone, foreign file survives, dir survives (rmdir of non-empty fails).
     assert not (prior_dir / "01.flac").exists()
-    assert (prior_dir / "cover.jpg").exists()
+    assert (prior_dir / "notes.txt").exists()
     assert prior_dir.is_dir()
+
+
+def test_wipe_prior_music_dir_removes_folder_cover(tmp_path, monkeypatch):
+    """The folder-art cover.jpg the split writes is ours to manage — it gets
+    cleaned with the audio so a moved album's old dir can be pruned."""
+    monkeypatch.setattr(so, "MUSIC_DIR", tmp_path)
+    prior_dir = tmp_path / "Old" / "Album"
+    prior_dir.mkdir(parents=True)
+    (prior_dir / "01.flac").write_bytes(b"")
+    (prior_dir / "cover.jpg").write_bytes(b"art")
+    wipe_prior_music_dir("Old/Album", "New/Album")
+    assert not prior_dir.exists()
+    assert not (tmp_path / "Old").exists()
 
 
 def test_wipe_prior_music_dir_handles_missing_prior(tmp_path, monkeypatch):
@@ -215,6 +276,8 @@ def test_write_track_tags_emits_required_set(monkeypatch, tmp_path):
     assert cmd[0] == "metaflac"
     assert "--remove-all-tags" in cmd
     assert "--set-tag=ARTIST=A" in cmd
+    # ALBUMARTIST defaults to ARTIST so music servers group the album.
+    assert "--set-tag=ALBUMARTIST=A" in cmd
     assert "--set-tag=ALBUM=B" in cmd
     assert "--set-tag=DATE=2020" in cmd
     assert "--set-tag=GENRE=Rock" in cmd
@@ -226,6 +289,92 @@ def test_write_track_tags_emits_required_set(monkeypatch, tmp_path):
     assert "--set-tag=TRACKTOTAL=10" in cmd
     # File path is the trailing positional arg.
     assert cmd[-1] == str(out)
+
+
+def test_write_track_tags_emits_sort_names_when_article_moves(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 1, tags={"artist": "The Beatles"},
+                     cover_file=None)
+    cmd = calls[0]
+    assert "--set-tag=ARTISTSORT=Beatles, The" in cmd
+    assert "--set-tag=ALBUMARTISTSORT=Beatles, The" in cmd
+
+
+def test_write_track_tags_omits_sort_names_without_article(monkeypatch, tmp_path):
+    """No leading article → sort form equals display form → no sort tags."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 1, tags={"artist": "Radiohead"},
+                     cover_file=None)
+    cmd = calls[0]
+    assert not any("ARTISTSORT=" in a for a in cmd)
+    assert not any("ALBUMARTISTSORT=" in a for a in cmd)
+
+
+def test_write_track_tags_emits_one_genre_tag_per_value(monkeypatch, tmp_path):
+    """A ';'-joined genre string becomes repeated GENRE Vorbis comments so
+    servers browse each genre independently."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 1,
+                     tags={"artist": "A", "genre": "Electronic; Techno; House"},
+                     cover_file=None)
+    cmd = calls[0]
+    assert cmd.count("--set-tag=GENRE=Electronic") == 1
+    assert "--set-tag=GENRE=Techno" in cmd
+    assert "--set-tag=GENRE=House" in cmd
+    # Three distinct GENRE tags, not one delimited blob.
+    assert sum(1 for a in cmd if a.startswith("--set-tag=GENRE=")) == 3
+
+
+def test_write_track_tags_no_genre_tag_when_blank(monkeypatch, tmp_path):
+    """Blank genre writes no GENRE tag at all (no empty `GENRE=` litter)."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 1, tags={"artist": "A"}, cover_file=None)
+    cmd = calls[0]
+    assert not any(a.startswith("--set-tag=GENRE=") for a in cmd)
 
 
 def test_write_track_tags_skips_optional_tags_when_blank(monkeypatch, tmp_path):
@@ -250,6 +399,31 @@ def test_write_track_tags_skips_optional_tags_when_blank(monkeypatch, tmp_path):
     assert not any("CONDUCTOR=" in a for a in cmd)
     assert not any("MUSICBRAINZ_ALBUMID=" in a for a in cmd)
     assert not any("DISCOGS_RELEASE_ID=" in a for a in cmd)
+    # A single-artist album is NOT a compilation.
+    assert not any("COMPILATION=" in a for a in cmd)
+
+
+def test_write_track_tags_sets_compilation_for_various_artists(monkeypatch, tmp_path):
+    """A "Various Artists" album gets COMPILATION=1 and an ALBUMARTIST of
+    "Various Artists" so music servers file it under one heading instead of
+    splitting it per track artist. Case-insensitive on the ARTIST value."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 12,
+                     tags={"artist": "various artists"}, cover_file=None)
+    cmd = calls[0]
+    assert "--set-tag=COMPILATION=1" in cmd
+    assert "--set-tag=ALBUMARTIST=various artists" in cmd
 
 
 def test_write_track_tags_includes_optional_tags_when_set(monkeypatch, tmp_path):
@@ -277,6 +451,58 @@ def test_write_track_tags_includes_optional_tags_when_set(monkeypatch, tmp_path)
     assert "--set-tag=DISCOGS_RELEASE_ID=12345" in cmd
 
 
+def test_write_track_tags_includes_mb_ids_media_releasetype(monkeypatch, tmp_path):
+    """The stable MB identifiers + release facts are written when present
+    so music servers can match/group reliably."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    tags = {
+        "artist": "A",
+        "musicbrainz_releasegroupid": "rg-1",
+        "musicbrainz_artistid": "art-2",
+        "musicbrainz_albumartistid": "art-2",
+        "media": "Vinyl",
+        "releasetype": "Album",
+    }
+    write_track_tags(out, "Song", 1, 1, tags=tags, cover_file=None)
+    cmd = calls[0]
+    assert "--set-tag=MUSICBRAINZ_RELEASEGROUPID=rg-1" in cmd
+    assert "--set-tag=MUSICBRAINZ_ARTISTID=art-2" in cmd
+    assert "--set-tag=MUSICBRAINZ_ALBUMARTISTID=art-2" in cmd
+    assert "--set-tag=MEDIA=Vinyl" in cmd
+    assert "--set-tag=RELEASETYPE=Album" in cmd
+
+
+def test_write_track_tags_omits_mb_ids_when_absent(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 1, tags={"artist": "A"}, cover_file=None)
+    cmd = calls[0]
+    assert not any("MUSICBRAINZ_RELEASEGROUPID=" in a for a in cmd)
+    assert not any("MEDIA=" in a for a in cmd)
+    assert not any("RELEASETYPE=" in a for a in cmd)
+
+
 def test_write_track_tags_imports_cover_as_separate_call(monkeypatch, tmp_path):
     """Cover-art embed is a second metaflac call because metaflac's
     `--import-picture-from` doesn't compose with `--set-tag` flags."""
@@ -302,6 +528,43 @@ def test_write_track_tags_imports_cover_as_separate_call(monkeypatch, tmp_path):
     assert cmd2[0] == "metaflac"
     assert any(a.startswith("--import-picture-from=") for a in cmd2)
     assert cmd2[-1] == str(out)
+
+
+# ── add_replay_gain ──────────────────────────────────────────────────────
+def test_add_replay_gain_single_pass_over_all_tracks(monkeypatch, tmp_path):
+    """One metaflac --add-replay-gain invocation listing every track, so
+    metaflac computes the shared album gain across the set (not per file)."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    paths = [tmp_path / "01 - A.flac", tmp_path / "02 - B.flac"]
+    for p in paths:
+        p.write_bytes(b"")
+    add_replay_gain(paths)
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert cmd[0] == "metaflac"
+    assert "--add-replay-gain" in cmd
+    # Every track path is listed in the one invocation.
+    assert str(paths[0]) in cmd
+    assert str(paths[1]) in cmd
+
+
+def test_add_replay_gain_noop_on_empty(monkeypatch):
+    """No tracks → no subprocess (avoids a bare `metaflac --add-replay-gain`
+    with no files, which would error)."""
+    calls = []
+    monkeypatch.setattr(so.subprocess, "run",
+                        lambda *a, **k: calls.append(a))
+    add_replay_gain([])
+    assert calls == []
 
 
 # ── split_album validation paths ─────────────────────────────────────────
@@ -695,3 +958,102 @@ def test_split_album_cleans_playlist_after_run(monkeypatch, tmp_path):
     manifest = so.albums_fs.read_manifest(album_id)
     _run_split(req, manifest)
     assert not playlist.exists()
+
+
+# ── split_album: ReplayGain post-pass ────────────────────────────────────
+def _setup_split_fixture(monkeypatch, tmp_path, album_id, output_format="flac"):
+    """Shared scaffolding for the ReplayGain integration tests: stubs the
+    concat playlist, disk-space, durations, cover, source bit-depth probe,
+    and _emit_track (which just touches an output file with the right ext)."""
+    inp = tmp_path / "in-progress"
+    music = tmp_path / "music"
+    inp.mkdir(); music.mkdir()
+    (inp / album_id).mkdir()
+    playlist = tmp_path / "pl.txt"
+    playlist.write_text("")
+    side = tmp_path / "side.flac"
+    side.write_bytes(b"x" * 16)
+    ext = so._FORMAT_SETTINGS[output_format]["ext"]
+
+    monkeypatch.setattr(so, "MUSIC_DIR", music)
+    monkeypatch.setattr(so.albums_fs, "MUSIC_DIR", music)
+    monkeypatch.setattr(so.albums_fs, "IN_PROGRESS_DIR", inp)
+    monkeypatch.setattr(so.albums_fs, "album_concat_playlist",
+                        lambda aid: (playlist, [side]))
+    monkeypatch.setattr(so, "disk_space_error", lambda need, op: None)
+    monkeypatch.setattr(so, "flac_duration_seconds", lambda p: 30.0)
+    monkeypatch.setattr(so.albums_fs, "cover_path", lambda aid: None)
+    monkeypatch.setattr(so.subprocess, "check_output", lambda *a, **k: "16\n44100\n")
+
+    async def fake_emit_track(**kw):
+        out_dir = kw["music_dir"]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"{kw['out_idx']:02d} - T{ext}"
+        out.write_bytes(b"")
+        return {"filename": out.name, "duration_seconds": 1.0, "size_mb": 0.0}
+
+    monkeypatch.setattr(so, "_emit_track", fake_emit_track)
+    (inp / album_id / "album.json").write_text(json.dumps({
+        "schema_version": 2,
+        "tags": {"artist": "X", "album": "Y", "year": "2001"},
+        "sides": ["side.flac"], "cover": None, "plan": None,
+        "music_relpath": None,
+    }))
+
+
+def test_split_album_runs_replaygain_when_enabled_for_flac(monkeypatch, tmp_path):
+    """replaygain=True + FLAC output → one add_replay_gain pass over the
+    emitted track files."""
+    album_id = "rgaaaaaa"
+    _setup_split_fixture(monkeypatch, tmp_path, album_id, "flac")
+    captured = []
+    monkeypatch.setattr(so, "add_replay_gain", lambda paths: captured.append(list(paths)))
+
+    req = SplitRequest(
+        album_id=album_id,
+        tracks=[SplitTrack(title="One", duration_seconds=15.0),
+                SplitTrack(title="Two", duration_seconds=15.0)],
+        output_format="flac", replaygain=True,
+    )
+    manifest = so.albums_fs.read_manifest(album_id)
+    _run_split(req, manifest)
+    assert len(captured) == 1
+    # Both emitted tracks were passed in a single pass.
+    assert len(captured[0]) == 2
+    assert all(str(p).endswith(".flac") for p in captured[0])
+    # Persisted plan records the flag for re-edit reload.
+    assert so.albums_fs.read_manifest(album_id)["plan"]["replaygain"] is True
+
+
+def test_split_album_skips_replaygain_when_disabled(monkeypatch, tmp_path):
+    album_id = "rgbbbbbb"
+    _setup_split_fixture(monkeypatch, tmp_path, album_id, "flac")
+    captured = []
+    monkeypatch.setattr(so, "add_replay_gain", lambda paths: captured.append(paths))
+
+    req = SplitRequest(
+        album_id=album_id,
+        tracks=[SplitTrack(title="One", duration_seconds=30.0)],
+        output_format="flac", replaygain=False,
+    )
+    manifest = so.albums_fs.read_manifest(album_id)
+    _run_split(req, manifest)
+    assert captured == []
+
+
+def test_split_album_skips_replaygain_for_non_flac(monkeypatch, tmp_path):
+    """ReplayGain is a metaflac feature — a WAV/MP3 split must not attempt
+    it even when the flag is on."""
+    album_id = "rgcccccc"
+    _setup_split_fixture(monkeypatch, tmp_path, album_id, "wav")
+    captured = []
+    monkeypatch.setattr(so, "add_replay_gain", lambda paths: captured.append(paths))
+
+    req = SplitRequest(
+        album_id=album_id,
+        tracks=[SplitTrack(title="One", duration_seconds=30.0)],
+        output_format="wav", replaygain=True,
+    )
+    manifest = so.albums_fs.read_manifest(album_id)
+    _run_split(req, manifest)
+    assert captured == []
