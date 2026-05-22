@@ -121,6 +121,34 @@ def disk_space_error(min_needed_gb: float, op: str) -> Optional[str]:
     )
 
 
+def recording_headroom_minutes(fmt: Optional[dict]) -> Optional[float]:
+    """Estimated minutes of recording headroom on OUTPUT_DIR's volume at the
+    upstream's RAW PCM byte rate (sample_rate × channels × bytes/sample).
+
+    Conservative on purpose: FLAC compresses a vinyl capture ~40-60%, so the
+    real headroom is larger than this — under-estimating is the safe
+    direction for a "will this side fit?" check, and it means the figure
+    never over-promises. Returns None when the format is unknown (not
+    connected) or unusable, so the UI can simply omit the estimate."""
+    if not fmt:
+        return None
+    try:
+        sr = int(fmt.get("sample_rate") or 0)
+        ch = int(fmt.get("channels") or 0)
+        bd = int(fmt.get("bit_depth") or 0)
+    except (TypeError, ValueError):
+        return None
+    bytes_per_sample = 3 if bd >= 24 else 2
+    pcm_bps = sr * ch * bytes_per_sample
+    if pcm_bps <= 0:
+        return None
+    try:
+        free = shutil.disk_usage(str(OUTPUT_DIR)).free
+    except OSError:
+        return None
+    return round(free / pcm_bps / 60.0, 1)
+
+
 def find_side(filename: str) -> Optional[Path]:
     """Locate a side recording in `raw/` by filename. Albums are folders now
     so they don't have a single-file handle — endpoints that need to address

@@ -122,6 +122,21 @@ def test_search_releases_parses_release_payload(monkeypatch):
     assert out[1]["country"] == ""
 
 
+def test_search_releases_extracts_track_count(monkeypatch):
+    """Track count drives the candidate picker's "N tracks" disambiguator.
+    MB gives a top-level `track-count`; otherwise sum the per-medium counts."""
+    canned = {"releases": [
+        {"id": "a", "track-count": 11},                                  # top-level
+        {"id": "b", "media": [{"track-count": 6}, {"track-count": 5}]},   # sum media
+        {"id": "c"},                                                     # unknown → None
+    ]}
+    _patch_urlopen(monkeypatch, json.dumps(canned).encode())
+    out = mb.search_releases("x", "y")
+    assert out[0]["track_count"] == 11
+    assert out[1]["track_count"] == 11
+    assert out[2]["track_count"] is None
+
+
 def test_search_releases_only_artist_provided(monkeypatch):
     captured: list[str] = []
     _patch_urlopen(monkeypatch, b'{"releases": []}', capture=captured)
