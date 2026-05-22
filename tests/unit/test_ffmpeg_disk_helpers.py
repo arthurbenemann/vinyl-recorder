@@ -3,10 +3,49 @@ The numeric parsers (parse_astats, parse_silencedetect, _parse_db) and
 path-name sanitizers live in test_ffmpeg_helpers.py."""
 from pathlib import Path
 
+from collections import namedtuple
+
 from services import ffmpeg as ffmpeg_mod
 from services.ffmpeg import (
     LOW_SPACE_GB, disk_free_gb, disk_space_error, find_side, list_recordings,
+    recording_headroom_minutes,
 )
+
+_Usage = namedtuple("_Usage", "total used free")
+
+
+# ── recording_headroom_minutes ───────────────────────────────────────────
+def test_headroom_minutes_24bit_96k_stereo(monkeypatch):
+    # 96000 Hz × 2ch × 3 bytes = 576000 B/s. 10 GB free → 10e9/576000/60.
+    monkeypatch.setattr(ffmpeg_mod.shutil, "disk_usage",
+                        lambda p: _Usage(0, 0, 10_000_000_000))
+    fmt = {"sample_rate": 96000, "channels": 2, "bit_depth": 24}
+    expected = round(10_000_000_000 / 576000 / 60.0, 1)
+    assert recording_headroom_minutes(fmt) == expected
+
+
+def test_headroom_minutes_16bit_uses_2_bytes(monkeypatch):
+    # 44100 × 2 × 2 = 176400 B/s.
+    monkeypatch.setattr(ffmpeg_mod.shutil, "disk_usage",
+                        lambda p: _Usage(0, 0, 1_000_000_000))
+    fmt = {"sample_rate": 44100, "channels": 2, "bit_depth": 16}
+    assert recording_headroom_minutes(fmt) == round(1_000_000_000 / 176400 / 60.0, 1)
+
+
+def test_headroom_minutes_none_when_format_unknown():
+    assert recording_headroom_minutes(None) is None
+    assert recording_headroom_minutes({}) is None
+    # Zero/garbage rate → None (no divide-by-zero, nothing to estimate).
+    assert recording_headroom_minutes({"sample_rate": 0, "channels": 2, "bit_depth": 24}) is None
+    assert recording_headroom_minutes({"sample_rate": "x", "channels": 2, "bit_depth": 24}) is None
+
+
+def test_headroom_minutes_none_on_disk_error(monkeypatch):
+    def boom(p):
+        raise OSError("no such dir")
+    monkeypatch.setattr(ffmpeg_mod.shutil, "disk_usage", boom)
+    fmt = {"sample_rate": 96000, "channels": 2, "bit_depth": 24}
+    assert recording_headroom_minutes(fmt) is None
 
 
 # ── disk_free_gb ─────────────────────────────────────────────────────────

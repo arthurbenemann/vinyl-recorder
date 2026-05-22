@@ -275,6 +275,54 @@ def test_download_track_serves_existing_file():
         _cleanup_album(aid)
 
 
+# ── /api/album/{id}/download (album zip) ─────────────────────────────────
+def test_download_album_zips_tracks_and_cover():
+    import io
+    import zipfile
+
+    from services import albums_fs
+    from state import MUSIC_DIR
+
+    aid = _make_album(tags={"artist": "Zippy", "album": "Discs"})
+    try:
+        manifest = albums_fs.read_manifest(aid)
+        manifest["music_relpath"] = "Zippy/Discs (1999)"
+        albums_fs.write_manifest(aid, manifest)
+        out_dir = MUSIC_DIR / "Zippy/Discs (1999)"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "01 - A.flac").write_bytes(b"\x66\x4c\x61\x43one")
+        (out_dir / "02 - B.flac").write_bytes(b"\x66\x4c\x61\x43two")
+        (out_dir / "cover.jpg").write_bytes(b"\xff\xd8\xff\xe0jpg")
+        # A stray non-audio, non-cover file must NOT be bundled.
+        (out_dir / "notes.txt").write_bytes(b"ignore me")
+
+        r = _client().get(f"/api/album/{aid}/download")
+        assert r.status_code == 200, r.text
+        assert r.headers["content-type"] == "application/zip"
+        assert ".zip" in r.headers.get("content-disposition", "")
+        zf = zipfile.ZipFile(io.BytesIO(r.content))
+        assert set(zf.namelist()) == {"01 - A.flac", "02 - B.flac", "cover.jpg"}
+        # Bytes round-trip intact (STORED, no recompression).
+        assert zf.read("01 - A.flac") == b"\x66\x4c\x61\x43one"
+    finally:
+        _cleanup_album(aid)
+
+
+def test_download_album_not_split_returns_404():
+    """No music_relpath yet → the album hasn't been split, nothing to zip."""
+    aid = _make_album()
+    try:
+        r = _client().get(f"/api/album/{aid}/download")
+        assert r.status_code == 404
+    finally:
+        _cleanup_album(aid)
+
+
+def test_download_album_unknown_returns_404():
+    r = _client().get("/api/album/not-real/download")
+    assert r.status_code == 404
+
+
 # ── side_audio when manifest references missing-on-disk side ─────────────
 def test_side_audio_when_side_missing_on_disk_returns_404():
     """`reconcile_sides` strips missing entries on read, but if the disk

@@ -110,7 +110,7 @@ export async function refreshLib() {
   try {
     const r = await fetch('/api/recordings');
     const d = await r.json();
-    updateDiskFree(d.disk_free_gb);
+    updateDiskFree(d.disk_free_gb, d.headroom_minutes);
     state.filesByName = {};
     d.files.forEach(f => state.filesByName[f.filename] = f);
     // drop selections that no longer exist
@@ -346,18 +346,37 @@ export function stopPreview(silent) {
 // Threshold comes from /api/config; default mirrors the server constant so
 // the marker still flips red if the config request hasn't returned yet.
 // Below `lowSpaceGb` the marker is red; below `warnSpaceGb` it's amber.
-export function updateDiskFree(gb) {
+export function updateDiskFree(gb, headroomMin) {
+  // headroomMin: number = minutes of recording headroom at the upstream PCM
+  // rate; null = known-but-unavailable (not connected); undefined = caller
+  // doesn't know (keep the last value so a recordings-refresh doesn't drop
+  // the estimate the status-poll set).
+  if (headroomMin !== undefined) state.diskHeadroomMin = headroomMin;
   const el = document.getElementById('disk-free');
   if (gb == null) {
     el.textContent = '— GB free';
     el.classList.remove('low', 'warn');
+    el.title = '';
     return;
   }
-  el.textContent = gb + ' GB free';
+  const left = _fmtHeadroom(state.diskHeadroomMin);
+  el.textContent = left ? `${gb} GB free · ~${left} left` : `${gb} GB free`;
+  el.title = left
+    ? `≈ ${left} of recording headroom at the current input format (conservative — FLAC compresses further).`
+    : '';
   const low = gb < state.lowSpaceGb;
   const warn = !low && gb < state.warnSpaceGb;
   el.classList.toggle('low', low);
   el.classList.toggle('warn', warn);
+}
+
+// "95 min" under an hour; "1h 35m" above. Empty string when unknown.
+function _fmtHeadroom(min) {
+  if (min == null || !(min > 0)) return '';
+  if (min < 60) return `${Math.round(min)} min`;
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  return m ? `${h}h ${m}m` : `${h}h`;
 }
 
 export function renderVersion(v) {
@@ -396,6 +415,6 @@ export async function refreshDiskFree() {
   try {
     const r = await fetch('/api/status');
     const d = await r.json();
-    updateDiskFree(d.disk_free_gb);
+    updateDiskFree(d.disk_free_gb, d.headroom_minutes);
   } catch(e) {}
 }
