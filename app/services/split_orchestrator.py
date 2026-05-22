@@ -62,6 +62,24 @@ _FORMAT_SETTINGS: dict[str, dict] = {
 _AUDIO_EXTS: tuple[str, ...] = (".flac", ".wav", ".mp3", ".ogg", ".m4a")
 
 
+_LEADING_ARTICLE_RE = re.compile(r"^(the|a|an)\s+(.+)$", re.IGNORECASE)
+
+
+def sort_name(name: str) -> str:
+    """Move a leading English article to the end for library sorting:
+    "The Beatles" -> "Beatles, The". Music servers (Jellyfin, Navidrome, …)
+    alphabetize by ARTISTSORT / ALBUMARTISTSORT when present, so this is
+    what files a "The …" artist under the right letter instead of all
+    bunched under "T". Returns the name unchanged when there's no leading
+    article (or nothing follows it). Article case is preserved as typed."""
+    if not name:
+        return ""
+    m = _LEADING_ARTICLE_RE.match(name.strip())
+    if not m:
+        return name.strip()
+    return f"{m.group(2).strip()}, {m.group(1)}"
+
+
 def _wav_codec_for_bits(bits: Optional[int]) -> str:
     """16-bit signed LE for WAV unless the user asked for 24-bit explicitly."""
     return "pcm_s24le" if bits == 24 else "pcm_s16le"
@@ -265,6 +283,14 @@ def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
     # Compilation flag — only on Various-Artists albums (see _is_compilation).
     if _is_compilation(tags):
         tag_args.append("--set-tag=COMPILATION=1")
+    # Sort names — only when a leading article actually moves (otherwise the
+    # sort form equals the display form and the tag is pure litter). Files
+    # "The Beatles" under B in servers that sort by *SORT tags. Album-artist
+    # defaults to artist, so both sort tags share the value.
+    artist_sort = sort_name(tags.get("artist", ""))
+    if artist_sort and artist_sort != (tags.get("artist") or "").strip():
+        tag_args.append(f"--set-tag=ARTISTSORT={artist_sort}")
+        tag_args.append(f"--set-tag=ALBUMARTISTSORT={artist_sort}")
     # Optional classical-style tags — only emit when present so we don't
     # leave empty COMPOSER=/CONDUCTOR= entries on every track.
     if tags.get("composer"):

@@ -32,11 +32,35 @@ from services.split_orchestrator import (
     SplitValidationError,
     add_replay_gain,
     kept_duration_total,
+    sort_name,
     split_genres,
     wipe_prior_music_dir,
     write_track_tags,
 )
 from state import SplitRequest, SplitTrack
+
+
+# ── sort_name ────────────────────────────────────────────────────────────
+def test_sort_name_moves_leading_article():
+    assert sort_name("The Beatles") == "Beatles, The"
+    assert sort_name("A Tribe Called Quest") == "Tribe Called Quest, A"
+    assert sort_name("An Album") == "Album, An"
+
+
+def test_sort_name_case_insensitive_article_preserves_case():
+    assert sort_name("the doors") == "doors, the"
+
+
+def test_sort_name_no_article_unchanged():
+    assert sort_name("Radiohead") == "Radiohead"
+    # "The" with nothing after stays put (no trailing-article move).
+    assert sort_name("The") == "The"
+    # An article-like word that's part of the name, not a leading article.
+    assert sort_name("Theory of a Deadman") == "Theory of a Deadman"
+
+
+def test_sort_name_empty():
+    assert sort_name("") == ""
 
 
 # ── split_genres ─────────────────────────────────────────────────────────
@@ -265,6 +289,47 @@ def test_write_track_tags_emits_required_set(monkeypatch, tmp_path):
     assert "--set-tag=TRACKTOTAL=10" in cmd
     # File path is the trailing positional arg.
     assert cmd[-1] == str(out)
+
+
+def test_write_track_tags_emits_sort_names_when_article_moves(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 1, tags={"artist": "The Beatles"},
+                     cover_file=None)
+    cmd = calls[0]
+    assert "--set-tag=ARTISTSORT=Beatles, The" in cmd
+    assert "--set-tag=ALBUMARTISTSORT=Beatles, The" in cmd
+
+
+def test_write_track_tags_omits_sort_names_without_article(monkeypatch, tmp_path):
+    """No leading article → sort form equals display form → no sort tags."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 1, tags={"artist": "Radiohead"},
+                     cover_file=None)
+    cmd = calls[0]
+    assert not any("ARTISTSORT=" in a for a in cmd)
+    assert not any("ALBUMARTISTSORT=" in a for a in cmd)
 
 
 def test_write_track_tags_emits_one_genre_tag_per_value(monkeypatch, tmp_path):
