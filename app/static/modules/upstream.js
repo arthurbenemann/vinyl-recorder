@@ -31,7 +31,7 @@ export async function toggleConnect() {
       // probeGain stays client-side: each tab probes the Pi /info to render
       // the slider; gain changes do persist on the Pi so the next probe
       // anywhere shows the new value.
-      else probeGain(url);
+      else { rememberStreamUrl(url); probeGain(url); }
     } catch(e) { /* network drop — WS will resync */ }
   }
 }
@@ -330,6 +330,56 @@ export function toggleHealthPanel() {
   const ind = document.getElementById('status-indicator');
   if (ind) ind.setAttribute('aria-expanded', String(!panel.hidden));
 }
+
+// ── Stream URL memory ──────────────────────────────────────────────────────
+// The URL input resets to DEFAULT_STREAM_URL (or the static demo placeholder)
+// on every load. A deployment that doesn't set the env default leaves the
+// user re-typing their turntable's stream URL every session. Remember the
+// last successfully-connected URL + a short most-recently-used list, the
+// latter surfaced as a <datalist> so switching between a couple of sources is
+// a click. config.js seeds the input from `lastStreamUrl()` (preferred over
+// the env default, same precedence the auto-stop pref uses).
+const STREAM_URL_KEY = 'vr.streamUrl';
+const STREAM_URL_RECENT_KEY = 'vr.streamUrlRecent';
+const STREAM_URL_RECENT_MAX = 6;
+
+export function lastStreamUrl() {
+  try { return localStorage.getItem(STREAM_URL_KEY) || ''; } catch (_) { return ''; }
+}
+
+function _readRecentStreamUrls() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(STREAM_URL_RECENT_KEY) || '[]');
+    return Array.isArray(arr) ? arr.filter(u => typeof u === 'string' && u) : [];
+  } catch (_) { return []; }
+}
+
+// Save the last-connected URL + push it to the front of the MRU list. Called
+// from toggleConnect only on a successful connect, so the memory tracks URLs
+// that actually worked.
+export function rememberStreamUrl(url) {
+  const u = String(url || '').trim();
+  if (!u) return;
+  try { localStorage.setItem(STREAM_URL_KEY, u); } catch (_) {}
+  const recent = [u, ..._readRecentStreamUrls().filter(x => x !== u)]
+    .slice(0, STREAM_URL_RECENT_MAX);
+  try { localStorage.setItem(STREAM_URL_RECENT_KEY, JSON.stringify(recent)); } catch (_) {}
+  renderStreamUrlRecent();
+}
+
+// (Re)populate the datalist behind #stream-url from the MRU list. Built via
+// DOM nodes (not innerHTML) so a URL can never inject markup.
+export function renderStreamUrlRecent() {
+  const dl = document.getElementById('stream-url-recent');
+  if (!dl) return;
+  dl.replaceChildren();
+  for (const u of _readRecentStreamUrls()) {
+    const opt = document.createElement('option');
+    opt.value = u;
+    dl.appendChild(opt);
+  }
+}
+
 
 // ── Collapsible sidebar ──────────────────────────────────────────────────
 // The capture panel can shrink to a 56px rail (REC button + tiny timer + mini

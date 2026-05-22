@@ -13,12 +13,19 @@
 
 import { state } from './state.js';
 import { renderVersion } from './library.js';
+import { lastStreamUrl } from './upstream.js';
 
 export async function applyConfig() {
   try {
     const r = await fetch('/api/config');
     const c = await r.json();
-    if (c.default_stream_url) {
+    // A user's last-connected URL (localStorage) wins over the ops-set env
+    // default, same precedence as the auto-stop pref below — otherwise a
+    // per-user source choice would be clobbered on every reload.
+    const savedUrl = lastStreamUrl();
+    if (savedUrl) {
+      document.getElementById('stream-url').value = savedUrl;
+    } else if (c.default_stream_url) {
       document.getElementById('stream-url').value = c.default_stream_url;
     }
     if (typeof c.default_gain_db === 'number') {

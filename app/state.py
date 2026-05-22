@@ -142,6 +142,16 @@ ALLOWED_SPLIT_SAMPLE_RATES: tuple[int, ...] = (0, 44100, 48000, 88200, 96000)
 # codec/extension combos through to ffmpeg.
 ALLOWED_OUTPUT_FORMATS: tuple[str, ...] = ("flac", "wav", "mp3", "ogg", "m4a-aac", "m4a-alac")
 
+# Output channel mode for the split. "stereo" keeps the capture untouched;
+# the others fold to a single mono channel via an ffmpeg `pan` filter:
+#   mono  — L+R sum (genuine mono pressings: cancels vertical/out-of-phase
+#           groove noise, ~3 dB quieter surface, half the file size)
+#   left  — left channel only (rescue a damaged/miswired right channel)
+#   right — right channel only
+# Validated against this tuple so a hand-crafted POST can't smuggle an
+# arbitrary pan expression through to ffmpeg.
+ALLOWED_CHANNEL_MODES: tuple[str, ...] = ("stereo", "mono", "left", "right")
+
 # ── Recording session state ──────────────────────────────────────────────
 # Sessions are keyed by short uuid. Previously this lived in three bare
 # module-level dicts (`active`, `log_lines`, `log_paths`) that routes
@@ -408,6 +418,7 @@ class SplitRequest(BaseModel):
     # malicious / malformed client can't slip arbitrary -ar values to ffmpeg.
     sample_rate: int = 0
     output_format: str = "flac"        # one of ALLOWED_OUTPUT_FORMATS; "flac" preserves prior behavior
+    channel_mode: str = "stereo"       # one of ALLOWED_CHANNEL_MODES; "stereo" preserves prior behavior
     job_id: Optional[str] = None      # progress reporting (see CombineRequest)
 
 
@@ -441,6 +452,7 @@ class PlanUpdateRequest(BaseModel):
     bit_depth:        Optional[int]    = None
     sample_rate:      Optional[int]    = None
     output_format:    Optional[str]    = None
+    channel_mode:     Optional[str]    = None
     replaygain:       Optional[bool]   = None
     # Optimistic-concurrency token. When supplied, the server compares it
     # against the manifest's current `plan_version` and returns 409 on
