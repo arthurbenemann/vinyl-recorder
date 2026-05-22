@@ -253,7 +253,8 @@ def _media_type_for(ext: str) -> str:
 
 
 def _ffmpeg_metadata_args(title: str, out_idx: int, out_total: int,
-                          tags: dict, cover_file: Optional[Path]) -> list[str]:
+                          tags: dict, cover_file: Optional[Path],
+                          disc: int = 0, disc_total: int = 0) -> list[str]:
     """Build the `-metadata key=value` flag set used for non-FLAC encodes.
     metaflac handles FLAC tag writing after encode (existing flow); for
     every other container we have to bake the tags in at encode time.
@@ -282,10 +283,40 @@ def _ffmpeg_metadata_args(title: str, out_idx: int, out_total: int,
     if tags.get("composer"):  pairs.append(("composer",  tags["composer"]))
     if tags.get("conductor"): pairs.append(("conductor", tags["conductor"]))
     if _is_compilation(tags):  pairs.append(("compilation", "1"))
+    # Disc tags only for genuine multi-disc sets (a single LP omits them;
+    # Jellyfin treats an absent disc as disc 1).
+    if disc_total > 1 and disc >= 1:
+        pairs.append(("disc", f"{disc}/{disc_total}"))
     for k, v in pairs:
         if v != "":
             args += ["-metadata", f"{k}={v}"]
     return args
+
+
+# ── Disc derivation (multi-LP sets) ──────────────────────────────────────
+# A vinyl LP has two playable sides, so a release's discs map to recording
+# sides in pairs: sides 0,1 → disc 1; sides 2,3 → disc 2; … This lets a 2-LP
+# gatefold land in music/ with correct DISCNUMBER/DISCTOTAL so Jellyfin groups
+# the discs instead of showing one flat track list. Single LPs (≤2 sides)
+# resolve to one disc and the caller omits the tags entirely.
+
+def _disc_total(num_sides: int) -> int:
+    return max(1, (max(0, num_sides) + 1) // 2)
+
+
+def _side_index_for_time(t: float, side_durations: list[float]) -> int:
+    """Index of the recording side that album-time `t` falls in. Clamps to
+    the last side for a time at/after the end (e.g. an end-of-album cut)."""
+    acc = 0.0
+    for i, d in enumerate(side_durations):
+        acc += d
+        if t < acc - 1e-6:
+            return i
+    return max(0, len(side_durations) - 1)
+
+
+def _disc_for_time(t: float, side_durations: list[float]) -> int:
+    return _side_index_for_time(t, side_durations) // 2 + 1
 
 
 # ── Domain exceptions ────────────────────────────────────────────────────
@@ -434,7 +465,8 @@ def kept_duration_total(tracks: list, total: float) -> float:
 
 
 def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
-                     tags: dict, cover_file: Optional[Path]) -> None:
+                     tags: dict, cover_file: Optional[Path],
+                     disc: int = 0, disc_total: int = 0) -> None:
     """Replace the FLAC's tag set with the manifest's tags + per-track
     title/track-number, then embed cover.jpg if present. Single metaflac
     invocation for the tags; the picture import has to be its own call.
@@ -498,6 +530,11 @@ def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
     ):
         if tags.get(key):
             tag_args.append(f"--set-tag={tagname}={tags[key]}")
+    # Disc tags only for genuine multi-disc sets (a single LP omits them;
+    # Jellyfin treats an absent disc as disc 1).
+    if disc_total > 1 and disc >= 1:
+        tag_args.append(f"--set-tag=DISCNUMBER={disc}")
+        tag_args.append(f"--set-tag=DISCTOTAL={disc_total}")
     tag_args.append(str(out))
     subprocess.run(tag_args, check=False, stderr=subprocess.DEVNULL)
     if cover_file:
@@ -514,7 +551,8 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
                       start_: float, end_: float, apply_gain: bool, gain_db: float,
                       sample_fmt: Optional[str], target_rate: Optional[int],
                       tags: dict, cover_file: Optional[Path],
-                      slice_range: tuple[float, float]) -> dict:
+                      slice_range: tuple[float, float],
+                      disc: int = 0, disc_total: int = 0) -> dict:
     """Encode one track into music/ in the requested container, write tags,
     embed cover. FLAC keeps the existing flow (encode -> metaflac post-pass);
     every other format embeds tags inline with `-metadata` flags during the
@@ -558,7 +596,8 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
         # Non-FLAC: bake tags + track number in via -metadata flags. metaflac
         # only handles FLAC, so for every other container we have to do the
         # tagging at encode time.
-        cmd += _ffmpeg_metadata_args(t.title, out_idx, out_total, tags, cover_file)
+        cmd += _ffmpeg_metadata_args(t.title, out_idx, out_total, tags,
+                                     cover_file, disc, disc_total)
     cmd.append(str(out))
     track_dur = end_ - start_
     rc, stderr = await asyncio.to_thread(
@@ -570,7 +609,8 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
         finish_job(req.job_id, error=err)
         raise SplitProcessingError(f"ffmpeg failed on track {i}: {err}")
     if req.output_format == "flac":
-        write_track_tags(out, t.title, out_idx, out_total, tags, cover_file)
+        write_track_tags(out, t.title, out_idx, out_total, tags, cover_file,
+                         disc, disc_total)
     return {
         "filename":         track_name,
         "duration_seconds": end_ - start_,
@@ -713,6 +753,11 @@ async def split_album(req, manifest: dict) -> dict:
             pass
     out_dur_total = kept_duration_total(req.tracks, total) or 1.0
     out_total = sum(1 for t in req.tracks if not t.skip)
+    # Per-track disc number derived from which recording side the track starts
+    # on (2 vinyl sides per disc). Only tagged for multi-disc sets — see
+    # _disc_total / write_track_tags.
+    side_durations = [flac_duration_seconds(p) or 0.0 for p in side_paths]
+    disc_total = _disc_total(len(side_paths))
     pad = max(2, len(str(out_total)))
     start_job(req.job_id, "split")
 
@@ -740,6 +785,8 @@ async def split_album(req, manifest: dict) -> dict:
                 gain_db=gain_db, sample_fmt=sample_fmt,
                 target_rate=target_rate, tags=tags,
                 cover_file=cover_file, slice_range=(slice_a, slice_b),
+                disc=_disc_for_time(start_, side_durations),
+                disc_total=disc_total,
             )
             created.append(entry)
     finally:

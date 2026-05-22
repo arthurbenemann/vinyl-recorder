@@ -4,8 +4,9 @@ metadata flags, and media-type mapping; integration with ffmpeg is
 covered in tests/api/test_album_split.py."""
 
 from services.split_orchestrator import (
-    _FORMAT_SETTINGS, _ffmpeg_metadata_args, _is_compilation, _media_type_for,
-    _pan_filter, _wav_codec_for_bits, build_audio_filters,
+    _FORMAT_SETTINGS, _disc_for_time, _disc_total, _ffmpeg_metadata_args,
+    _is_compilation, _media_type_for, _pan_filter, _side_index_for_time,
+    _wav_codec_for_bits, build_audio_filters,
 )
 from state import ALLOWED_CHANNEL_MODES, ALLOWED_OUTPUT_FORMATS
 
@@ -179,6 +180,52 @@ def test_ffmpeg_metadata_args_uses_flag_pairs():
     args = _ffmpeg_metadata_args("Song", 1, 1, {"artist": "A"}, None)
     # -metadata title=Song -metadata track=1/1 -metadata artist=A
     assert args.count("-metadata") == len(args) // 2
+
+
+# ── disc tags (multi-LP sets) ────────────────────────────────────────────
+def test_ffmpeg_metadata_args_emits_disc_for_multidisc():
+    args = _ffmpeg_metadata_args("Song", 1, 4, {}, None, disc=2, disc_total=2)
+    assert "disc=2/2" in " ".join(args)
+
+
+def test_ffmpeg_metadata_args_omits_disc_for_single_disc():
+    # disc_total <= 1 → no disc tag (Jellyfin treats absent as disc 1).
+    args = _ffmpeg_metadata_args("Song", 1, 4, {}, None, disc=1, disc_total=1)
+    assert "disc=" not in " ".join(args)
+    # And the default (no disc args supplied at all) omits it too.
+    assert "disc=" not in " ".join(_ffmpeg_metadata_args("Song", 1, 4, {}, None))
+
+
+# ── disc derivation helpers ──────────────────────────────────────────────
+def test_disc_total_pairs_sides_into_lps():
+    assert _disc_total(0) == 1
+    assert _disc_total(1) == 1   # one-sided capture
+    assert _disc_total(2) == 1   # single LP (A/B)
+    assert _disc_total(3) == 2   # 2-LP with a blank/etched 4th side
+    assert _disc_total(4) == 2   # 2-LP (A/B/C/D)
+    assert _disc_total(6) == 3   # 3-LP
+
+
+def test_side_index_for_time_locates_the_side():
+    # Three 100s sides → boundaries at 100, 200.
+    sides = [100.0, 100.0, 100.0]
+    assert _side_index_for_time(0.0, sides)   == 0
+    assert _side_index_for_time(99.0, sides)  == 0
+    assert _side_index_for_time(100.0, sides) == 1   # boundary belongs to next
+    assert _side_index_for_time(150.0, sides) == 1
+    assert _side_index_for_time(250.0, sides) == 2
+    # At/after the end clamps to the last side (e.g. an end-of-album cut).
+    assert _side_index_for_time(300.0, sides) == 2
+    assert _side_index_for_time(999.0, sides) == 2
+
+
+def test_disc_for_time_maps_sides_to_discs():
+    # 2-LP: sides A,B (disc 1) then C,D (disc 2), 100s each.
+    sides = [100.0, 100.0, 100.0, 100.0]
+    assert _disc_for_time(50.0,  sides) == 1   # side A
+    assert _disc_for_time(150.0, sides) == 1   # side B
+    assert _disc_for_time(250.0, sides) == 2   # side C
+    assert _disc_for_time(350.0, sides) == 2   # side D
 
 
 def test_format_settings_have_required_keys():
