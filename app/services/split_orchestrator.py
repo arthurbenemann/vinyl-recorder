@@ -184,6 +184,64 @@ def _is_compilation(tags: dict) -> bool:
     return (tags.get("artist") or "").strip().lower() == "various artists"
 
 
+_TRACK_NUM_PREFIX_RE = re.compile(r"^\d+\s*[-_.]\s*")
+
+
+def _title_from_track_filename(name: str) -> str:
+    """'01 - Come Together.flac' → 'Come Together'. Mirrors the emit naming
+    (`NN - Title.ext`) so the playlist / cue show clean titles."""
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return _TRACK_NUM_PREFIX_RE.sub("", stem) or stem
+
+
+def _cue_escape(s: str) -> str:
+    # CUE quoted strings have no standard escape — replace embedded quotes
+    # so a title with a `"` can't break the sheet's parsing.
+    return str(s or "").replace('"', "'")
+
+
+def build_m3u(tags: dict, tracks: list[dict]) -> str:
+    """Extended-M3U playlist of the album's tracks in order. Filenames are
+    relative to the album folder (where the .m3u lives) so the playlist is
+    portable — drop the folder on a DAP / open it in a file-based player and
+    the album plays in the right order. `tracks` is the emitted-track list
+    (`{filename, duration_seconds}`)."""
+    artist = (tags.get("artist") or "").strip()
+    lines = ["#EXTM3U"]
+    for t in tracks:
+        fn = t.get("filename", "")
+        title = _title_from_track_filename(fn)
+        dur = int(round(float(t.get("duration_seconds") or 0)))
+        disp = f"{artist} - {title}" if artist else title
+        lines.append(f"#EXTINF:{dur},{disp}")
+        lines.append(fn)
+    return "\n".join(lines) + "\n"
+
+
+def build_cue(tags: dict, tracks: list[dict]) -> str:
+    """Multi-file CUE sheet for the album — one FILE per per-track file,
+    each at INDEX 01 00:00:00. Read by foobar2000 / CUETools / many DAPs as
+    a portable, re-editable album manifest (the archival counterpart to the
+    rip log). Pure text from the emitted-track list + manifest tags."""
+    artist = (tags.get("artist") or "").strip()
+    album = (tags.get("album") or "").strip()
+    lines: list[str] = []
+    if artist:
+        lines.append(f'PERFORMER "{_cue_escape(artist)}"')
+    if album:
+        lines.append(f'TITLE "{_cue_escape(album)}"')
+    for i, t in enumerate(tracks, start=1):
+        fn = t.get("filename", "")
+        title = _title_from_track_filename(fn)
+        lines.append(f'FILE "{_cue_escape(fn)}" WAVE')
+        lines.append(f"  TRACK {i:02d} AUDIO")
+        lines.append(f'    TITLE "{_cue_escape(title)}"')
+        if artist:
+            lines.append(f'    PERFORMER "{_cue_escape(artist)}"')
+        lines.append("    INDEX 01 00:00:00")
+    return "\n".join(lines) + "\n"
+
+
 def _media_type_for(ext: str) -> str:
     """Map an audio file extension to the HTTP `Content-Type` used by
     `download_track`. Falls back to octet-stream so an unknown extension
@@ -264,6 +322,11 @@ def wipe_prior_music_dir(prior_relpath: Optional[str], new_relpath: str) -> None
     if prior_dir.is_dir():
         for ext in _AUDIO_EXTS:
             for old in prior_dir.glob(f"*{ext}"):
+                try: old.unlink()
+                except Exception: pass
+        # Our own archival sidecars too, so the moved dir can be pruned.
+        for pat in ("*.m3u", "*.cue"):
+            for old in prior_dir.glob(pat):
                 try: old.unlink()
                 except Exception: pass
         # Drop our own rip-log sidecar too, else it blocks the rmdir below.
@@ -701,6 +764,18 @@ async def split_album(req, manifest: dict) -> dict:
         ))
     except OSError:
         pass
+
+    # Portable archival sidecars: an ordered M3U playlist + a multi-file CUE
+    # describing the album. Music servers ignore them; file-based players and
+    # archival tools read them. Named after the album so they're obvious in a
+    # file browser. Non-fatal — a finished split isn't aborted over a sidecar.
+    if created:
+        base = safe_path_component(tags.get("album") or "album") or "album"
+        try:
+            (music_dir / f"{base}.m3u").write_text(build_m3u(tags, created))
+            (music_dir / f"{base}.cue").write_text(build_cue(tags, created))
+        except OSError:
+            pass
 
     _persist_split_plan(req, relpath)
     finish_job(req.job_id)
