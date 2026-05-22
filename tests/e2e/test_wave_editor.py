@@ -633,6 +633,40 @@ def test_split_evenly_seeds_equal_cuts(stack, page):
             except Exception: pass
 
 
+# ── Shortcuts legend: toggle + mutual exclusion with suggest popovers ─────
+def test_shortcuts_legend_toggles_and_is_mutually_exclusive(stack, page):
+    """The "⌨ keys" legend opens on click, closes on Esc, and is mutually
+    exclusive with the silence popover so the two toolbar dropdowns never
+    stack."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="KeysArtist", album="KeysAlbum")
+        # Open the legend; it lists a real shortcut.
+        page.click('#we-keys-btn')
+        page.wait_for_selector('#we-pop-keys:not([hidden])')
+        assert page.is_visible("text=play / pause")
+        # Opening "suggest from silence" closes the legend (mutual exclusion).
+        page.click('button:has-text("suggest from silence")')
+        page.wait_for_selector('#we-pop-silence:not([hidden])')
+        assert page.is_hidden('#we-pop-keys')
+        # Re-open the legend → silence closes.
+        page.click('#we-keys-btn')
+        page.wait_for_selector('#we-pop-keys:not([hidden])')
+        assert page.is_hidden('#we-pop-silence')
+        # Esc dismisses the legend (without closing the editor).
+        page.keyboard.press('Escape')
+        page.wait_for_selector('#we-pop-keys', state="hidden", timeout=3_000)
+        assert page.is_visible('#we-modal')
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
 # ── PR: split with cuts that straddle side boundaries ────────────────────
 def test_split_with_cuts_across_side_boundaries(stack, page):
     """The per-side concat-demuxer playlist has to handle the case where

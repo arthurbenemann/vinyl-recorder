@@ -825,6 +825,15 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .we-suggest-pop .candidate-title { font-size: 11px; }
 .we-suggest-pop .candidate-sub { font-size: 10px; }
 
+/* Wave editor — keyboard/mouse shortcuts legend */
+.we-keys-pop { min-width: 300px; }
+.we-keys-pop .col-label { margin-top: 8px; }
+.we-keys-pop .col-label:first-child { margin-top: 0; }
+.we-keys-list { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: baseline; margin: 4px 0 2px; font-size: 11px; }
+.we-keys-list dt { white-space: nowrap; color: var(--fg); }
+.we-keys-list dd { margin: 0; color: var(--muted); }
+kbd { display: inline-block; font: inherit; font-size: 10px; line-height: 1; padding: 3px 5px; margin-right: 2px; background: var(--surface); border: 0.5px solid var(--border2); border-bottom-width: 1.5px; border-radius: 4px; color: var(--fg); }
+
 /* Wave editor — track list */
 .wave-tracks { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; padding-right: 2px; margin-top: 8px; }
 .wave-track { display: grid; grid-template-columns: 36px 28px 1fr 110px 70px 24px 24px; gap: 6px; align-items: center; padding: 6px 10px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; }

@@ -428,6 +428,12 @@ function openWaveEditor(fname) {
   document.getElementById('we-duration').textContent = fmtMMSS(we.total);
   document.getElementById('we-mini-end').textContent = fmtMMSS(we.total);
   document.getElementById('we-pop-silence').hidden = true;
+  const popKeysReset = document.getElementById('we-pop-keys');
+  if (popKeysReset) {
+    popKeysReset.hidden = true;
+    const kb = document.getElementById('we-keys-btn');
+    if (kb) kb.setAttribute('aria-expanded', 'false');
+  }
   const popEvenReset = document.getElementById('we-pop-even');
   if (popEvenReset) popEvenReset.hidden = true;
   document.getElementById('we-search-status').textContent = '';
@@ -1095,11 +1101,18 @@ function weKeyDown(e) {
       return;
     case 'Escape': {
       e.preventDefault();
-      // Dismiss an open suggest popover first; only close the whole editor
-      // once nothing is layered on top.
+      // Dismiss an open popover first; only close the whole editor once
+      // nothing is layered on top.
       const popSilence = document.getElementById('we-pop-silence');
       if (popSilence && !popSilence.hidden) {
         popSilence.hidden = true;
+        return;
+      }
+      const popKeys = document.getElementById('we-pop-keys');
+      if (popKeys && !popKeys.hidden) {
+        popKeys.hidden = true;
+        const kb = document.getElementById('we-keys-btn');
+        if (kb) kb.setAttribute('aria-expanded', 'false');
         return;
       }
       const popEven = document.getElementById('we-pop-even');
@@ -1551,6 +1564,32 @@ function weToggleSuggest(which) {
     const el = document.getElementById(popId);
     if (el) el.hidden = (popId !== id) ? true : !willShow;
   }
+  // Don't let the shortcuts legend overlap a suggest panel.
+  if (willShow) {
+    const keys = document.getElementById('we-pop-keys');
+    if (keys) keys.hidden = true;
+    const kb = document.getElementById('we-keys-btn');
+    if (kb) kb.setAttribute('aria-expanded', 'false');
+  }
+}
+
+// Toggle the keyboard/mouse shortcuts legend. The editor's shortcuts (Space,
+// arrows, J/K, Del, S) otherwise live only in the canvas aria-label + a few
+// titles — invisible to sighted users. Mutually exclusive with the suggest
+// popovers so the toolbar dropdowns never stack.
+function weToggleShortcuts() {
+  const pop = document.getElementById('we-pop-keys');
+  if (!pop) return;
+  const show = pop.hidden;
+  pop.hidden = !show;
+  if (show) {
+    for (const popId of Object.values(_WE_SUGGEST_POPS)) {
+      const el = document.getElementById(popId);
+      if (el) el.hidden = true;
+    }
+  }
+  const btn = document.getElementById('we-keys-btn');
+  if (btn) btn.setAttribute('aria-expanded', String(show));
 }
 
 // Seed evenly-spaced cuts that divide the album into `n` equal tracks. The
