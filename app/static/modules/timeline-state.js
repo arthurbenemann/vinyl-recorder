@@ -309,6 +309,83 @@ function _weCutGroupSpan(i) {
   return { i, last, sideLo, sideHi };
 }
 
+// ── _weEvenCuts ───────────────────────────────────────────────────────────
+// Evenly-spaced internal cut times that divide [0, total] into `n` equal
+// tracks — the fallback for a gapless side (live set, DJ mix, attacca
+// classical) where silence detection finds nothing to cut on. Returns the
+// n-1 interior boundaries, rounded to ms and clamped inside (0, total) so
+// they survive the same dedupe/clamp the silence path applies. Empty when
+// the length is unknown or n < 2. These are *seed* cuts: the user drags them
+// onto the real boundaries using the waveform + audition.
+function _weEvenCuts(total, n) {
+  const count = Math.floor(Number(n));
+  if (!(total > 0) || !(count >= 2)) return [];
+  const cuts = [];
+  for (let i = 1; i < count; i++) {
+    const t = Math.round((total * i / count) * 1000) / 1000;
+    if (t > 0.01 && t < total - 0.01) cuts.push(t);
+  }
+  return cuts;
+}
+
+// New album-time position for cut `i` after nudging it by `delta` seconds,
+// clamped so it can't cross either neighbouring cut (which would reorder
+// we.cuts and misalign the title/skip/position arrays indexed by region)
+// or the [0, total] album bounds. Returns the clamped value (equal to
+// cuts[i] when the nudge is fully absorbed by the clamp), or null for an
+// out-of-range index. Pure — drives the keyboard ←/→ cut nudge.
+function _weNudgedCutValue(cuts, i, delta, total) {
+  if (!Array.isArray(cuts) || i < 0 || i >= cuts.length) return null;
+  const EPS = 0.001;
+  const lo = (i > 0 ? cuts[i - 1] : 0) + EPS;
+  const hi = (i < cuts.length - 1 ? cuts[i + 1] : total) - EPS;
+  return Math.max(lo, Math.min(hi, cuts[i] + delta));
+}
+
+// ── _weDetectSettingValue ────────────────────────────────────────────────
+// Validate a persisted silence-detection setting (noise floor / min-silence
+// / auto-skip threshold) read back from localStorage. Returns the parsed
+// number when finite and within [min, max]; otherwise `fallback`, so a
+// corrupt or stale stored value can never seed the detector with a NaN or
+// out-of-range threshold. `max` is optional — pass null for the open-ended
+// duration fields.
+function _weDetectSettingValue(raw, fallback, min, max) {
+  const n = parseFloat(raw);
+  if (!isFinite(n)) return fallback;
+  if (n < min) return fallback;
+  if (max != null && n > max) return fallback;
+  return n;
+}
+
+// The playback window for auditing a cut: `pre` seconds before to `post`
+// seconds after the cut, clamped to [0, total]. Lets the user hear whether
+// a track boundary lands cleanly without manual scrubbing. Pure — drives
+// the wave-editor's "preview cut" key/button.
+function _wePreviewWindow(cut, total, pre, post) {
+  const t = Math.max(0, Number(total) || 0);
+  const c = Math.max(0, Math.min(t, Number(cut) || 0));
+  return {
+    start: Math.max(0, c - (Number(pre)  || 0)),
+    end:   Math.min(t, c + (Number(post) || 0)),
+  };
+}
+
+// Advisory length flag for a track region, surfaced in the track list so an
+// obvious mistake gets caught before export: a sub-10s region is almost
+// always a stray / mis-detected cut, and a region longer than any single LP
+// side (>25 min) usually means a missed cut spanning a side break. Returns
+// '' (no flag), 'short', or 'long'. Skipped regions and sub-0.5s "doesn't
+// fit" rows never flag (handled elsewhere). Purely advisory — never blocks.
+function _weTrackLengthHint(seconds, skip) {
+  if (skip) return '';
+  const d = Number(seconds) || 0;
+  if (d < 0.5) return '';
+  if (d < 10) return 'short';
+  if (d > 1500) return 'long';
+  return '';
+}
+
+
 // ── Expose on window for wave-editor.js + unit tests ─────────────────────
 if (typeof window !== 'undefined') {
   window._weRemapForSides      = _weRemapForSides;
@@ -318,4 +395,9 @@ if (typeof window !== 'undefined') {
   window._weEffectivePositions = _weEffectivePositions;
   window._weSideBounds         = _weSideBounds;
   window._weCutGroupSpan       = _weCutGroupSpan;
+  window._weEvenCuts           = _weEvenCuts;
+  window._weNudgedCutValue     = _weNudgedCutValue;
+  window._weDetectSettingValue = _weDetectSettingValue;
+  window._wePreviewWindow      = _wePreviewWindow;
+  window._weTrackLengthHint    = _weTrackLengthHint;
 }
