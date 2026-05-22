@@ -51,6 +51,21 @@ def _cleanup_album(aid: str) -> None:
                 except Exception: pass
 
 
+# ── _TAG_KEYS allowlist (combine/promote tag persistence) ────────────────
+def test_create_album_persists_original_year():
+    """`original_year` must be in the _TAG_KEYS allowlist or create_album
+    (the combine/promote path) would silently drop it before the split can
+    write ORIGINALDATE."""
+    from services import albums_fs
+    aid = _make_album({"artist": "A", "album": "B", "year": "2015",
+                       "original_year": "1973"})
+    try:
+        manifest = albums_fs.read_manifest(aid)
+        assert manifest["tags"]["original_year"] == "1973"
+    finally:
+        _cleanup_album(aid)
+
+
 # ── albums_fs.music_dir_for ──────────────────────────────────────────────
 def test_music_dir_for_uses_artist_album_year():
     from services.albums_fs import music_dir_for

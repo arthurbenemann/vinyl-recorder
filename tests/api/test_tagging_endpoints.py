@@ -188,6 +188,53 @@ def test_file_cover_invalid_id_returns_404():
     assert r.status_code == 404
 
 
+# ── original-year derivation (ORIGINALDATE) ──────────────────────────────
+def test_original_year_from_release_group():
+    from routes.tagging import _original_year
+    mb = {"release-group": {"first-release-date": "1973-03-01"}}
+    assert _original_year(mb) == "1973"
+    # Missing / malformed → empty (no ORIGINALDATE written).
+    assert _original_year({}) == ""
+    assert _original_year({"release-group": {}}) == ""
+
+
+def test_apply_persists_original_year_from_mb(monkeypatch):
+    """Picking an MB reissue stores `original_year` in the album manifest
+    (derived from the release-group's first-release-date), so the split step
+    can write ORIGINALDATE."""
+    import json
+
+    from routes import tagging as tg
+    from state import IN_PROGRESS_DIR
+    monkeypatch.setattr(tg, "caa_front", lambda mbid: None)
+    monkeypatch.setattr(tg, "extract_discogs_id", lambda mb: None)
+    monkeypatch.setattr(
+        tg, "release_full",
+        lambda mbid: {"release-group": {"first-release-date": "1973-03-01"}},
+    )
+    album_id = "torigyear1"
+    d = IN_PROGRESS_DIR / album_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "side1.flac").write_bytes(b"")
+    (d / "album.json").write_text(json.dumps({
+        "schema_version": 2, "tags": {}, "sides": ["side1.flac"],
+        "cover": None, "plan": None, "music_relpath": None,
+    }))
+    try:
+        r = _client().post("/api/apply", json={
+            "album_id": album_id,
+            "fields": {"artist": "Pink Floyd", "album": "Dark Side", "year": "2015"},
+            "mbid": _VALID_MBID,
+        })
+        assert r.status_code == 200, r.text
+        manifest = json.loads((d / "album.json").read_text())
+        assert manifest["tags"]["original_year"] == "1973"
+        assert manifest["tags"]["year"] == "2015"
+    finally:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+
+
 # ── /api/apply validation ────────────────────────────────────────────────
 def test_apply_requires_exactly_one_target():
     """`album_id`, `filename`, and `filenames` are mutually exclusive — the
