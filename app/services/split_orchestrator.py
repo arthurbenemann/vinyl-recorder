@@ -184,6 +184,64 @@ def _is_compilation(tags: dict) -> bool:
     return (tags.get("artist") or "").strip().lower() == "various artists"
 
 
+_TRACK_NUM_PREFIX_RE = re.compile(r"^\d+\s*[-_.]\s*")
+
+
+def _title_from_track_filename(name: str) -> str:
+    """'01 - Come Together.flac' → 'Come Together'. Mirrors the emit naming
+    (`NN - Title.ext`) so the playlist / cue show clean titles."""
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return _TRACK_NUM_PREFIX_RE.sub("", stem) or stem
+
+
+def _cue_escape(s: str) -> str:
+    # CUE quoted strings have no standard escape — replace embedded quotes
+    # so a title with a `"` can't break the sheet's parsing.
+    return str(s or "").replace('"', "'")
+
+
+def build_m3u(tags: dict, tracks: list[dict]) -> str:
+    """Extended-M3U playlist of the album's tracks in order. Filenames are
+    relative to the album folder (where the .m3u lives) so the playlist is
+    portable — drop the folder on a DAP / open it in a file-based player and
+    the album plays in the right order. `tracks` is the emitted-track list
+    (`{filename, duration_seconds}`)."""
+    artist = (tags.get("artist") or "").strip()
+    lines = ["#EXTM3U"]
+    for t in tracks:
+        fn = t.get("filename", "")
+        title = _title_from_track_filename(fn)
+        dur = int(round(float(t.get("duration_seconds") or 0)))
+        disp = f"{artist} - {title}" if artist else title
+        lines.append(f"#EXTINF:{dur},{disp}")
+        lines.append(fn)
+    return "\n".join(lines) + "\n"
+
+
+def build_cue(tags: dict, tracks: list[dict]) -> str:
+    """Multi-file CUE sheet for the album — one FILE per per-track file,
+    each at INDEX 01 00:00:00. Read by foobar2000 / CUETools / many DAPs as
+    a portable, re-editable album manifest (the archival counterpart to the
+    rip log). Pure text from the emitted-track list + manifest tags."""
+    artist = (tags.get("artist") or "").strip()
+    album = (tags.get("album") or "").strip()
+    lines: list[str] = []
+    if artist:
+        lines.append(f'PERFORMER "{_cue_escape(artist)}"')
+    if album:
+        lines.append(f'TITLE "{_cue_escape(album)}"')
+    for i, t in enumerate(tracks, start=1):
+        fn = t.get("filename", "")
+        title = _title_from_track_filename(fn)
+        lines.append(f'FILE "{_cue_escape(fn)}" WAVE')
+        lines.append(f"  TRACK {i:02d} AUDIO")
+        lines.append(f'    TITLE "{_cue_escape(title)}"')
+        if artist:
+            lines.append(f'    PERFORMER "{_cue_escape(artist)}"')
+        lines.append("    INDEX 01 00:00:00")
+    return "\n".join(lines) + "\n"
+
+
 def _media_type_for(ext: str) -> str:
     """Map an audio file extension to the HTTP `Content-Type` used by
     `download_track`. Falls back to octet-stream so an unknown extension
@@ -195,7 +253,8 @@ def _media_type_for(ext: str) -> str:
 
 
 def _ffmpeg_metadata_args(title: str, out_idx: int, out_total: int,
-                          tags: dict, cover_file: Optional[Path]) -> list[str]:
+                          tags: dict, cover_file: Optional[Path],
+                          disc: int = 0, disc_total: int = 0) -> list[str]:
     """Build the `-metadata key=value` flag set used for non-FLAC encodes.
     metaflac handles FLAC tag writing after encode (existing flow); for
     every other container we have to bake the tags in at encode time.
@@ -224,10 +283,40 @@ def _ffmpeg_metadata_args(title: str, out_idx: int, out_total: int,
     if tags.get("composer"):  pairs.append(("composer",  tags["composer"]))
     if tags.get("conductor"): pairs.append(("conductor", tags["conductor"]))
     if _is_compilation(tags):  pairs.append(("compilation", "1"))
+    # Disc tags only for genuine multi-disc sets (a single LP omits them;
+    # Jellyfin treats an absent disc as disc 1).
+    if disc_total > 1 and disc >= 1:
+        pairs.append(("disc", f"{disc}/{disc_total}"))
     for k, v in pairs:
         if v != "":
             args += ["-metadata", f"{k}={v}"]
     return args
+
+
+# ── Disc derivation (multi-LP sets) ──────────────────────────────────────
+# A vinyl LP has two playable sides, so a release's discs map to recording
+# sides in pairs: sides 0,1 → disc 1; sides 2,3 → disc 2; … This lets a 2-LP
+# gatefold land in music/ with correct DISCNUMBER/DISCTOTAL so Jellyfin groups
+# the discs instead of showing one flat track list. Single LPs (≤2 sides)
+# resolve to one disc and the caller omits the tags entirely.
+
+def _disc_total(num_sides: int) -> int:
+    return max(1, (max(0, num_sides) + 1) // 2)
+
+
+def _side_index_for_time(t: float, side_durations: list[float]) -> int:
+    """Index of the recording side that album-time `t` falls in. Clamps to
+    the last side for a time at/after the end (e.g. an end-of-album cut)."""
+    acc = 0.0
+    for i, d in enumerate(side_durations):
+        acc += d
+        if t < acc - 1e-6:
+            return i
+    return max(0, len(side_durations) - 1)
+
+
+def _disc_for_time(t: float, side_durations: list[float]) -> int:
+    return _side_index_for_time(t, side_durations) // 2 + 1
 
 
 # ── Domain exceptions ────────────────────────────────────────────────────
@@ -264,6 +353,11 @@ def wipe_prior_music_dir(prior_relpath: Optional[str], new_relpath: str) -> None
     if prior_dir.is_dir():
         for ext in _AUDIO_EXTS:
             for old in prior_dir.glob(f"*{ext}"):
+                try: old.unlink()
+                except Exception: pass
+        # Our own archival sidecars too, so the moved dir can be pruned.
+        for pat in ("*.m3u", "*.cue"):
+            for old in prior_dir.glob(pat):
                 try: old.unlink()
                 except Exception: pass
         # Drop our own rip-log sidecar too, else it blocks the rmdir below.
@@ -371,7 +465,8 @@ def kept_duration_total(tracks: list, total: float) -> float:
 
 
 def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
-                     tags: dict, cover_file: Optional[Path]) -> None:
+                     tags: dict, cover_file: Optional[Path],
+                     disc: int = 0, disc_total: int = 0) -> None:
     """Replace the FLAC's tag set with the manifest's tags + per-track
     title/track-number, then embed cover.jpg if present. Single metaflac
     invocation for the tags; the picture import has to be its own call.
@@ -435,6 +530,11 @@ def write_track_tags(out: Path, title: str, out_idx: int, out_total: int,
     ):
         if tags.get(key):
             tag_args.append(f"--set-tag={tagname}={tags[key]}")
+    # Disc tags only for genuine multi-disc sets (a single LP omits them;
+    # Jellyfin treats an absent disc as disc 1).
+    if disc_total > 1 and disc >= 1:
+        tag_args.append(f"--set-tag=DISCNUMBER={disc}")
+        tag_args.append(f"--set-tag=DISCTOTAL={disc_total}")
     tag_args.append(str(out))
     subprocess.run(tag_args, check=False, stderr=subprocess.DEVNULL)
     if cover_file:
@@ -451,7 +551,8 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
                       start_: float, end_: float, apply_gain: bool, gain_db: float,
                       sample_fmt: Optional[str], target_rate: Optional[int],
                       tags: dict, cover_file: Optional[Path],
-                      slice_range: tuple[float, float]) -> dict:
+                      slice_range: tuple[float, float],
+                      disc: int = 0, disc_total: int = 0) -> dict:
     """Encode one track into music/ in the requested container, write tags,
     embed cover. FLAC keeps the existing flow (encode -> metaflac post-pass);
     every other format embeds tags inline with `-metadata` flags during the
@@ -495,7 +596,8 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
         # Non-FLAC: bake tags + track number in via -metadata flags. metaflac
         # only handles FLAC, so for every other container we have to do the
         # tagging at encode time.
-        cmd += _ffmpeg_metadata_args(t.title, out_idx, out_total, tags, cover_file)
+        cmd += _ffmpeg_metadata_args(t.title, out_idx, out_total, tags,
+                                     cover_file, disc, disc_total)
     cmd.append(str(out))
     track_dur = end_ - start_
     rc, stderr = await asyncio.to_thread(
@@ -507,7 +609,8 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
         finish_job(req.job_id, error=err)
         raise SplitProcessingError(f"ffmpeg failed on track {i}: {err}")
     if req.output_format == "flac":
-        write_track_tags(out, t.title, out_idx, out_total, tags, cover_file)
+        write_track_tags(out, t.title, out_idx, out_total, tags, cover_file,
+                         disc, disc_total)
     return {
         "filename":         track_name,
         "duration_seconds": end_ - start_,
@@ -650,6 +753,11 @@ async def split_album(req, manifest: dict) -> dict:
             pass
     out_dur_total = kept_duration_total(req.tracks, total) or 1.0
     out_total = sum(1 for t in req.tracks if not t.skip)
+    # Per-track disc number derived from which recording side the track starts
+    # on (2 vinyl sides per disc). Only tagged for multi-disc sets — see
+    # _disc_total / write_track_tags.
+    side_durations = [flac_duration_seconds(p) or 0.0 for p in side_paths]
+    disc_total = _disc_total(len(side_paths))
     pad = max(2, len(str(out_total)))
     start_job(req.job_id, "split")
 
@@ -677,6 +785,8 @@ async def split_album(req, manifest: dict) -> dict:
                 gain_db=gain_db, sample_fmt=sample_fmt,
                 target_rate=target_rate, tags=tags,
                 cover_file=cover_file, slice_range=(slice_a, slice_b),
+                disc=_disc_for_time(start_, side_durations),
+                disc_total=disc_total,
             )
             created.append(entry)
     finally:
@@ -701,6 +811,18 @@ async def split_album(req, manifest: dict) -> dict:
         ))
     except OSError:
         pass
+
+    # Portable archival sidecars: an ordered M3U playlist + a multi-file CUE
+    # describing the album. Music servers ignore them; file-based players and
+    # archival tools read them. Named after the album so they're obvious in a
+    # file browser. Non-fatal — a finished split isn't aborted over a sidecar.
+    if created:
+        base = safe_path_component(tags.get("album") or "album") or "album"
+        try:
+            (music_dir / f"{base}.m3u").write_text(build_m3u(tags, created))
+            (music_dir / f"{base}.cue").write_text(build_cue(tags, created))
+        except OSError:
+            pass
 
     _persist_split_plan(req, relpath)
     finish_job(req.job_id)

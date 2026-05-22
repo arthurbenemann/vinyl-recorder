@@ -33,7 +33,10 @@ from services.split_orchestrator import (
     SplitNotFoundError,
     SplitProcessingError,
     SplitValidationError,
+    _title_from_track_filename,
     add_replay_gain,
+    build_cue,
+    build_m3u,
     build_rip_log_text,
     kept_duration_total,
     sort_name,
@@ -141,6 +144,54 @@ def test_rip_log_keep_source_settings_and_ids():
     assert "keep source" in txt
     assert "MusicBrainz: mb-1" in txt
     assert "Discogs:     42" in txt
+
+
+# ── M3U / CUE export builders ─────────────────────────────────────────────
+_DEMO_TRACKS = [
+    {"filename": "01 - Come Together.flac", "duration_seconds": 259.0},
+    {"filename": "02 - Something.flac", "duration_seconds": 182.0},
+]
+_DEMO_TAGS = {"artist": "The Beatles", "album": "Abbey Road"}
+
+
+def test_title_from_track_filename_strips_number_and_ext():
+    assert _title_from_track_filename("01 - Come Together.flac") == "Come Together"
+    assert _title_from_track_filename("12 - X.mp3") == "X"
+    # No "NN - " prefix → just drop the extension.
+    assert _title_from_track_filename("Untitled.wav") == "Untitled"
+
+
+def test_build_m3u_shape():
+    out = build_m3u(_DEMO_TAGS, _DEMO_TRACKS)
+    lines = out.splitlines()
+    assert lines[0] == "#EXTM3U"
+    assert "#EXTINF:259,The Beatles - Come Together" in lines
+    assert "#EXTINF:182,The Beatles - Something" in lines
+    # Filenames are relative (just the name), in order.
+    assert lines.index("01 - Come Together.flac") < lines.index("02 - Something.flac")
+
+
+def test_build_m3u_no_artist_uses_bare_title():
+    out = build_m3u({"album": "X"}, [{"filename": "01 - A.flac", "duration_seconds": 5}])
+    assert "#EXTINF:5,A" in out
+
+
+def test_build_cue_shape():
+    out = build_cue(_DEMO_TAGS, _DEMO_TRACKS)
+    assert 'PERFORMER "The Beatles"' in out
+    assert 'TITLE "Abbey Road"' in out
+    assert 'FILE "01 - Come Together.flac" WAVE' in out
+    assert "  TRACK 01 AUDIO" in out
+    assert "  TRACK 02 AUDIO" in out
+    assert '    TITLE "Come Together"' in out
+    assert out.count("INDEX 01 00:00:00") == 2
+
+
+def test_build_cue_escapes_quotes():
+    out = build_cue({"artist": 'A "B" C', "album": "Q"},
+                    [{"filename": "01 - T.flac", "duration_seconds": 1}])
+    # Embedded double-quotes are replaced so they can't break the sheet.
+    assert 'PERFORMER "A \'B\' C"' in out
 
 
 # ── kept_duration_total ──────────────────────────────────────────────────
@@ -292,6 +343,20 @@ def test_wipe_prior_music_dir_removes_folder_cover(tmp_path, monkeypatch):
     assert not (tmp_path / "Old").exists()
 
 
+def test_wipe_prior_music_dir_removes_m3u_and_cue(tmp_path, monkeypatch):
+    """The album's archival sidecars (.m3u/.cue) are ours to manage — they're
+    cleaned with the audio so a moved album's old dir can be pruned."""
+    monkeypatch.setattr(so, "MUSIC_DIR", tmp_path)
+    prior_dir = tmp_path / "Old" / "Album"
+    prior_dir.mkdir(parents=True)
+    (prior_dir / "01 - a.flac").write_bytes(b"")
+    (prior_dir / "Album.m3u").write_text("#EXTM3U")
+    (prior_dir / "Album.cue").write_text('TITLE "Album"')
+    wipe_prior_music_dir("Old/Album", "New/Album")
+    assert not prior_dir.exists()
+    assert not (tmp_path / "Old").exists()
+
+
 def test_wipe_prior_music_dir_handles_missing_prior(tmp_path, monkeypatch):
     """If the prior dir doesn't actually exist on disk (manifest pointed
     at a path the user wiped externally), the helper must early-return."""
@@ -360,6 +425,50 @@ def test_write_track_tags_emits_required_set(monkeypatch, tmp_path):
     assert "--set-tag=TRACKTOTAL=10" in cmd
     # File path is the trailing positional arg.
     assert cmd[-1] == str(out)
+    # No disc args supplied → single-disc → no DISCNUMBER/DISCTOTAL.
+    assert not any(c.startswith("--set-tag=DISCNUMBER") for c in cmd)
+
+
+def test_write_track_tags_emits_disc_for_multidisc(monkeypatch, tmp_path):
+    """A 2-LP set (disc_total=2) gets DISCNUMBER/DISCTOTAL so Jellyfin groups
+    the discs; a single LP omits them."""
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "07 - Side C Opener.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Side C Opener", 7, 12, tags={"artist": "A"},
+                     cover_file=None, disc=2, disc_total=2)
+    cmd = calls[0]
+    assert "--set-tag=DISCNUMBER=2" in cmd
+    assert "--set-tag=DISCTOTAL=2" in cmd
+
+
+def test_write_track_tags_omits_disc_for_single_disc(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_run(args, **kw):
+        calls.append(list(args))
+
+        class _R:
+            returncode = 0
+        return _R()
+
+    monkeypatch.setattr(so.subprocess, "run", fake_run)
+    out = tmp_path / "01 - Song.flac"
+    out.write_bytes(b"")
+    write_track_tags(out, "Song", 1, 8, tags={"artist": "A"},
+                     cover_file=None, disc=1, disc_total=1)
+    cmd = calls[0]
+    assert not any(c.startswith("--set-tag=DISCNUMBER") for c in cmd)
+    assert not any(c.startswith("--set-tag=DISCTOTAL") for c in cmd)
 
 
 def test_write_track_tags_emits_sort_names_when_article_moves(monkeypatch, tmp_path):

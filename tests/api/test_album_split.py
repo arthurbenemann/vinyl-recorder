@@ -291,6 +291,28 @@ def test_split_no_cover_no_folder_cover(monkeypatch):
         _cleanup_album(aid)
 
 
+def test_split_writes_m3u_and_cue(monkeypatch):
+    """A successful split drops an album-named .m3u + .cue next to the tracks."""
+    from state import MUSIC_DIR
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "Bee"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "One", "duration_seconds": 300},
+                       {"title": "Two", "duration_seconds": 300}],
+        })
+        assert r.status_code == 200, r.text
+        d = MUSIC_DIR / r.json()["music_relpath"]
+        assert (d / "Bee.m3u").exists()
+        assert (d / "Bee.cue").exists()
+        m3u = (d / "Bee.m3u").read_text()
+        assert m3u.startswith("#EXTM3U")
+        assert "#EXTINF:" in m3u
+    finally:
+        _cleanup_album(aid)
+
+
 # ── Cursor walk: track-end clamps to total, last extends ─────────────────
 
 def test_split_last_track_extends_to_total(monkeypatch):
