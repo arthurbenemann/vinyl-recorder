@@ -24,13 +24,17 @@ import json
 
 import pytest
 
+from datetime import datetime, timezone
+
 from services import split_orchestrator as so
 from services.split_orchestrator import (
+    RIP_LOG_NAME,
     SplitDiskSpaceError,
     SplitNotFoundError,
     SplitProcessingError,
     SplitValidationError,
     add_replay_gain,
+    build_rip_log_text,
     kept_duration_total,
     sort_name,
     split_genres,
@@ -83,6 +87,60 @@ def test_split_genres_preserves_commas_within_a_genre():
 def test_split_genres_empty_and_blank():
     assert split_genres("") == []
     assert split_genres("  ;  ; ") == []
+
+
+# ── build_rip_log_text ───────────────────────────────────────────────────
+_FIXED_TS = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _rip_log(**over):
+    base = dict(
+        app_version="v9.9.9",
+        tags={"artist": "The Beatles", "album": "Abbey Road", "year": "1969"},
+        output_format="flac", bit_depth=16, sample_rate=44100,
+        normalize=True, target_peak_db=-1.0, measured_peak_db=-4.0,
+        gain_db=3.0,
+        tracks=[{"filename": "01 - Come Together.flac", "duration_seconds": 259.0},
+                {"filename": "02 - Something.flac", "duration_seconds": 182.0}],
+        generated_at=_FIXED_TS,
+    )
+    base.update(over)
+    return build_rip_log_text(**base)
+
+
+def test_rip_log_has_header_album_and_settings():
+    txt = _rip_log()
+    assert "vinyl-recorder rip log" in txt
+    assert "App version: v9.9.9" in txt
+    assert "2026-05-21 12:00:00 UTC" in txt
+    assert "The Beatles — Abbey Road (1969)" in txt
+    assert "flac · 16-bit · 44100 Hz" in txt
+
+
+def test_rip_log_normalized_line_and_total():
+    txt = _rip_log()
+    assert "peak-normalized to -1 dBFS" in txt
+    assert "+3.00 dB applied" in txt
+    # Two tracks listed; total = 259+182 = 441s = 7:21.
+    assert "Tracks (2):" in txt
+    assert "01 - Come Together.flac" in txt
+    assert "Total:" in txt and "7:21" in txt
+
+
+def test_rip_log_not_normalized():
+    txt = _rip_log(normalize=False, measured_peak_db=None)
+    assert "Loudness:    not normalized" in txt
+
+
+def test_rip_log_keep_source_settings_and_ids():
+    txt = _rip_log(
+        bit_depth=0, sample_rate=0,
+        tags={"artist": "X", "album": "Y",
+              "musicbrainz_albumid": "mb-1", "discogs_release_id": 42},
+    )
+    assert "keep source" in txt
+    assert "MusicBrainz: mb-1" in txt
+    assert "Discogs:     42" in txt
 
 
 # ── kept_duration_total ──────────────────────────────────────────────────
@@ -206,6 +264,19 @@ def test_wipe_prior_music_dir_leaves_foreign_files_blocking_rmdir(tmp_path, monk
     assert not (prior_dir / "01.flac").exists()
     assert (prior_dir / "notes.txt").exists()
     assert prior_dir.is_dir()
+
+
+def test_wipe_prior_music_dir_removes_rip_log(tmp_path, monkeypatch):
+    """Our own vinyl-rip.log sidecar must not block the prior-dir rmdir when
+    the album moves — it's cleaned along with the audio."""
+    monkeypatch.setattr(so, "MUSIC_DIR", tmp_path)
+    prior_dir = tmp_path / "Old" / "Album"
+    prior_dir.mkdir(parents=True)
+    (prior_dir / "01 - a.flac").write_bytes(b"")
+    (prior_dir / RIP_LOG_NAME).write_text("log")
+    wipe_prior_music_dir("Old/Album", "New/Album")
+    assert not prior_dir.exists()
+    assert not (tmp_path / "Old").exists()
 
 
 def test_wipe_prior_music_dir_removes_folder_cover(tmp_path, monkeypatch):

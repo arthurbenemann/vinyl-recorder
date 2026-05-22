@@ -30,6 +30,7 @@ import asyncio
 import re
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -43,6 +44,13 @@ from state import (
     ALLOWED_CHANNEL_MODES, ALLOWED_OUTPUT_FORMATS, ALLOWED_SPLIT_SAMPLE_RATES,
     MUSIC_DIR,
 )
+from version import VERSION
+
+# Sidecar provenance log written into the music album dir on every split —
+# a human-readable record of source IDs, output settings, loudness, and the
+# track list (EAC/dBpoweramp-style "rip log"). Music servers ignore .log
+# files; `download_track` / `album_tracks` only match audio extensions.
+RIP_LOG_NAME = "vinyl-rip.log"
 
 
 # Container/codec settings per output_format. `ext` is the file extension
@@ -258,6 +266,8 @@ def wipe_prior_music_dir(prior_relpath: Optional[str], new_relpath: str) -> None
             for old in prior_dir.glob(f"*{ext}"):
                 try: old.unlink()
                 except Exception: pass
+        # Drop our own rip-log sidecar too, else it blocks the rmdir below.
+        (prior_dir / RIP_LOG_NAME).unlink(missing_ok=True)
         # Our own folder-art sidecar; remove so the moved dir can be pruned.
         (prior_dir / "cover.jpg").unlink(missing_ok=True)
         try: prior_dir.rmdir()
@@ -267,6 +277,57 @@ def wipe_prior_music_dir(prior_relpath: Optional[str], new_relpath: str) -> None
                 prior_dir.parent.rmdir()
         except Exception:
             pass
+
+
+def _fmt_mmss(seconds: float) -> str:
+    s = int(round(seconds or 0.0))
+    return f"{s // 60}:{s % 60:02d}"
+
+
+def build_rip_log_text(*, app_version: str, tags: dict, output_format: str,
+                       bit_depth: int, sample_rate: int, normalize: bool,
+                       target_peak_db: float, measured_peak_db: Optional[float],
+                       gain_db: float, tracks: list[dict],
+                       generated_at: Optional[datetime] = None) -> str:
+    """Render the human-readable rip log for one split. Pure (no I/O) so it
+    can be unit-tested; the caller writes the returned text to
+    `music/<relpath>/vinyl-rip.log`. `tracks` is the emitted-track list
+    (each `{filename, duration_seconds, ...}`)."""
+    ts = (generated_at or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M:%S UTC")
+    artist = (tags.get("artist") or "").strip() or "Unknown Artist"
+    album = (tags.get("album") or "").strip() or "Unknown Album"
+    year = (tags.get("year") or "").strip()
+    header = f"{artist} — {album}" + (f" ({year})" if year else "")
+
+    lines = ["vinyl-recorder rip log", "=" * 22,
+             f"Generated:   {ts}", f"App version: {app_version}", "",
+             f"Album:       {header}"]
+    if tags.get("musicbrainz_albumid"):
+        lines.append(f"MusicBrainz: {tags['musicbrainz_albumid']}")
+    if tags.get("discogs_release_id"):
+        lines.append(f"Discogs:     {tags['discogs_release_id']}")
+    lines.append("")
+
+    bd = "keep source" if not bit_depth else f"{bit_depth}-bit"
+    sr = "keep source" if not sample_rate else f"{sample_rate} Hz"
+    lines.append(f"Output:      {output_format} · {bd} · {sr}")
+    if normalize and measured_peak_db is not None:
+        lines.append(
+            f"Loudness:    peak-normalized to {target_peak_db:g} dBFS "
+            f"(measured {measured_peak_db:g} dB, {gain_db:+.2f} dB applied)"
+        )
+    else:
+        lines.append("Loudness:    not normalized")
+    lines.append("")
+
+    lines.append(f"Tracks ({len(tracks)}):")
+    total = 0.0
+    for i, t in enumerate(tracks, start=1):
+        dur = float(t.get("duration_seconds") or 0.0)
+        total += dur
+        lines.append(f"  {i:02d}  {_fmt_mmss(dur):>6}  {t.get('filename', '')}")
+    lines += ["", f"Total:       {_fmt_mmss(total)}", ""]
+    return "\n".join(lines)
 
 
 def add_replay_gain(track_paths: list[Path]) -> None:
@@ -627,6 +688,19 @@ async def split_album(req, manifest: dict) -> dict:
     if req.replaygain and req.output_format == "flac" and created:
         track_paths = [music_dir / e["filename"] for e in created]
         await asyncio.to_thread(add_replay_gain, track_paths)
+
+    # Provenance sidecar — non-fatal: a finished split isn't aborted if the
+    # log can't be written.
+    try:
+        (music_dir / RIP_LOG_NAME).write_text(build_rip_log_text(
+            app_version=VERSION, tags=tags, output_format=req.output_format,
+            bit_depth=req.bit_depth, sample_rate=req.sample_rate,
+            normalize=req.normalize, target_peak_db=req.target_peak_db,
+            measured_peak_db=req.measured_peak_db, gain_db=gain_db,
+            tracks=created,
+        ))
+    except OSError:
+        pass
 
     _persist_split_plan(req, relpath)
     finish_job(req.job_id)
