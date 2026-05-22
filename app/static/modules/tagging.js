@@ -21,6 +21,7 @@ import { renderCombineSides } from './combine.js';
 
 let tagPanelMbid = null;        // mbid of currently-picked candidate (drives cover embed on apply)
 let tagPanelDiscogsId = null;   // Discogs release id — persisted so the wave editor can auto-load tracks later
+let tagPanelCoverFile = null;   // user-picked custom cover File, uploaded after apply resolves the album id
 let tagPanelCandidates = [];
 // Snapshot of left-column values when the modal opened — `formDirty` is true
 // when any current value diverges, which drives the unsaved badge + pulse.
@@ -90,6 +91,23 @@ function setCover(url) {
   img.src = url;
 }
 
+// User picked a custom cover via the file input. Preview it locally (no
+// server round-trip) and hold the File; applyTagPanel uploads it once the
+// album id is known. The server re-encodes + validates, so the only check
+// here is a friendly "that's not an image" guard.
+export function onCoverFileSelected(file) {
+  if (!file) return;
+  if (!/^image\//.test(file.type || '')) {
+    toast('✗ Please choose an image file', 'err');
+    return;
+  }
+  tagPanelCoverFile = file;
+  const reader = new FileReader();
+  reader.onload = () => setCover(reader.result);
+  reader.readAsDataURL(file);
+  _recomputeTagDirty();
+}
+
 export function openTagAlbum(album_id) {
   // The tag panel is keyed off filesByName; albums live in albumsByName.
   // Mirror the album entry into filesByName so openTag finds it.
@@ -114,6 +132,11 @@ export function openTag(fname) {
   tagPanelMbid = null;
   tagPanelDiscogsId = null;
   tagPanelCandidates = [];
+  // Drop any cover the previous panel held + clear the file input so a stale
+  // pick can't ride along with the next album's apply.
+  tagPanelCoverFile = null;
+  const coverInput = document.getElementById('t-cover-file');
+  if (coverInput) coverInput.value = '';
   // Title + apply-button copy + sides reorder visibility track the mode.
   document.getElementById('tag-modal-title').textContent =
     isCombine ? 'Combine into album' : 'Tag album';
@@ -773,6 +796,23 @@ async function _loadMbRelease(mbid, source) {
   }
 }
 
+// Upload the held custom cover (if any) against a now-known album id.
+// Returns a short note to fold into the apply toast: '' (nothing to do or
+// not applicable), ' · cover set', or ' · cover failed'. Never throws.
+async function _uploadHeldCover(albumId) {
+  if (!tagPanelCoverFile || !albumId) return '';
+  try {
+    const fd = new FormData();
+    fd.append('file', tagPanelCoverFile);
+    const cr = await fetch(`/api/file-cover/${encodeURIComponent(albumId)}`,
+                           { method: 'POST', body: fd });
+    if (!cr.ok) throw new Error(await parseError(cr));
+    return ' · cover set';
+  } catch (e) {
+    return ' · cover failed';
+  }
+}
+
 // Paste path: user dropped a musicbrainz.org/release/<id> URL or a bare
 // MBID into the find bar. Mirrors _fetchDiscogsRelease — there's no
 // candidate card to highlight, so just load by id.
@@ -838,12 +878,18 @@ export async function applyTagPanel(thenEdit = false) {
     });
     if (!r.ok) throw new Error(await parseError(r));
     const result = await r.json();   // { album_id }
+    // A custom cover is uploaded against the album id the apply just
+    // resolved (combine/promote create it server-side). Non-fatal — the tags
+    // are already saved — so a cover hiccup only annotates the toast.
+    const newAlbumId = (result && result.album_id) || target.album_id;
+    const coverNote = await _uploadHeldCover(newAlbumId);
+    const ok = coverNote !== ' · cover failed';
     if (isCombine) {
       const n = target.filenames.length;
-      toast(`✓ Combined ${n} side${n === 1 ? '' : 's'} · ${fields.artist} — ${fields.album}`, 'ok');
+      toast(`✓ Combined ${n} side${n === 1 ? '' : 's'} · ${fields.artist} — ${fields.album}${coverNote}`, ok ? 'ok' : 'err');
       state.selected.clear();
     } else {
-      toast(`✓ Tagged ${fields.artist} — ${fields.album}`, 'ok');
+      toast(`✓ Tagged ${fields.artist} — ${fields.album}${coverNote}`, ok ? 'ok' : 'err');
     }
     closeTag();
     refreshLib();

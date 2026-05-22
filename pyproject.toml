@@ -37,6 +37,7 @@ runtime = [
     "python-multipart==0.0.29",
     "paramiko==5.0.0",
     "audioop-lts==0.2.2",
+    "Pillow==12.2.0",
 ]
 test = [
     {include-group = "runtime"},
@@ -50,6 +51,7 @@ test = [
 e2e = [
     "pytest==9.0.3",
     "pytest-playwright==0.8.0",
+    "Pillow==12.2.0",
 ]
 screenshots = [
     "playwright==1.60.0",

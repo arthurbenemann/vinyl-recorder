@@ -235,6 +235,92 @@ def test_apply_persists_original_year_from_mb(monkeypatch):
         shutil.rmtree(d, ignore_errors=True)
 
 
+# ── POST /api/file-cover/{album_id} — custom cover upload ────────────────
+def _png_bytes(color=(200, 30, 30), size=(8, 8)) -> bytes:
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _seed_album(album_id: str):
+    import json
+
+    from state import IN_PROGRESS_DIR
+    d = IN_PROGRESS_DIR / album_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "side1.flac").write_bytes(b"")
+    (d / "album.json").write_text(json.dumps({
+        "schema_version": 2, "tags": {"artist": "A", "album": "B"},
+        "sides": ["side1.flac"], "cover": None, "plan": None,
+        "music_relpath": None,
+    }))
+    return d
+
+
+def test_upload_cover_writes_normalized_jpeg():
+    """A PNG upload is re-encoded to cover.jpg and the manifest points at it,
+    so the split + GET-cover paths find it the same as an auto-fetched cover."""
+    import json
+    import shutil
+    album_id = "covupload1"
+    d = _seed_album(album_id)
+    try:
+        r = _client().post(
+            f"/api/file-cover/{album_id}",
+            files={"file": ("art.png", _png_bytes(), "image/png")},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["cover"] == "cover.jpg"
+        cover = d / "cover.jpg"
+        assert cover.exists()
+        # Re-encoded to JPEG regardless of the PNG input (magic bytes).
+        assert cover.read_bytes()[:3] == b"\xff\xd8\xff"
+        assert json.loads((d / "album.json").read_text())["cover"] == "cover.jpg"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_upload_cover_rejects_non_image():
+    """Re-encoding through Pillow is the validation: garbage bytes raise and
+    surface as a 400, not a 500."""
+    import shutil
+    album_id = "covupload2"
+    d = _seed_album(album_id)
+    try:
+        r = _client().post(
+            f"/api/file-cover/{album_id}",
+            files={"file": ("notes.txt", b"definitely not an image", "text/plain")},
+        )
+        assert r.status_code == 400
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_upload_cover_empty_upload_returns_400():
+    import shutil
+    album_id = "covupload3"
+    d = _seed_album(album_id)
+    try:
+        r = _client().post(
+            f"/api/file-cover/{album_id}",
+            files={"file": ("empty.png", b"", "image/png")},
+        )
+        assert r.status_code == 400
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_upload_cover_unknown_album_returns_404():
+    r = _client().post(
+        "/api/file-cover/not-real",
+        files={"file": ("art.png", _png_bytes(), "image/png")},
+    )
+    assert r.status_code == 404
+
+
 # ── /api/apply validation ────────────────────────────────────────────────
 def test_apply_requires_exactly_one_target():
     """`album_id`, `filename`, and `filenames` are mutually exclusive — the

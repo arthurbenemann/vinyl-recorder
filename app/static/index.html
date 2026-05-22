@@ -525,7 +525,14 @@
       <div class="tag-col">
         <div class="col-label">Tags to write</div>
         <div class="left-top">
-          <div class="cover-preview" id="cover-preview">no cover</div>
+          <div class="cover-col">
+            <div class="cover-preview" id="cover-preview">no cover</div>
+            <button type="button" class="btn-small" id="t-cover-upload-btn"
+                    onclick="document.getElementById('t-cover-file').click()"
+                    title="Set a custom cover image — useful when MusicBrainz and Discogs have no art for this pressing. Applied when you click apply / combine.">set cover…</button>
+            <input type="file" id="t-cover-file" accept="image/*" hidden
+                   onchange="onCoverFileSelected(this.files &amp;&amp; this.files[0])">
+          </div>
           <div class="left-fields">
             <div class="field span2"><label>Album</label><input id="t-album"/></div>
             <div class="field span2"><label>Artist</label><input id="t-artist"/></div>
