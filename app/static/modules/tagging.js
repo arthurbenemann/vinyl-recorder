@@ -376,6 +376,7 @@ function _renderMbCard(c, i) {
           ${c.catalog_number ? '<span class="pill">' + htmlEscape(c.catalog_number) + '</span>' : ''}
           ${c.country ? '<span class="pill">' + htmlEscape(c.country) + '</span>' : ''}
           ${c.format ? '<span class="pill">' + htmlEscape(c.format) + '</span>' : ''}
+          ${c.track_count ? '<span class="pill" title="Total tracks on this release — match it to your record to pick the right pressing.">' + c.track_count + ' tracks</span>' : ''}
           <a class="ext-link" href="https://musicbrainz.org/release/${c.mbid}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open on MusicBrainz">↗ MB</a>
         </div>
       </div>

@@ -136,6 +136,13 @@ def test_canvas_focus_visible_outline(css):
     assert "#we-canvas:focus-visible" in css
 
 
+def test_mb_candidate_card_shows_track_count(js):
+    # The release picker surfaces track count as a disambiguation pill so
+    # the user can match a candidate to their record's track count.
+    assert "c.track_count" in js
+    assert "tracks</span>" in js
+
+
 def test_no_signal_warning_wired(js):
     # ws.js surfaces the server's record:no_signal warning as a toast and
     # auto-clears it when signal returns / recording ends.
