@@ -594,6 +594,45 @@ def test_silence_detection_settings_persist_across_reload(stack, page):
             except Exception: pass
 
 
+# ── Split evenly: seed N equal cuts on a gapless side ────────────────────
+def test_split_evenly_seeds_equal_cuts(stack, page):
+    """The "split evenly" popover is the gapless-side fallback: it seeds N-1
+    equally-spaced draggable cuts when silence detection finds nothing. Pins
+    the spacing + the resulting track/skip arrays."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="EvenSplitArtist", album="EvenSplitAlbum"
+        )
+        # Open the "split evenly" popover and ask for 4 equal tracks.
+        page.click('button:has-text("split evenly")')
+        page.wait_for_selector('#we-pop-even:not([hidden])')
+        page.fill('#we-even-n', '4')
+        page.click('#we-pop-even button:has-text("place cuts")')
+        # 3 interior cuts at the quarter points; 4 track slots, none skipped.
+        page.wait_for_function(
+            "() => Array.isArray(we.cuts) && we.cuts.length === 3", timeout=5_000)
+        state = page.evaluate(
+            "() => ({ cuts: we.cuts.slice(), total: we.total, "
+            "titles: we.titles.slice(), skipped: we.skipped.slice() })"
+        )
+        q = state['total'] / 4
+        for i, c in enumerate(state['cuts'], start=1):
+            assert abs(c - q * i) < 0.05, \
+                f"cut {i} at {c}, expected ~{q * i} (total {state['total']})"
+        assert len(state['titles']) == 4, state['titles']
+        assert state['skipped'] == [False, False, False, False], state['skipped']
+        # Opening the even popover must have closed the silence popover.
+        assert page.is_hidden('#we-pop-silence')
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
 # ── PR: split with cuts that straddle side boundaries ────────────────────
 def test_split_with_cuts_across_side_boundaries(stack, page):
     """The per-side concat-demuxer playlist has to handle the case where

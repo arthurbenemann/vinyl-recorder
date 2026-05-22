@@ -801,6 +801,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
    below. Keeping each labeled control on a single row prevents inline labels
    like "Min silence" from breaking mid-text when the popover wraps. */
 .silence-controls { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+.even-hint { margin: 0 0 10px; font-size: 11px; line-height: 1.45; color: var(--muted); }
 .silence-row { display: flex; align-items: center; gap: 10px; }
 .silence-slider input[type="range"] {
   flex: 1; min-width: 100px; accent-color: var(--blue); height: 4px; margin: 0;

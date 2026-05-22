@@ -428,6 +428,8 @@ function openWaveEditor(fname) {
   document.getElementById('we-duration').textContent = fmtMMSS(we.total);
   document.getElementById('we-mini-end').textContent = fmtMMSS(we.total);
   document.getElementById('we-pop-silence').hidden = true;
+  const popEvenReset = document.getElementById('we-pop-even');
+  if (popEvenReset) popEvenReset.hidden = true;
   document.getElementById('we-search-status').textContent = '';
   document.getElementById('we-silence-status').textContent = '';
 
@@ -1100,6 +1102,11 @@ function weKeyDown(e) {
         popSilence.hidden = true;
         return;
       }
+      const popEven = document.getElementById('we-pop-even');
+      if (popEven && !popEven.hidden) {
+        popEven.hidden = true;
+        return;
+      }
       closeWaveEditor();
       return;
     }
@@ -1529,12 +1536,53 @@ function onAudioTimeUpdate() {
 }
 
 // ── Suggest popovers ──────────────────────────────────────────────────────
-// The Discogs/MB tracklist search popover was retired in favor of the
-// "↻ load tracklist" button (which pulls from the album's already-saved
-// Discogs / MusicBrainz id). Only the silence popover is left.
+// Two cut-seeding popovers: "suggest from silence" (gap detection) and
+// "split evenly" (equal-interval fallback for gapless sides). Opening one
+// dismisses the other so they never overlap.
+const _WE_SUGGEST_POPS = { silence: 'we-pop-silence', even: 'we-pop-even' };
+
 function weToggleSuggest(which) {
-  const b = document.getElementById('we-pop-silence');
-  if (which === 'silence') b.hidden = !b.hidden;
+  const id = _WE_SUGGEST_POPS[which];
+  if (!id) return;
+  const target = document.getElementById(id);
+  if (!target) return;
+  const willShow = target.hidden;
+  for (const popId of Object.values(_WE_SUGGEST_POPS)) {
+    const el = document.getElementById(popId);
+    if (el) el.hidden = (popId !== id) ? true : !willShow;
+  }
+}
+
+// Seed evenly-spaced cuts that divide the album into `n` equal tracks. The
+// fallback when "suggest from silence" finds nothing because the side has no
+// inter-track gaps. The cuts are draggable starting points — the user nudges
+// them onto the real boundaries with the waveform + `p` audition. Mirrors
+// weClearCuts' state shape so renderTracks() persists the draft.
+function weSplitEvenly() {
+  const status = document.getElementById('we-even-status');
+  const n = parseInt(document.getElementById('we-even-n').value, 10) || 0;
+  if (!(we.total > 0)) {
+    if (status) status.textContent = 'album length unknown — try again once the waveform loads';
+    return;
+  }
+  const cuts = _weEvenCuts(we.total, n);
+  if (!cuts.length) {
+    if (status) status.textContent = 'enter 2 or more tracks';
+    return;
+  }
+  we.cuts      = cuts;
+  we.titles    = cuts.map((_, i) => `Track ${i + 1}`).concat([`Track ${cuts.length + 1}`]);
+  we.skipped   = cuts.map(() => false).concat([false]);
+  we.positions = we.titles.map(() => '');
+  we.dirty = true;
+  invalidateMeasure();
+  renderWaveformOverlay();
+  renderMinimapOverlay();
+  renderTracks();
+  if (status) {
+    status.textContent =
+      `${cuts.length + 1} equal tracks · drag the cuts onto the real boundaries`;
+  }
 }
 
 // Manual re-trigger for the album's saved-id tracklist fetch. _weAutoLoadFromIds

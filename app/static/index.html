@@ -351,6 +351,22 @@
           </div>
         </div>
       </div>
+      <div class="we-suggest">
+        <button class="btn-small" onclick="weToggleSuggest('even')"
+                title="Seed evenly-spaced cuts for a gapless side (live set, DJ mix, classical) where silence detection finds nothing. Drag the cuts onto the real boundaries afterwards.">split evenly ▾</button>
+        <div class="we-suggest-pop" id="we-pop-even" hidden>
+          <div class="col-label">Split into equal tracks</div>
+          <p class="even-hint">For a gapless side where "suggest from silence" finds nothing. Seeds evenly-spaced cuts — drag each onto the real boundary (use the <strong>▶</strong> on each track to listen).</p>
+          <div class="silence-row silence-numbers">
+            <label class="silence-num" for="we-even-n">
+              <span class="silence-label">Tracks</span>
+              <input type="number" id="we-even-n" value="4" step="1" min="2" max="99">
+            </label>
+            <button class="btn primary" onclick="weSplitEvenly()">place cuts</button>
+          </div>
+          <div class="search-status" id="we-even-status" style="margin-top:6px"></div>
+        </div>
+      </div>
     </div>
 
     <!-- Sides reorder — visible only for albums with ≥2 sides. Drag handle
