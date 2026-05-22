@@ -228,6 +228,30 @@ def test_split_ffmpeg_failure_surfaces_as_500(monkeypatch):
         _cleanup_album(aid)
 
 
+def test_split_writes_rip_log_sidecar(monkeypatch):
+    """A successful split drops a human-readable vinyl-rip.log next to the
+    tracks, naming the album, output settings, and the track list."""
+    from state import MUSIC_DIR
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B", "year": "1999"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 300},
+                       {"title": "T2", "duration_seconds": 300}],
+        })
+        assert r.status_code == 200, r.text
+        relpath = r.json()["music_relpath"]
+        log = MUSIC_DIR / relpath / "vinyl-rip.log"
+        assert log.exists()
+        text = log.read_text()
+        assert "vinyl-recorder rip log" in text
+        assert "A — B (1999)" in text
+        assert "Tracks (2):" in text
+    finally:
+        _cleanup_album(aid)
+
+
 def test_split_writes_folder_cover(monkeypatch):
     """When the album has cover art, the split drops a folder-level cover.jpg
     next to the tracks (so non-FLAC outputs + music servers get album art)."""
@@ -263,6 +287,28 @@ def test_split_no_cover_no_folder_cover(monkeypatch):
         assert r.status_code == 200, r.text
         relpath = r.json()["music_relpath"]
         assert not (MUSIC_DIR / relpath / "cover.jpg").exists()
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_writes_m3u_and_cue(monkeypatch):
+    """A successful split drops an album-named .m3u + .cue next to the tracks."""
+    from state import MUSIC_DIR
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "Bee"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "One", "duration_seconds": 300},
+                       {"title": "Two", "duration_seconds": 300}],
+        })
+        assert r.status_code == 200, r.text
+        d = MUSIC_DIR / r.json()["music_relpath"]
+        assert (d / "Bee.m3u").exists()
+        assert (d / "Bee.cue").exists()
+        m3u = (d / "Bee.m3u").read_text()
+        assert m3u.startswith("#EXTM3U")
+        assert "#EXTINF:" in m3u
     finally:
         _cleanup_album(aid)
 
@@ -443,6 +489,54 @@ def test_split_normalize_adds_volume_filter(monkeypatch):
         _cleanup_album(aid)
 
 
+def test_split_mono_adds_pan_filter(monkeypatch):
+    """channel_mode=mono folds L+R via a leading pan filter; stereo adds none."""
+    env = _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+            "channel_mode": "mono",
+        })
+        assert r.status_code == 200, r.text
+        af = env.ffmpeg_calls[0][env.ffmpeg_calls[0].index("-af") + 1]
+        assert "pan=mono|c0=0.5*c0+0.5*c1" in af
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_stereo_default_no_pan_filter(monkeypatch):
+    env = _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+        })
+        assert r.status_code == 200, r.text
+        cmd = env.ffmpeg_calls[0]
+        # Nothing requested → no -af at all (so definitely no pan).
+        assert "-af" not in cmd
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_rejects_bad_channel_mode(monkeypatch):
+    env = _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+            "channel_mode": "surround",
+        })
+        assert r.status_code == 400
+        assert env.ffmpeg_calls == []  # rejected before any encode
+    finally:
+        _cleanup_album(aid)
+
+
 def test_split_no_normalize_no_volume_filter(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
@@ -478,8 +572,11 @@ def test_split_aformat_skipped_when_target_matches_source(monkeypatch):
         _cleanup_album(aid)
 
 
-def test_split_aformat_added_for_bit_depth_change(monkeypatch):
-    """24-bit source → user wants 16-bit output → aformat=sample_fmts=s16."""
+def test_split_16bit_downconvert_dithers_via_aresample(monkeypatch):
+    """24-bit source → 16-bit output → the reduction goes through aresample
+    with shaped TPDF dither (osf=s16 + dither_method), not a hard-truncating
+    aformat. Truncating without dither leaves audible quantisation noise in
+    the quiet passages a vinyl rip is full of."""
     env = _MockSplitEnv(monkeypatch, src_bit_depth=24)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
@@ -491,7 +588,11 @@ def test_split_aformat_added_for_bit_depth_change(monkeypatch):
         assert r.status_code == 200
         cmd = env.ffmpeg_calls[0]
         af = cmd[cmd.index("-af") + 1]
-        assert "aformat=sample_fmts=s16" in af
+        assert "aresample=" in af
+        assert "osf=s16" in af
+        assert "dither_method=triangular_hp" in af
+        # No hard-truncating aformat=s16 on the 16-bit path.
+        assert "aformat=sample_fmts=s16" not in af
     finally:
         _cleanup_album(aid)
 
@@ -541,9 +642,9 @@ def test_split_sample_rate_adds_ar_and_soxr_filter(monkeypatch):
 
 
 def test_split_sample_rate_combines_with_bit_depth(monkeypatch):
-    """Both knobs together: aresample BEFORE aformat in the filter chain
-    (so the bit-depth conversion happens after rate change), and `-ar`
-    still lands on the output side."""
+    """Both knobs together: a single aresample carries the SoX rate change
+    AND the dithered 24→16 reduction (resample in high precision, then dither
+    once on the final s16 step), and `-ar` still lands on the output side."""
     env = _MockSplitEnv(monkeypatch, src_bit_depth=24)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
@@ -558,10 +659,8 @@ def test_split_sample_rate_combines_with_bit_depth(monkeypatch):
         assert cmd[cmd.index("-ar") + 1] == "48000"
         af = cmd[cmd.index("-af") + 1]
         assert "aresample=resampler=soxr" in af
-        assert "aformat=sample_fmts=s16" in af
-        # aresample appears before aformat so bit-depth conversion follows
-        # the rate change.
-        assert af.index("aresample") < af.index("aformat")
+        assert "osf=s16" in af
+        assert "dither_method=triangular_hp" in af
     finally:
         _cleanup_album(aid)
 

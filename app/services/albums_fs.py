@@ -11,7 +11,9 @@ The manifest schema (v2):
       "schema_version": 2,
       "tags":           {artist, album, year, genre, label,
                          catalog_number, country, composer, conductor,
-                         musicbrainz_albumid, discogs_release_id},
+                         musicbrainz_albumid, discogs_release_id,
+                         musicbrainz_releasegroupid, musicbrainz_artistid,
+                         musicbrainz_albumartistid, media, releasetype},
       "sides":          [filename, ...]  # ORDER matters
       "cover":          "cover.jpg" | null,
       "plan":           {tracks, normalize, target_peak_db,
@@ -53,7 +55,11 @@ SCHEMA_VERSION = 2
 _TAG_KEYS: frozenset[str] = frozenset((
     "artist", "album", "year", "genre", "label",
     "catalog_number", "country", "composer", "conductor",
-    "musicbrainz_albumid", "discogs_release_id",
+    "musicbrainz_albumid", "discogs_release_id", "original_year",
+    # Stable MB identifiers + release facts a music server keys on, filled
+    # from the chosen release at apply-time (see routes.tagging._mb_extra_tags).
+    "musicbrainz_releasegroupid", "musicbrainz_artistid",
+    "musicbrainz_albumartistid", "media", "releasetype",
 ))
 
 

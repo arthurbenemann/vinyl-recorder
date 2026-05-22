@@ -341,6 +341,60 @@ def _combine_then_open_editor(page, sides, *, artist, album, year="2026"):
     return album_id
 
 
+def test_combine_and_edit_opens_editor_directly(stack, page):
+    """The opt-in "combine & edit" button combines the sides and jumps
+    straight into the split editor — no trip back to the library row."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        side_names = [s.name for s in sides]
+        page.wait_for_function(
+            f"() => document.querySelectorAll('input.row-check[data-fname]').length >= {len(sides)}",
+            timeout=10_000,
+        )
+        page.evaluate(
+            """(names) => {
+                for (const n of names) {
+                    const cb = document.querySelector(`input.row-check[data-fname="${n}"]`);
+                    if (!cb.checked) cb.click();
+                }
+            }""",
+            side_names,
+        )
+        page.wait_for_selector('#combine-btn:not([disabled])', timeout=5_000)
+        page.click('#combine-btn')
+        page.wait_for_selector('#tag-modal:not([hidden])')
+        page.wait_for_selector('#combine-sides-section:not([hidden])')
+        # The "combine & edit" button is revealed in combine mode.
+        page.wait_for_selector('#tag-apply-edit-btn:not([hidden])')
+        page.fill('#t-artist', "CombineEditArtist")
+        page.fill('#t-album',  "CombineEditAlbum")
+        page.fill('#t-year',   "2026")
+        page.click('#tag-apply-edit-btn')
+        # Tag modal closes and the editor opens directly on the new album.
+        page.wait_for_function(
+            "() => document.getElementById('tag-modal').hasAttribute('hidden')",
+            timeout=20_000,
+        )
+        page.wait_for_selector('#we-modal:not([hidden])')
+        page.wait_for_function(
+            "() => typeof we !== 'undefined' && we.loaded === true && we.total > 0",
+            timeout=20_000,
+        )
+        # The editor is bound to a real, freshly-combined album.
+        album_id = page.evaluate("() => we.albumId")
+        assert album_id, "editor opened with no album bound"
+        bound = page.evaluate(
+            "(id) => !!(window.albumsByName && window.albumsByName[id])", album_id)
+        assert bound, "editor album not present in albumsByName"
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
 # ── PR B: ghost-plan guard ───────────────────────────────────────────────
 def test_wave_editor_open_close_does_not_write_default_plan(stack, page):
     """Reproduces the "ghost plan" issue: opening + closing the editor on
@@ -534,6 +588,45 @@ def test_silence_detection_settings_persist_across_reload(stack, page):
         # The dB readout must reflect the seeded slider, not the -24.0 dB the
         # static HTML ships (the inline oninput only fires on user drag).
         assert seeded["readout"] == expected_readout, seeded
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
+# ── Split evenly: seed N equal cuts on a gapless side ────────────────────
+def test_split_evenly_seeds_equal_cuts(stack, page):
+    """The "split evenly" popover is the gapless-side fallback: it seeds N-1
+    equally-spaced draggable cuts when silence detection finds nothing. Pins
+    the spacing + the resulting track/skip arrays."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="EvenSplitArtist", album="EvenSplitAlbum"
+        )
+        # Open the "split evenly" popover and ask for 4 equal tracks.
+        page.click('button:has-text("split evenly")')
+        page.wait_for_selector('#we-pop-even:not([hidden])')
+        page.fill('#we-even-n', '4')
+        page.click('#we-pop-even button:has-text("place cuts")')
+        # 3 interior cuts at the quarter points; 4 track slots, none skipped.
+        page.wait_for_function(
+            "() => Array.isArray(we.cuts) && we.cuts.length === 3", timeout=5_000)
+        state = page.evaluate(
+            "() => ({ cuts: we.cuts.slice(), total: we.total, "
+            "titles: we.titles.slice(), skipped: we.skipped.slice() })"
+        )
+        q = state['total'] / 4
+        for i, c in enumerate(state['cuts'], start=1):
+            assert abs(c - q * i) < 0.05, \
+                f"cut {i} at {c}, expected ~{q * i} (total {state['total']})"
+        assert len(state['titles']) == 4, state['titles']
+        assert state['skipped'] == [False, False, False, False], state['skipped']
+        # Opening the even popover must have closed the silence popover.
+        assert page.is_hidden('#we-pop-silence')
     finally:
         for p in sides:
             try: p.unlink(missing_ok=True)
@@ -876,6 +969,114 @@ def test_music_row_expands_into_track_list(stack, page):
             arg=album_id,
             timeout=5_000,
         )
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
+# ── Keyboard: add cut at playhead (c) + nudge nearest cut (←/→) ───────────
+def test_wave_editor_keyboard_add_and_nudge_cut(stack, page):
+    """`c` drops a cut at the playhead and ←/→ nudges the nearest cut — the
+    keyboard-driven split workflow. Asserts against `we.cuts` directly."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="KeysArtist", album="KeysAlbum",
+        )
+        before = page.evaluate("we.cuts.length")
+        # Focus the canvas so the global keydown handler sees a non-input
+        # target, then drop a cut at the playhead with `c`.
+        page.evaluate("document.getElementById('we-canvas').focus()")
+        page.keyboard.press("c")
+        page.wait_for_function(
+            f"() => we.cuts.length === {before} + 1", timeout=5_000,
+        )
+        # Park the playhead on that cut so it's the nearest, capture its
+        # position, then nudge it right with ArrowRight.
+        pos = page.evaluate(
+            "() => { const c = we.cuts[we.cuts.length - 1];"
+            " weAudio.seek(c); return c; }"
+        )
+        page.keyboard.press("ArrowRight")
+        page.wait_for_function(
+            f"() => we.cuts.some(c => c > {pos} + 0.05)", timeout=5_000,
+        )
+        # And ArrowLeft moves it back below the nudged position.
+        page.keyboard.press("ArrowLeft")
+        page.wait_for_function(
+            f"() => we.cuts.some(c => Math.abs(c - {pos}) < 0.05)",
+            timeout=5_000,
+        )
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
+# ── Keyboard: preview the nearest cut (p) ────────────────────────────────
+def test_wave_editor_preview_cut_plays_around_boundary(stack, page):
+    """`p` auditions the nearest cut: it seeks to ~2s before the boundary,
+    starts playing, and arms the auto-stop at ~2s after."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="PreviewArtist", album="PreviewAlbum",
+        )
+        # Plant a cut in the middle (no dependency on the add-cut shortcut),
+        # park the playhead away from it, then preview with `p`.
+        cut = page.evaluate(
+            "() => { const c = we.total / 2; weAddCutAtTime(c);"
+            " weAudio.seek(0); return c; }"
+        )
+        page.evaluate("document.getElementById('we-canvas').focus()")
+        page.keyboard.press("p")
+        # Seeks to ~cut-2 and starts a bounded play (playingEnd ~ cut+2).
+        page.wait_for_function(
+            f"() => we.isPlaying === true"
+            f" && Math.abs(weAudio.currentTime - ({cut} - 2)) < 0.6"
+            f" && we.playingEnd != null && Math.abs(we.playingEnd - ({cut} + 2)) < 0.01",
+            timeout=5_000,
+        )
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
+# ── Clear-cuts is a non-blocking, undoable toast (not a confirm dialog) ───
+def test_clear_cuts_is_undoable(stack, page):
+    """`clear cuts` wipes the cuts immediately and offers a 5 s Undo toast;
+    clicking Undo restores them. No confirm() dialog blocks the flow."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="ClearUndoArtist", album="ClearUndoAlbum",
+        )
+        # Plant a couple of cuts (no dependency on the add-cut shortcut).
+        page.evaluate(
+            "() => { weAddCutAtTime(we.total * 0.33);"
+            " weAddCutAtTime(we.total * 0.66); }"
+        )
+        page.wait_for_function("() => we.cuts.length === 2", timeout=5_000)
+
+        page.get_by_role("button", name="clear cuts").click()
+        page.wait_for_function("() => we.cuts.length === 0", timeout=5_000)
+        undo = page.locator(".toast-with-undo")
+        expect(undo).to_be_visible(timeout=5_000)
+
+        # Undo restores the exact cut set.
+        page.locator(".toast-with-undo .toast-undo").click()
+        page.wait_for_function("() => we.cuts.length === 2", timeout=5_000)
     finally:
         for p in sides:
             try: p.unlink(missing_ok=True)
