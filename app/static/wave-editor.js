@@ -159,10 +159,12 @@ async function _savePlanNow() {
   const outputFormat = document.getElementById('we-format')?.value || 'flac';
   const bitDepth     = parseInt(document.getElementById('we-bitdepth')?.value, 10);
   const sampleRate   = parseInt(document.getElementById('we-sample-rate')?.value, 10);
+  const replaygain   = document.getElementById('we-replaygain');
   const planBody = { tracks, expected_version: we.planVersion };
   if (!Number.isNaN(bitDepth))   planBody.bit_depth     = bitDepth;
   if (!Number.isNaN(sampleRate)) planBody.sample_rate   = sampleRate;
   if (outputFormat)              planBody.output_format = outputFormat;
+  if (replaygain)                planBody.replaygain    = !!replaygain.checked;
   // Clear dirty BEFORE awaiting the fetch. The body we're about to POST
   // is already a snapshot of we.* at this point, so we've "consumed" the
   // current dirt. Any edit that lands while the fetch is in flight will
@@ -402,6 +404,12 @@ function openWaveEditor(fname) {
   const srSelReset  = document.getElementById('we-sample-rate');
   if (srSelReset)  srSelReset.value = '0';
   _weApplyFormatUI();
+  // Seed the silence-detection controls from the user's last-used values.
+  // Unlike the encoder selectors (reset to a clean slate each open), the
+  // detection thresholds track the listener's hardware chain — noise floor,
+  // gap length, side-flip length — which stays put across a stack of rips,
+  // so remembering them removes per-album re-tuning.
+  _weHydrateDetectSettings();
   // Reset the auto-save indicator. Each open starts hidden; the first
   // successful debounced save flips it to "saved just now".
   _stopSavedTicker();
@@ -519,6 +527,8 @@ async function weLoadExistingSplit(fname) {
     if (bdSel && plan.bit_depth != null) bdSel.value = String(plan.bit_depth);
     const srSel = document.getElementById('we-sample-rate');
     if (srSel && plan.sample_rate != null) srSel.value = String(plan.sample_rate);
+    const rgChk = document.getElementById('we-replaygain');
+    if (rgChk && typeof plan.replaygain === 'boolean') rgChk.checked = plan.replaygain;
     drawAll();
   } catch (e) { /* nothing existing — leave the empty state */ }
   finally {
@@ -1019,6 +1029,24 @@ function _nearestCutIndex(t) {
   return best;
 }
 
+// Nudge the cut nearest the playhead by `delta` seconds, clamped so it can't
+// cross a neighbour (which would reorder we.cuts and misalign the per-region
+// title/skip arrays). The playhead follows the cut so repeated nudges keep
+// targeting it and the move is visible.
+function weNudgeNearestCut(delta) {
+  if (!we.cuts.length) return;
+  const i = _nearestCutIndex(weAudio.currentTime || 0);
+  const next = window._weNudgedCutValue(we.cuts, i, delta, we.total);
+  if (next == null || next === we.cuts[i]) return;
+  we.cuts[i] = next;
+  we.dirty = true;
+  invalidateMeasure();
+  if (weAudio.hasSrc) weAudio.seek(next);
+  renderWaveformOverlay();
+  renderMinimapOverlay();
+  renderTracks();
+}
+
 function weKeyDown(e) {
   // Tab cycles inside the open modal so AT / keyboard users can't lose
   // context to the underlying library page. trapModalFocus is defined in
@@ -1054,11 +1082,20 @@ function weKeyDown(e) {
     }
     case 'ArrowLeft':
     case 'ArrowRight': {
-      if (!weAudio.hasSrc) return;
+      // Nudge the cut nearest the playhead ±0.1s (±1s with shift) — matches
+      // the on-canvas help + aria contract. Position with j/k first, then
+      // fine-tune the boundary with the arrows. No-op when there are no cuts.
+      if (!we.cuts.length) return;
       e.preventDefault();
       const step = (e.shiftKey ? 1.0 : 0.1) * (e.key === 'ArrowLeft' ? -1 : 1);
-      weAudio.seek(Math.max(0, Math.min(we.total, t + step)));
-      renderWaveformOverlay();
+      weNudgeNearestCut(step);
+      return;
+    }
+    case 'c':
+    case 'C': {
+      // Drop a cut at the playhead — the listen-and-tap split workflow.
+      e.preventDefault();
+      weAddCutAtPlayhead();
       return;
     }
     case 'j':
@@ -1570,6 +1607,45 @@ async function _weAutoLoadFromIds(a) {
   }
 }
 
+// Persisted silence-detection settings. Keyed like the other namespaced
+// prefs (lib.sortBy, autoStopSilenceSeconds): a raw value per control.
+const WE_DETECT_PREFS = [
+  { id: 'we-noise',    key: 'we.noiseInt8',  def: 8,   min: 1,   max: 127 },
+  { id: 'we-mindur',   key: 'we.minSilence', def: 1.5, min: 0.2, max: null },
+  { id: 'we-skiplong', key: 'we.skipLong',   def: 15,  min: 2,   max: null },
+];
+
+function _weStoredPref(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+
+function _weSavePref(key, value) {
+  try { localStorage.setItem(key, String(value)); } catch (e) {}
+}
+
+// Seed the detection controls from localStorage (clamped/validated) and wire
+// a one-time change listener per input so every tweak is remembered for the
+// next album. Wiring is idempotent — guarded by a dataset flag — because
+// openWaveEditor runs on each open while the inputs live for the page's life.
+function _weHydrateDetectSettings() {
+  for (const f of WE_DETECT_PREFS) {
+    const el = document.getElementById(f.id);
+    if (!el) continue;
+    el.value = _weDetectSettingValue(_weStoredPref(f.key), f.def, f.min, f.max);
+    if (!el.dataset.persistWired) {
+      el.dataset.persistWired = '1';
+      el.addEventListener('change', () => _weSavePref(f.key, el.value));
+    }
+  }
+  // Re-sync the dB readout to the (re-seeded) noise slider — the inline
+  // oninput only fires on user drag, not on this programmatic set.
+  const noise   = document.getElementById('we-noise');
+  const readout = document.getElementById('we-noise-readout');
+  if (noise && readout && typeof weNoiseSliderDb === 'function') {
+    readout.textContent = weNoiseSliderDb(noise.value) + ' dB';
+  }
+}
+
 async function weDetectAndApply() {
   await weDetectInternal({ replace: true });
 }
@@ -1699,6 +1775,7 @@ async function weApplySplit() {
     }));
   if (!tracks.length || tracks.every(t => t.skip)) return;
   const normalize = !!document.getElementById('we-normalize').checked;
+  const replaygain = !!document.getElementById('we-replaygain')?.checked;
   const bitDepth = parseInt(document.getElementById('we-bitdepth').value, 10) || 0;
   const sampleRate = parseInt(document.getElementById('we-sample-rate').value, 10) || 0;
   const outputFormat = document.getElementById('we-format')?.value || 'flac';
@@ -1716,7 +1793,7 @@ async function weApplySplit() {
   showBar(bar, 'encoding tracks');
   try {
     const d = await withJobProgress(bar, async (jobId) => {
-      const body = { album_id: we.albumId, tracks, bit_depth: bitDepth, sample_rate: sampleRate, output_format: outputFormat, job_id: jobId };
+      const body = { album_id: we.albumId, tracks, bit_depth: bitDepth, sample_rate: sampleRate, output_format: outputFormat, replaygain, job_id: jobId };
       if (normalize) {
         body.normalize         = true;
         body.target_peak_db    = we.targetPeakDb;
