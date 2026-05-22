@@ -427,6 +427,16 @@
             <option value="24">24-bit</option>
           </select>
         </label>
+        <label class="we-process-bits"
+               title="Stereo keeps the capture as-is. Mono (L+R) suits genuine mono pressings — it cancels out-of-phase groove noise. Left / Right rescue a single good channel from a damaged or miswired side.">
+          output channels
+          <select id="we-channels">
+            <option value="stereo" selected>stereo (keep)</option>
+            <option value="mono">mono (L+R sum)</option>
+            <option value="left">left only</option>
+            <option value="right">right only</option>
+          </select>
+        </label>
         <label class="we-process-bits">
           output sample rate
           <select id="we-sample-rate">

@@ -87,6 +87,17 @@ def test_track_length_hint_wired(css):
     assert ".range.short" in css and ".range.long" in css
 
 
+def test_channel_mode_select_present_and_wired(html):
+    """The output-channels select exists in the split editor and the editor
+    reads it into the split + draft-save payloads + reload rehydration."""
+    assert 'id="we-channels"' in html
+    for mode in ("stereo", "mono", "left", "right"):
+        assert f'value="{mode}"' in html
+    we_js = (REPO_ROOT / "app" / "static" / "wave-editor.js").read_text(encoding="utf-8")
+    assert "we-channels" in we_js
+    assert "channel_mode" in we_js
+
+
 def test_wave_canvas_is_keyboard_focusable(html):
     # The canvas has rich key handlers — exposing it to keyboard nav requires
     # tabindex + role + aria-label so screen readers announce it.

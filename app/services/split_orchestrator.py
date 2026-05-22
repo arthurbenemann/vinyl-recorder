@@ -39,7 +39,10 @@ from services.ffmpeg import (
     run_ffmpeg_with_progress, safe_path_component,
 )
 from services.jobs import finish_job, start_job
-from state import ALLOWED_OUTPUT_FORMATS, ALLOWED_SPLIT_SAMPLE_RATES, MUSIC_DIR
+from state import (
+    ALLOWED_CHANNEL_MODES, ALLOWED_OUTPUT_FORMATS, ALLOWED_SPLIT_SAMPLE_RATES,
+    MUSIC_DIR,
+)
 
 
 # Container/codec settings per output_format. `ext` is the file extension
@@ -83,6 +86,23 @@ def sort_name(name: str) -> str:
 def _wav_codec_for_bits(bits: Optional[int]) -> str:
     """16-bit signed LE for WAV unless the user asked for 24-bit explicitly."""
     return "pcm_s24le" if bits == 24 else "pcm_s16le"
+
+
+def _pan_filter(channel_mode: str) -> str:
+    """ffmpeg `pan` expression for the requested channel mode, or "" for
+    stereo (no filter — the capture passes through untouched). The non-
+    stereo modes all fold to a single mono channel:
+      mono  — L+R average: genuine mono pressings cancel vertical (out-of-
+              phase) groove noise this way, ~3 dB quieter surface + half size
+      left  — left channel only; right — right channel only: rescue a
+              damaged or miswired channel without the bad one bleeding in.
+    Applied first in the chain so gain/resample/dither all see the final
+    channel layout."""
+    return {
+        "mono":  "pan=mono|c0=0.5*c0+0.5*c1",
+        "left":  "pan=mono|c0=c0",
+        "right": "pan=mono|c0=c1",
+    }.get(channel_mode, "")
 
 
 def build_audio_filters(*, apply_gain: bool, gain_db: float,
@@ -384,6 +404,10 @@ async def _emit_track(*, req, t, i: int, out_idx: int, out_total: int, pad: int,
         apply_gain=apply_gain, gain_db=gain_db, target_rate=target_rate,
         sample_fmt=sample_fmt, lossless=settings["lossless"],
     )
+    # Channel fold first so gain/resample/bit-depth all see the final layout.
+    pan = _pan_filter(getattr(req, "channel_mode", "stereo"))
+    if pan:
+        af.insert(0, pan)
     # The concat demuxer presents the full album as one virtual input
     # stream so -ss/-to act in album time, including across side boundaries
     # — same behaviour as the old concat.flac input but no on-disk artifact.
@@ -451,6 +475,7 @@ def _persist_split_plan(req, relpath: str) -> None:
         "bit_depth":        req.bit_depth,
         "sample_rate":      req.sample_rate,
         "output_format":    req.output_format,
+        "channel_mode":     getattr(req, "channel_mode", "stereo"),
         "replaygain":       req.replaygain,
     }
     manifest = albums_fs.read_manifest(req.album_id)
@@ -490,6 +515,11 @@ async def split_album(req, manifest: dict) -> dict:
         raise SplitValidationError(
             f"unsupported output_format {req.output_format!r}; "
             f"allowed: {sorted(ALLOWED_OUTPUT_FORMATS)}"
+        )
+    if getattr(req, "channel_mode", "stereo") not in ALLOWED_CHANNEL_MODES:
+        raise SplitValidationError(
+            f"unsupported channel_mode {req.channel_mode!r}; "
+            f"allowed: {sorted(ALLOWED_CHANNEL_MODES)}"
         )
 
     try:

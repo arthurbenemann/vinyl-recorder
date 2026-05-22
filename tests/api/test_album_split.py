@@ -443,6 +443,54 @@ def test_split_normalize_adds_volume_filter(monkeypatch):
         _cleanup_album(aid)
 
 
+def test_split_mono_adds_pan_filter(monkeypatch):
+    """channel_mode=mono folds L+R via a leading pan filter; stereo adds none."""
+    env = _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+            "channel_mode": "mono",
+        })
+        assert r.status_code == 200, r.text
+        af = env.ffmpeg_calls[0][env.ffmpeg_calls[0].index("-af") + 1]
+        assert "pan=mono|c0=0.5*c0+0.5*c1" in af
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_stereo_default_no_pan_filter(monkeypatch):
+    env = _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+        })
+        assert r.status_code == 200, r.text
+        cmd = env.ffmpeg_calls[0]
+        # Nothing requested → no -af at all (so definitely no pan).
+        assert "-af" not in cmd
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_rejects_bad_channel_mode(monkeypatch):
+    env = _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    try:
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+            "channel_mode": "surround",
+        })
+        assert r.status_code == 400
+        assert env.ffmpeg_calls == []  # rejected before any encode
+    finally:
+        _cleanup_album(aid)
+
+
 def test_split_no_normalize_no_volume_filter(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
