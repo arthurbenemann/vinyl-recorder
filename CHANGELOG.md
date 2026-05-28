@@ -1,3 +1,58 @@
+## v1.5.0 — 2026-05-28
+
+### Features
+- **ui:** Add tooltips for shortcuts, health stats, peak meter; rename combine button (#22)
+- **upstream:** Prompt user to reconnect when the upstream stream drops (#32)
+- **ui:** Toast-based undo for deletes, saving indicator, bulk progress, cleaner pi-deploy errors (#27)
+- **ui:** Distinct dot/status for idle-standby and paused connection states (#34)
+- **ui:** Add a first-run onboarding overlay explaining the pipeline (#37)
+- **tags:** Write ALBUMARTIST on every track + COMPILATION for Various Artists (#38)
+- **tags:** Write ReplayGain track + album gain on FLAC split output (#39)
+- **split:** Write a folder cover.jpg next to the tracks (#47)
+- **recording:** Show estimated recording headroom next to disk-free (#50)
+- **recording:** Warn when recording but no input signal is detected (#51)
+- **wave-editor:** Remember silence-detection settings across albums and reloads (#55)
+- **tagging:** Paste a MusicBrainz release link or MBID to load it directly (#56)
+- **ui:** "/" focuses the library search (#64)
+- **library:** Download a finished album as a single zip (#65)
+- **tags:** Write one GENRE tag per value (multi-valued genres) (#40)
+- **tags:** Embed MusicBrainz IDs + MEDIA + RELEASETYPE on FLAC tracks (#41)
+- **wave-editor:** Keyboard split workflow — `c` adds a cut, ←/→ nudge the nearest (#46)
+- **tags:** Write ARTISTSORT / ALBUMARTISTSORT so "The …" artists sort right (#42)
+- **wave-editor:** Preview the nearest cut (`p`) to audition a boundary (#48)
+- **workflow:** "& edit" — create an album and jump straight into the split editor (#62)
+- **split:** Dither when downconverting 24-bit captures to 16-bit (#43)
+- **wave-editor:** Flag suspiciously short / long tracks in the track list (#49)
+- **tagging:** Show track count on release candidates to pick the pressing (#54)
+- **split:** Output channel mode — stereo / mono-sum / left / right (#44)
+- **wave-editor:** Make "clear cuts" a non-blocking, undoable action (#53)
+- **split:** Write a vinyl-rip.log provenance sidecar next to the tracks (#45)
+- **wave-editor:** "split evenly" to seed equal-interval cuts on a gapless side (#58)
+- **split:** Export an M3U playlist + CUE sheet alongside the tracks (#52)
+- **split:** Write DISCNUMBER/DISCTOTAL for multi-LP sets (#60)
+- **tags:** Write ORIGINALDATE so reissues sort by original release (#61)
+- **wave-editor:** On-demand keyboard + mouse shortcuts legend (#63)
+- **ui:** Remember the stream URL + offer recent sources (#59)
+- **tagging:** Upload a custom cover image for an album (#57)
+
+### Bug Fixes
+- **ws:** Narrow except in cleanup; refactor(recordings): extract process lifecycle to service (#24)
+- **recordings:** Include paused time correctly when finalizing recording elapsed (#28)
+- **recordings:** Offload test-stream subprocess.run to a worker thread (#29)
+- **albums-fs:** Clean up partial album dir on create_album failure (#30)
+- **albums:** Add plan_version conflict detection to prevent multi-tab clobber (#33)
+- **wave-editor:** Coalesce concurrent plan saves to avoid racing POSTs (#31)
+
+### Refactoring
+- **css:** Extract design tokens, dedupe rules, audit unused selectors (#26)
+- **wave-editor:** Extract timeline-state and audio-manager modules; remove dead code (#25)
+
+### Tests
+- Add unit coverage for state, ffmpeg, split_orchestrator (#23)
+
+### Changes
+- Merge main into claude/cleanup-feedback-SXdzD: keep dirty-pre-fetch (#31) + saving indicator (#27)
+
 ## v1.5.0 — 2026-05-22
 
 ### Features
