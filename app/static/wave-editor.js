@@ -1689,7 +1689,7 @@ function _weApplyTracklist(track_details, sourceLabel) {
   we.positions = r.positions;
   invalidateMeasure();
   document.getElementById('we-search-status').textContent = r.overflow
-    ? `${td.length} tracks · ${sourceLabel} · ${r.overflow} don't fit recording`
+    ? `${td.length} tracks · ${sourceLabel} · ${r.overflow} side${r.overflow > 1 ? 's' : ''} longer than recording`
     : `${td.length} tracks · ${sourceLabel}`;
   drawAll();
   return true;

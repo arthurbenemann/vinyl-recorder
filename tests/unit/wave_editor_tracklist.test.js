@@ -5,10 +5,14 @@
 // The Discogs-apply path turns a flat list of {title, duration, position}
 // rows into the editor's cuts/titles/skipped/positions arrays. When the
 // recording has multiple sides AND the tracklist carries side-prefixed
-// positions (A1, B2, …), durations cumulate per side and each side change
-// emits an end-of-side cut + a draggable side-start cut with a skipped
-// gap region between (runout + needle-drop dead time). This file pins
-// down both that path and the global-cumulative fallback.
+// positions (A1, B2, …), each side's tracks are spread across that side's
+// span — weighted by duration when present, evenly split when not — and a
+// skipped "silence" region is seeded at every side interface (a lead-in
+// before each side's first track, plus a lead-out after the final track).
+// The lead-in makes the first track region 1, so it gets a normal handle.
+// Without side prefixes the whole album is laid out as one side. This file
+// pins down both paths, including the durationless case (the old cumulative
+// layout collapsed every track of a durationless side onto its first track).
 //
 // `_weSideBounds` / `_weCutGroupSpan` read editor state from
 // `window.we`; the helper `setWe(...)` here pokes a fresh state shape
@@ -84,65 +88,115 @@ check('letter: 2-03', { x: letter('2-03') },      { x: '2' });
 check('letter: empty', { x: letter('') },         { x: '' });
 check('letter: bare 7', { x: letter('7') },       { x: '' });
 
-// ── per-side anchoring
-check('per-side: A1 A2 B1 B2 (slack at end of side A)',
-  cutsFor(t([['T1',3,'A1'],['T2',4,'A2'],['T3',5,'B1'],['T4',4,'B2']]), s(8,10), 18),
-  { cuts: [3,7,8,13],
-    titles: ['T1','T2','','T3','T4'],
-    skipped: [false,false,true,false,false],
-    positions: ['A1','A2','','B1','B2'],
+// Rebuild the region list a result implies, the same way renderTracks does.
+function regionsOf(r, total) {
+  const b = [0, ...r.cuts, total];
+  return b.slice(0, -1).map((start, i) => ({
+    start, end: b[i + 1], dur: b[i + 1] - start,
+    title: r.titles[i], skip: r.skipped[i], pos: r.positions[i],
+  }));
+}
+const aligned = (r) =>
+  r.titles.length === r.cuts.length + 1 &&
+  r.skipped.length === r.cuts.length + 1 &&
+  r.positions.length === r.cuts.length + 1;
+
+// ── per-side: durationless tracks even-split inside each side ─────────────
+// The reported bug: a release with no Discogs durations collapsed every
+// track onto its side's first track. Now they spread evenly, with a lead-in
+// skip before each side and a lead-out skip at the end.
+check('per-side durationless: even split + lead-in/flip/lead-out skips',
+  cutsFor(t([['T1',null,'A1'],['T2',null,'A2'],['T3',null,'B1'],['T4',null,'B2']]), s(100,100), 200),
+  { cuts: [2,51,100,102,150,198],
+    titles: ['','T1','T2','','T3','T4',''],
+    skipped: [true,false,false,true,false,false,true],
+    positions: ['','A1','A2','','B1','B2',''],
     overflow: 0 });
 
-check('per-side: cumulative fits side A exactly (no gap region)',
-  cutsFor(t([['T1',3,'A1'],['T2',4,'A2'],['T3',1,'A3'],['T4',5,'B1']]), s(8,10), 18),
-  { cuts: [3,7,8],
-    titles: ['T1','T2','T3','T4'],
-    skipped: [false,false,false,false],
-    positions: ['A1','A2','A3','B1'],
+// ── per-side: durations present weight the split (proportional fill) ──────
+check('per-side weighted: 30/60 split fills side A 1:2',
+  cutsFor(t([['T1',30,'A1'],['T2',60,'A2'],['T3',60,'B1'],['T4',30,'B2']]), s(92,94), 186),
+  { cuts: [2,32,92,94,154,184],
+    titles: ['','T1','T2','','T3','T4',''],
+    skipped: [true,false,false,true,false,false,true],
+    positions: ['','A1','A2','','B1','B2',''],
     overflow: 0 });
 
-check('per-side: side A overflows — last A track clamped, overflow counted',
-  cutsFor(t([['T1',3,'A1'],['T2',4,'A2'],['T3',4,'A3'],['T4',5,'B1']]), s(8,10), 18),
-  { cuts: [3,7,8],
-    titles: ['T1','T2','T3','T4'],
-    overflow: 1 });
+// ── per-side: a Discogs side longer than the recording is scaled + flagged
+check('per-side overflow: oversize side is scaled to fit and counted',
+  cutsFor(t([['T1',80,'A1'],['T2',80,'A2'],['T3',40,'B1'],['T4',40,'B2']]), s(100,100), 200),
+  { cuts: [2,51,100,102,150,198], overflow: 1 });
 
-check('per-side: 3-side release emits a draggable side-start cut at each boundary',
-  cutsFor(t([['T1',3,'A1'],['T2',4,'A2'],['T3',5,'B1'],['T4',4,'B2'],['T5',2,'C1'],['T6',3,'C2']]),
-    s(8,10,6), 24),
-  { cuts: [3,7,8,13,17,18,20],
-    skipped: [false,false,true,false,false,true,false,false],
-    positions: ['A1','A2','','B1','B2','','C1','C2'],
-    overflow: 0 });
-
+// ── per-side: multi-disc "1-01" / "2-01" map to sides 0 and 1
 check('per-side: multi-disc "1-01" / "2-01" treated as sides 0 and 1',
-  cutsFor(t([['T1',3,'1-01'],['T2',4,'1-02'],['T3',5,'2-01'],['T4',4,'2-02']]), s(8,10), 18),
-  { cuts: [3,7,8,13],
-    skipped: [false,false,true,false,false],
-    positions: ['1-01','1-02','','2-01','2-02'],
+  cutsFor(t([['T1',null,'1-01'],['T2',null,'1-02'],['T3',null,'2-01'],['T4',null,'2-02']]), s(100,100), 200),
+  { cuts: [2,51,100,102,150,198],
+    positions: ['','1-01','1-02','','2-01','2-02',''],
     overflow: 0 });
 
-// ── fallback paths
-check('fallback: no positions → global cumulative, no skip regions',
-  cutsFor(t([['T1',3,''],['T2',4,''],['T3',5,''],['T4',4,'']]), s(8,10), 18),
-  { cuts: [3,7,12],
-    titles: ['T1','T2','T3','T4'],
-    skipped: [false,false,false,false],
-    positions: ['','','',''],
+// ── per-side: Discogs C-side on a 2-side recording stacks onto the last side
+check('clamp: extra Discogs side stacks onto the recording\'s last side',
+  cutsFor(t([['T1',null,'A1'],['T2',null,'A2'],['T3',null,'B1'],['T4',null,'B2'],['T5',null,'C1'],['T6',null,'C2']]),
+    s(100,100), 200),
+  { cuts: [2,51,100,102,126,150,174,198],
+    titles: ['','T1','T2','','T3','T4','T5','T6',''],
+    skipped: [true,false,false,true,false,false,false,false,true],
+    positions: ['','A1','A2','','B1','B2','C1','C2',''],
     overflow: 0 });
 
-check('fallback: single-side recording → global cumulative even with positions',
-  cutsFor(t([['T1',3,'A1'],['T2',4,'A2'],['T3',5,'A3'],['T4',4,'A4']]), s(18), 18),
-  { cuts: [3,7,12],
-    titles: ['T1','T2','T3','T4'],
-    skipped: [false,false,false,false],
+// ── structural invariants on the real "It's Album Time" shape ─────────────
+// 12 durationless tracks, 4 sides, continuous numbering (A1..A3, B4..B6, …).
+const TT = cutsFor(
+  t([['Intro',null,'A1'],['Leisure',null,'A2'],['Acapulco',null,'A3'],
+     ['Svensk',null,'B4'],['Strandbar',null,'B5'],['Delorean',null,'B6'],
+     ['Johnny',null,'C7'],['Alfonso',null,'C8'],['Swing1',null,'C9'],
+     ['Swing2',null,'D10'],['OhJoy',null,'D11'],['Norse',null,'D12']]),
+  s(100,100,100,100), 400);
+const TTr = regionsOf(TT, 400);
+check('album-time: parallel arrays stay index-aligned', { x: aligned(TT) }, { x: true });
+check('album-time: no zero-width "doesn\'t fit" region',
+  { x: TTr.every(g => g.dur >= 0.5) }, { x: true });
+check('album-time: all 12 tracks present as non-skip regions, in order',
+  { x: TTr.filter(g => !g.skip).map(g => g.title) },
+  { x: ['Intro','Leisure','Acapulco','Svensk','Strandbar','Delorean',
+        'Johnny','Alfonso','Swing1','Swing2','OhJoy','Norse'] });
+check('album-time: non-skip positions follow the tracklist',
+  { x: TTr.filter(g => !g.skip).map(g => g.pos) },
+  { x: ['A1','A2','A3','B4','B5','B6','C7','C8','C9','D10','D11','D12'] });
+check('album-time: region 0 is the lead-in skip at t=0 → A1 (region 1) gets a handle',
+  { lead: TTr[0].skip && TTr[0].start === 0, a1: !TTr[1].skip && TTr[1].title === 'Intro' },
+  { lead: true, a1: true });
+check('album-time: lead-out skip ends at the album total',
+  { x: TTr[TTr.length - 1].skip && Math.abs(TTr[TTr.length - 1].end - 400) < 0.001 },
+  { x: true });
+check('album-time: each side keeps exactly its 3 tracks (no side eats the rest)',
+  { x: [0,1,2,3].map(k =>
+      TTr.filter(g => !g.skip && g.start >= k*100 && g.start < (k+1)*100).length) },
+  { x: [3,3,3,3] });
+check('album-time: durationless → nothing overflows', { x: TT.overflow }, { x: 0 });
+
+// ── fallback paths (no usable side prefixes → whole album is one side) ─────
+check('fallback: no side letters → one side, even split + lead-in/lead-out',
+  cutsFor(t([['T1',null,''],['T2',null,''],['T3',null,''],['T4',null,'']]), s(204), 204),
+  { cuts: [2,52,102,152,202],
+    titles: ['','T1','T2','T3','T4',''],
+    skipped: [true,false,false,false,false,true],
+    positions: ['','','','','',''],
     overflow: 0 });
 
-check('fallback: only one side letter present → global cumulative',
-  cutsFor(t([['T1',3,'A1'],['T2',4,'A2']]), s(8,10), 18),
-  { cuts: [3],
-    titles: ['T1','T2'],
-    skipped: [false,false],
+check('fallback: single-side recording keeps positions, still gets lead-in/out',
+  cutsFor(t([['T1',null,'A1'],['T2',null,'A2'],['T3',null,'A3'],['T4',null,'A4']]), s(204), 204),
+  { cuts: [2,52,102,152,202],
+    titles: ['','T1','T2','T3','T4',''],
+    skipped: [true,false,false,false,false,true],
+    positions: ['','A1','A2','A3','A4',''],
+    overflow: 0 });
+
+check('fallback: only one distinct side letter → global single-side layout',
+  cutsFor(t([['T1',null,'A1'],['T2',null,'A2'],['T3',null,'A3'],['T4',null,'A4']]), s(100,104), 204),
+  { cuts: [2,52,102,152,202],
+    titles: ['','T1','T2','T3','T4',''],
+    positions: ['','A1','A2','A3','A4',''],
     overflow: 0 });
 
 // ── _weSideBounds — drag-clamp window for a cut at time `t`

@@ -135,91 +135,134 @@ function _wePosLetter(pos) {
 
 // ── _weCutsFromTracklist ─────────────────────────────────────────────────
 // Discogs-apply path: turn a flat list of {title, duration, position} rows
-// into the editor's cuts/titles/skipped/positions arrays. Per-side anchored
-// when ≥2 sides AND tracklist carries side prefixes (A1, B2, …); falls back
-// to a global cumulative cursor otherwise.
+// into the editor's cuts/titles/skipped/positions arrays.
+//
+// Layout is per recording side when the recording has ≥2 sides AND the
+// tracklist carries side prefixes (A1, B2, …); otherwise the whole album is
+// treated as a single side (global fallback). Within each side the side's
+// tracks are spread across the side's time span — weighted by Discogs
+// `duration_seconds` when the side carries usable durations, evenly split
+// when it doesn't. Many vinyl releases ship without per-track durations; in
+// that case the real boundaries are unknown, so an even seed (which the user
+// drags onto detected silences) is the most useful starting point. The old
+// cumulative-cursor layout collapsed every track of a durationless side onto
+// the side's first track, leaving the rest zero-width ("doesn't fit").
+//
+// Every side interface gets a skipped "silence" region seeded in: a lead-in
+// before each side's first track (the album lead-in for side 1, the needle-
+// drop gap after each flip for later sides) and a lead-out after the final
+// track. These render as ordinary grey "skip — not exported" rows with
+// normal draggable handles, so the first track (A1) gets a handle and an
+// editable start with no special-casing — it is simply region 1, sitting
+// after the lead-in skip. The seed width is a small constant the user
+// refines by dragging or via "suggest from silence".
+const WE_SILENCE_SEED_S = 2;
+
 function _weCutsFromTracklist(td, sides, total) {
-  const sideStarts = [0];
+  td = (td || []).filter(t => t && t.title);
+  sides = sides || [];
+  const n = sides.length;
+
+  // Side boundaries in album time: B[0]=0 … B[n]=total. The last entry is
+  // forced to `total` so a small rounding mismatch between the summed side
+  // durations and the album total can't strand the final boundary.
+  const B = [0];
   let acc = 0;
-  for (const s of sides) {
-    acc += Number(s && s.duration_seconds) || 0;
-    sideStarts.push(acc);
+  for (let i = 0; i < n; i++) {
+    acc += Number(sides[i] && sides[i].duration_seconds) || 0;
+    B.push(acc);
   }
+  if (n >= 1) B[n] = total;
+
   // Map first-seen Discogs side letter → recording side index. Letters past
   // the last recording side clamp onto the last side (so a Discogs C/D
-  // release on a 2-side recording stacks onto side B rather than crashing).
+  // release on a shorter recording stacks onto the final side rather than
+  // collapsing it).
   const seen = new Map();
   for (const t of td) {
     const L = _wePosLetter(t.position);
-    if (L && !seen.has(L)) seen.set(L, Math.min(sides.length - 1, seen.size));
+    if (L && !seen.has(L)) seen.set(L, Math.min(n - 1, seen.size));
   }
-  const usePerSide = sides.length >= 2 && seen.size >= 2;
+  const usePerSide = n >= 2 && seen.size >= 2;
 
-  const cuts      = [];
-  const titles    = [];
-  const skipped   = [];
-  const positions = [];
-  let overflow = 0;
-
-  if (!usePerSide) {
-    // Global cumulative — original behaviour. One region per Discogs track.
-    let cursor = 0;
+  // Group track indices by side, and capture each side's album-time span.
+  // The global fallback treats the whole album as one side.
+  let groups, spans;
+  if (usePerSide) {
+    groups = Array.from({ length: n }, () => []);
+    spans  = Array.from({ length: n }, (_, i) => [B[i], B[i + 1]]);
+    let cur = 0;
     for (let j = 0; j < td.length; j++) {
-      titles.push(td[j].title);
-      skipped.push(false);
-      positions.push(String(td[j].position || '').trim());
-      if (j === td.length - 1) continue;
-      cursor += Number(td[j].duration_seconds) || 0;
-      if (cursor >= total)   { cuts.push(total); overflow += 1; }
-      else if (cursor > 0)   { cuts.push(cursor); }
+      const L = _wePosLetter(td[j].position);
+      cur = (L && seen.has(L)) ? seen.get(L) : cur;
+      groups[cur].push(j);
     }
-    return { cuts, titles, skipped, positions, overflow };
+  } else {
+    groups = [td.map((_, j) => j)];
+    spans  = [[0, total]];
   }
 
-  let curSide = -1;
-  let cursor  = 0;
-  for (let j = 0; j < td.length; j++) {
-    const Lcur = _wePosLetter(td[j].position);
-    const sCur = (Lcur && seen.has(Lcur))
-      ? seen.get(Lcur)
-      : (curSide >= 0 ? curSide : 0);
-    if (sCur !== curSide) {
-      if (curSide >= 0) {
-        // End-of-prev-side cut. Clamp the cumulative to the side boundary
-        // so the previous side's last track can't bleed into the next
-        // recorded side; if clamping happens, count overflow.
-        const prevSideEnd = sideStarts[curSide + 1];
-        const endCur = Math.min(cursor, prevSideEnd);
-        if (cursor > prevSideEnd + 0.001) overflow += 1;
-        if (endCur > 0 && endCur < total) cuts.push(endCur);
-        // Side-start cut. If it lands strictly past the end-cut, insert a
-        // skipped gap region between them — that's the runout + needle-
-        // drop dead time. If they coincide (no slack on the previous side),
-        // skip the gap and let the side change be a single cut.
-        const sideStart = sideStarts[sCur];
-        if (sideStart > endCur + 0.001 && sideStart < total) {
-          cuts.push(sideStart);
-          titles.push('');
-          skipped.push(true);
-          positions.push('');
-        }
-      }
-      curSide = sCur;
-      cursor  = sideStarts[curSide];
+  const g = WE_SILENCE_SEED_S;
+  const regions = [];                 // {start, end, title, skip, position}
+  let overflow = 0;
+  const skipRegion = (start, end) =>
+    regions.push({ start, end, title: '', skip: true, position: '' });
+
+  for (let i = 0; i < groups.length; i++) {
+    const [lo, hi] = spans[i];
+    const span = hi - lo;
+    const idxs = groups[i];
+    const isLast = i === groups.length - 1;
+    if (span <= 0) continue;
+    if (!idxs.length) { skipRegion(lo, hi); continue; }  // recorded side, no tracks
+
+    // Seed a lead-in skip on every side and a lead-out skip after the final
+    // track. Each gap is capped at a quarter of the side so even a very
+    // short side keeps at least half its span for music.
+    const gLead = Math.min(g, span * 0.25);
+    const gTail = isLast ? Math.min(g, (span - gLead) * 0.25) : 0;
+    const musicLo = lo + gLead;
+    const musicHi = hi - gTail;
+    const musicSpan = Math.max(0, musicHi - musicLo);
+    if (gLead > 0) skipRegion(lo, musicLo);
+
+    // Weight by real durations when the side carries them, else even split.
+    const durs = idxs.map(j => Number(td[j].duration_seconds) || 0);
+    const sum  = durs.reduce((a, b) => a + b, 0);
+    const weights = sum > 0 ? durs : idxs.map(() => 1);
+    const wsum = weights.reduce((a, b) => a + b, 0) || idxs.length;
+    // Informational: the Discogs side runs longer than the recorded side
+    // (wrong pressing / missing audio). We still scale it to fit.
+    if (sum > musicSpan + 0.001) overflow += 1;
+
+    let cum = 0;
+    for (let m = 0; m < idxs.length; m++) {
+      const a = musicLo + musicSpan * (cum / wsum);
+      cum += weights[m];
+      const b = musicLo + musicSpan * (cum / wsum);
+      const j = idxs[m];
+      regions.push({
+        start: a, end: b, title: td[j].title, skip: false,
+        position: String(td[j].position || '').trim(),
+      });
     }
-    titles.push(td[j].title);
-    skipped.push(false);
-    positions.push(String(td[j].position || '').trim());
-    cursor += Number(td[j].duration_seconds) || 0;
-    if (j === td.length - 1) continue;
-    // Don't emit a within-side cut here if the next track lives on a new
-    // side — the side-change branch above will emit the boundary cuts.
-    const Lnext = _wePosLetter(td[j + 1].position);
-    const sNext = (Lnext && seen.has(Lnext)) ? seen.get(Lnext) : curSide;
-    if (sNext !== curSide) continue;
-    if (cursor >= total)   { cuts.push(total); overflow += 1; }
-    else if (cursor > 0)   { cuts.push(cursor); }
+    if (gTail > 0) skipRegion(musicHi, hi);
   }
+
+  // Project regions → parallel arrays. A cut sits at every interior region
+  // boundary; titles/skipped/positions get exactly one entry per region so
+  // they stay index-aligned with the [0, ...cuts, total] regions that
+  // renderTracks rebuilds. musicSpan is always ≥ half a side, so no region
+  // is zero-width and every boundary lands strictly inside (0, total).
+  const round = (x) => Math.round(x * 1000) / 1000;
+  const cuts = [], titles = [], skipped = [], positions = [];
+  regions.forEach((r, idx) => {
+    titles.push(r.title);
+    skipped.push(r.skip);
+    positions.push(r.position);
+    if (idx < regions.length - 1) cuts.push(round(r.end));
+  });
+
   return { cuts, titles, skipped, positions, overflow };
 }
 
