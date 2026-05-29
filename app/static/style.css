@@ -457,7 +457,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .lib-table col.c-size     { width: 80px; }
 .lib-table col.c-fmt      { width: 70px; }
 .lib-table col.c-status   { width: 110px; }
-.lib-table col.c-actions  { width: 180px; }
+.lib-table col.c-actions  { width: 210px; }
 .lib-table th, .lib-table td { overflow: hidden; text-overflow: ellipsis; }
 /* Action cells host icon buttons that must stay fully visible. */
 .lib-table th:last-child, .lib-table td:last-child { overflow: visible; }
@@ -837,7 +837,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 kbd { display: inline-block; font: inherit; font-size: 10px; line-height: 1; padding: 3px 5px; margin-right: 2px; background: var(--surface); border: 0.5px solid var(--border2); border-bottom-width: 1.5px; border-radius: 4px; color: var(--fg); }
 
 /* Wave editor — track list */
-.wave-tracks { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; padding-right: 2px; margin-top: 8px; }
+.wave-tracks { display: flex; flex-direction: column; gap: 4px; max-height: clamp(200px, calc(100vh - 640px), 560px); overflow-y: auto; padding-right: 2px; margin-top: 8px; }
 .wave-track { display: grid; grid-template-columns: 36px 28px 1fr 110px 70px 24px 24px; gap: 6px; align-items: center; padding: 6px 10px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; }
 .wave-track .pn { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: clip; }
 .wave-track .play-track { width: 22px; height: 22px; padding: 0; border-radius: 4px; background: var(--surface2); border: 0.5px solid var(--border2); color: var(--text); font-size: 11px; cursor: pointer; line-height: 1; }
