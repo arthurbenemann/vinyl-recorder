@@ -457,7 +457,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .lib-table col.c-size     { width: 80px; }
 .lib-table col.c-fmt      { width: 70px; }
 .lib-table col.c-status   { width: 110px; }
-.lib-table col.c-actions  { width: 180px; }
+.lib-table col.c-actions  { width: 220px; }
 .lib-table th, .lib-table td { overflow: hidden; text-overflow: ellipsis; }
 /* Action cells host icon buttons that must stay fully visible. */
 .lib-table th:last-child, .lib-table td:last-child { overflow: visible; }
