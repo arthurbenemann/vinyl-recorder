@@ -593,6 +593,13 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
    inside .tag-grid the right column's .candidates expands to consume
    whatever remains after the search bar + subtitle + status. */
 #tag-modal .modal { height: min(960px, 94vh); display: flex; flex-direction: column; }
+
+/* Wave editor modal: same tall footprint so the track list — which grows
+   with the album's cut count — fills the leftover height rather than
+   overflowing into a cramped 240 px box. All fixed-height sections
+   (toolbar, minimap, waveform, process controls) claim their natural
+   height; .wave-tracks takes the rest via flex: 1. */
+#we-modal .modal { height: min(960px, 94vh); display: flex; flex-direction: column; }
 #tag-modal .tag-grid { flex: 1 1 auto; min-height: 0; align-items: stretch; }
 #tag-modal .tag-col { min-height: 0; }
 #tag-modal .tag-col:nth-child(2) .candidates { flex: 1 1 0; max-height: none; min-height: 200px; }
@@ -837,7 +844,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 kbd { display: inline-block; font: inherit; font-size: 10px; line-height: 1; padding: 3px 5px; margin-right: 2px; background: var(--surface); border: 0.5px solid var(--border2); border-bottom-width: 1.5px; border-radius: 4px; color: var(--fg); }
 
 /* Wave editor — track list */
-.wave-tracks { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; padding-right: 2px; margin-top: 8px; }
+.wave-tracks { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; min-height: 80px; max-height: none; overflow-y: auto; padding-right: 2px; margin-top: 8px; }
 .wave-track { display: grid; grid-template-columns: 36px 28px 1fr 110px 70px 24px 24px; gap: 6px; align-items: center; padding: 6px 10px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; }
 .wave-track .pn { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: clip; }
 .wave-track .play-track { width: 22px; height: 22px; padding: 0; border-radius: 4px; background: var(--surface2); border: 0.5px solid var(--border2); color: var(--text); font-size: 11px; cursor: pointer; line-height: 1; }
