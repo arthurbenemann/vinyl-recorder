@@ -710,24 +710,20 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .pi-deploy-log .info { color: var(--blue); }
 .pi-deploy-status code { background: var(--surface2); border-radius: 3px; padding: 0 4px; }
 
-/* Wave editor — toolbar */
-/* Editor header right cluster: the auto-saved indicator + close button.
-   `we-saved` is hidden until the first debounced plan-save lands, then
-   shows a quiet "saved Xs ago" pill that ticks every few seconds while
-   the modal is open. Persistent (vs the earlier 1 s flash) so users who
-   close the modal between flashes can still tell their work persisted. */
-.we-header-right { display: flex; align-items: center; gap: 10px; }
+/* Wave editor — header (single row: title · album · play · time · dropdowns · close) */
+.we-modal-left { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; overflow: hidden; }
+.we-modal-left .modal-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+/* Editor header right cluster */
+.we-header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .we-saved {
   font-size: 10px; letter-spacing: 0.08em; color: var(--green);
   padding: 2px 6px; border: 0.5px solid rgba(99,153,34,0.35); border-radius: 4px;
   font-variant-numeric: tabular-nums;
 }
-.we-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-.we-toolbar .grow { flex: 1; }
-.we-toolbar .play-btn { width: 36px; height: 28px; border-radius: 4px; background: var(--surface); border: 0.5px solid var(--border2); color: var(--text); font-family: var(--mono); font-size: 14px; cursor: pointer; line-height: 1; }
-.we-toolbar .play-btn:hover { background: var(--surface2); }
-.we-toolbar .readout { font-family: var(--mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 80px; }
-.we-toolbar .readout strong { color: var(--text); font-weight: 500; }
+.play-btn { width: 36px; height: 28px; border-radius: 4px; background: var(--surface); border: 0.5px solid var(--border2); color: var(--text); font-family: var(--mono); font-size: 14px; cursor: pointer; line-height: 1; }
+.play-btn:hover { background: var(--surface2); }
+.readout { font-family: var(--mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 80px; }
+.readout strong { color: var(--text); font-weight: 500; }
 
 /* Wave editor — sides reorder + minimap + main waveform */
 .we-sides { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; align-items: center; font-size: 11px; color: var(--muted); }

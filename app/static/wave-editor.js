@@ -668,7 +668,6 @@ function weRenderSides() {
   host.hidden = false;
   const rows = sides.map((s, i) => {
     const isFirst = i === 0, isLast = i === sides.length - 1;
-    const dur = fmtMMSS(s.duration_seconds || 0);
     return `
       <div class="we-side-row" draggable="true" data-i="${i}"
            ondragstart="weSidesDragStart(event, ${i})"
@@ -679,7 +678,6 @@ function weRenderSides() {
         <span class="drag-handle" title="Drag to reorder">≡</span>
         <span class="num">${i + 1}.</span>
         <span class="name" title="${htmlEscape(s.filename)}">${htmlEscape(s.filename)}</span>
-        <span class="dur">${dur}</span>
         <span class="arrows">
           <button class="arrow-btn" onclick="weMoveSide(${i}, -1)" ${isFirst ? 'disabled' : ''} title="Move up">▲</button>
           <button class="arrow-btn" onclick="weMoveSide(${i},  1)" ${isLast  ? 'disabled' : ''} title="Move down">▼</button>

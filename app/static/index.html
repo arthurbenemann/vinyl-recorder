@@ -289,13 +289,79 @@
 <div class="modal-backdrop" id="we-modal" hidden role="dialog" aria-modal="true" aria-labelledby="we-modal-title" onclick="if(event.target===this)closeWaveEditor()">
   <div class="modal" style="width:1100px">
     <div class="modal-header">
-      <div>
-        <div class="modal-title" id="we-modal-title">Split into tracks</div>
-        <div class="modal-sub" id="we-filename">—</div>
+      <div class="we-modal-left">
+        <span class="modal-title" id="we-modal-title">Split into tracks</span>
+        <span class="modal-sub" id="we-filename">—</span>
       </div>
       <div class="we-header-right">
         <span class="we-saving" id="we-saving-indicator" role="status" aria-live="polite" hidden>Saving…</span>
         <span class="we-saved" id="we-saved" hidden></span>
+        <button class="play-btn" id="we-play" onclick="weTogglePlay()" title="Play / pause (Space)" aria-keyshortcuts="Space">▶</button>
+        <span class="readout">
+          <strong id="we-time">0:00</strong> / <span id="we-duration">—</span>
+        </span>
+        <!-- All three automatic cut-placement tools live behind one dropdown:
+             a saved tracklist, silence detection, and an even N-way split.
+             Each keeps its own ids + action handlers; only the toggle wrapper
+             is shared (weToggleSuggest('split')). -->
+        <div class="we-suggest">
+          <button class="btn-small" id="we-split-btn" onclick="weToggleSuggest('split')" aria-haspopup="true" aria-expanded="false" title="Place cut markers automatically — from a saved Discogs / MusicBrainz tracklist, from detected silences, or evenly across the side.">✂ auto-split ▾</button>
+          <div class="we-suggest-pop we-split-pop" id="we-pop-split" hidden role="dialog" aria-label="Auto-place cuts">
+            <div class="col-label">From saved tracklist</div>
+            <div class="we-split-section">
+              <button class="btn" id="we-load-tracklist-btn" onclick="weLoadTracklistFromTags()" title="Pull the tracklist from this album's saved Discogs / MusicBrainz id (tag the album first to set them)">↻ load tracklist</button>
+              <div class="search-status" id="we-search-status"></div>
+              <!-- Hidden legacy candidate slot — older auto-load paths used to
+                   write status into #we-candidates; kept so any stale handler
+                   writing here doesn't throw. -->
+              <div id="we-candidates" hidden></div>
+            </div>
+
+            <div class="col-label">From silence</div>
+            <div class="silence-controls">
+              <div class="silence-row silence-slider"
+                   title="Slider notches match the 8-bit quantisation in the album's .peaks.dat — that's the resolution at which silence is actually detectable. Useful range is roughly -42 dB (1) to -6 dB (64).">
+                <label class="silence-label" for="we-noise">Noise floor</label>
+                <input type="range" id="we-noise" min="1" max="127" value="8" step="1"
+                       oninput="document.getElementById('we-noise-readout').textContent = weNoiseSliderDb(this.value) + ' dB'">
+                <span id="we-noise-readout" class="silence-readout">-24.0 dB</span>
+              </div>
+              <div class="silence-row silence-numbers">
+                <label class="silence-num" for="we-mindur">
+                  <span class="silence-label">Min silence</span>
+                  <input type="number" id="we-mindur" value="1.5" step="0.1" min="0.2">
+                  <span class="silence-unit">s</span>
+                </label>
+                <label class="silence-num" for="we-skiplong"
+                       title="Silences this long get a pair of cuts and the in-between region is auto-marked skip — typical for side flips and lead-in/out.">
+                  <span class="silence-label">Auto-skip ≥</span>
+                  <input type="number" id="we-skiplong" value="15" step="1" min="2">
+                  <span class="silence-unit">s</span>
+                </label>
+              </div>
+            </div>
+            <div class="action-row silence-actions">
+              <button class="btn primary" onclick="weDetectAndApply()">detect &amp; replace cuts</button>
+              <button class="btn" onclick="weDetectShowOnly()">just highlight</button>
+            </div>
+            <div class="search-status" id="we-silence-status" style="margin-top:6px"></div>
+            <div class="job-bar inline" id="we-silence-bar" hidden style="margin-top:6px">
+              <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
+              <div class="job-bar-text"><span class="job-bar-pct">0%</span></div>
+            </div>
+
+            <div class="col-label">Even tracks</div>
+            <p class="even-hint">For a gapless side where silence detection finds nothing. Seeds evenly-spaced cuts — drag each onto the real boundary (use the <strong>▶</strong> on each track to listen).</p>
+            <div class="silence-row silence-numbers">
+              <label class="silence-num" for="we-even-n">
+                <span class="silence-label">Tracks</span>
+                <input type="number" id="we-even-n" value="4" step="1" min="2" max="99">
+              </label>
+              <button class="btn primary" onclick="weSplitEvenly()">place cuts</button>
+            </div>
+            <div class="search-status" id="we-even-status" style="margin-top:6px"></div>
+          </div>
+        </div>
         <div class="we-suggest">
           <button class="btn-small" id="we-keys-btn" onclick="weToggleShortcuts()" aria-haspopup="true" aria-expanded="false" title="Keyboard &amp; mouse shortcuts, and what the on-screen markers mean">⌨ keys &amp; help ▾</button>
           <div class="we-suggest-pop we-keys-pop" id="we-pop-keys" hidden role="dialog" aria-label="Editor shortcuts and legend">
@@ -324,76 +390,6 @@
           </div>
         </div>
         <button class="btn-small" onclick="closeWaveEditor()">close</button>
-      </div>
-    </div>
-
-    <div class="we-toolbar">
-      <button class="play-btn" id="we-play" onclick="weTogglePlay()" title="Play / pause (Space)" aria-keyshortcuts="Space">▶</button>
-      <span class="readout">
-        <strong id="we-time">0:00</strong> / <span id="we-duration">—</span>
-      </span>
-      <span class="grow"></span>
-      <!-- All three automatic cut-placement tools live behind one dropdown:
-           a saved tracklist, silence detection, and an even N-way split.
-           Each keeps its own ids + action handlers; only the toggle wrapper
-           is shared (weToggleSuggest('split')). -->
-      <div class="we-suggest">
-        <button class="btn-small" id="we-split-btn" onclick="weToggleSuggest('split')" aria-haspopup="true" aria-expanded="false" title="Place cut markers automatically — from a saved Discogs / MusicBrainz tracklist, from detected silences, or evenly across the side.">✂ auto-split ▾</button>
-        <div class="we-suggest-pop we-split-pop" id="we-pop-split" hidden role="dialog" aria-label="Auto-place cuts">
-          <div class="col-label">From saved tracklist</div>
-          <div class="we-split-section">
-            <button class="btn" id="we-load-tracklist-btn" onclick="weLoadTracklistFromTags()" title="Pull the tracklist from this album's saved Discogs / MusicBrainz id (tag the album first to set them)">↻ load tracklist</button>
-            <div class="search-status" id="we-search-status"></div>
-            <!-- Hidden legacy candidate slot — older auto-load paths used to
-                 write status into #we-candidates; kept so any stale handler
-                 writing here doesn't throw. -->
-            <div id="we-candidates" hidden></div>
-          </div>
-
-          <div class="col-label">From silence</div>
-          <div class="silence-controls">
-            <div class="silence-row silence-slider"
-                 title="Slider notches match the 8-bit quantisation in the album's .peaks.dat — that's the resolution at which silence is actually detectable. Useful range is roughly -42 dB (1) to -6 dB (64).">
-              <label class="silence-label" for="we-noise">Noise floor</label>
-              <input type="range" id="we-noise" min="1" max="127" value="8" step="1"
-                     oninput="document.getElementById('we-noise-readout').textContent = weNoiseSliderDb(this.value) + ' dB'">
-              <span id="we-noise-readout" class="silence-readout">-24.0 dB</span>
-            </div>
-            <div class="silence-row silence-numbers">
-              <label class="silence-num" for="we-mindur">
-                <span class="silence-label">Min silence</span>
-                <input type="number" id="we-mindur" value="1.5" step="0.1" min="0.2">
-                <span class="silence-unit">s</span>
-              </label>
-              <label class="silence-num" for="we-skiplong"
-                     title="Silences this long get a pair of cuts and the in-between region is auto-marked skip — typical for side flips and lead-in/out.">
-                <span class="silence-label">Auto-skip ≥</span>
-                <input type="number" id="we-skiplong" value="15" step="1" min="2">
-                <span class="silence-unit">s</span>
-              </label>
-            </div>
-          </div>
-          <div class="action-row silence-actions">
-            <button class="btn primary" onclick="weDetectAndApply()">detect &amp; replace cuts</button>
-            <button class="btn" onclick="weDetectShowOnly()">just highlight</button>
-          </div>
-          <div class="search-status" id="we-silence-status" style="margin-top:6px"></div>
-          <div class="job-bar inline" id="we-silence-bar" hidden style="margin-top:6px">
-            <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
-            <div class="job-bar-text"><span class="job-bar-pct">0%</span></div>
-          </div>
-
-          <div class="col-label">Even tracks</div>
-          <p class="even-hint">For a gapless side where silence detection finds nothing. Seeds evenly-spaced cuts — drag each onto the real boundary (use the <strong>▶</strong> on each track to listen).</p>
-          <div class="silence-row silence-numbers">
-            <label class="silence-num" for="we-even-n">
-              <span class="silence-label">Tracks</span>
-              <input type="number" id="we-even-n" value="4" step="1" min="2" max="99">
-            </label>
-            <button class="btn primary" onclick="weSplitEvenly()">place cuts</button>
-          </div>
-          <div class="search-status" id="we-even-status" style="margin-top:6px"></div>
-        </div>
       </div>
     </div>
 
