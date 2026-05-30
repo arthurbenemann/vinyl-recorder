@@ -611,7 +611,7 @@ def test_split_evenly_seeds_equal_cuts(stack, page):
         page.click('#we-split-btn')
         page.wait_for_selector('#we-pop-split:not([hidden])')
         page.fill('#we-even-n', '4')
-        page.click('#we-pop-split button:has-text("place cuts")')
+        page.click('#we-pop-split button:text-is("place cuts")')
         # 3 interior cuts at the quarter points; 4 track slots, none skipped.
         page.wait_for_function(
             "() => Array.isArray(we.cuts) && we.cuts.length === 3", timeout=5_000)
