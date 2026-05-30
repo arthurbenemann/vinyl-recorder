@@ -193,8 +193,8 @@ def _drive(page, sides, stack):
     page.evaluate("we.viewStart = 0; we.viewEnd = we.total; drawAll()")
 
     # ── Silence slider readout updates live ───────────────────────────
-    page.click('button:has-text("suggest from silence")')
-    page.wait_for_selector('#we-pop-silence:not([hidden])')
+    page.click('#we-split-btn')
+    page.wait_for_selector('#we-pop-split:not([hidden])')
     page.evaluate(
         """
         () => {
@@ -212,7 +212,7 @@ def _drive(page, sides, stack):
 
     # ── Silence detect via .dat returns sub-second ────────────────────
     t0 = time.time()
-    page.click('#we-pop-silence button:has-text("just highlight")')
+    page.click('#we-pop-split button:has-text("just highlight")')
     page.wait_for_function(
         "() => { const t = document.getElementById('we-silence-status').textContent; return t && (/silences/.test(t) || /failed/.test(t)); }",
         timeout=10_000,
@@ -503,8 +503,8 @@ def test_wave_editor_reopen_restores_cut_skip_title(stack, page):
 
 
 def _open_silence_popover(page):
-    page.click('button:has-text("suggest from silence")')
-    page.wait_for_selector('#we-pop-silence:not([hidden])')
+    page.click('#we-split-btn')
+    page.wait_for_selector('#we-pop-split:not([hidden])')
 
 
 def test_silence_detection_settings_persist_across_reload(stack, page):
@@ -607,11 +607,11 @@ def test_split_evenly_seeds_equal_cuts(stack, page):
         _combine_then_open_editor(
             page, sides, artist="EvenSplitArtist", album="EvenSplitAlbum"
         )
-        # Open the "split evenly" popover and ask for 4 equal tracks.
-        page.click('button:has-text("split evenly")')
-        page.wait_for_selector('#we-pop-even:not([hidden])')
+        # Open the unified auto-split dropdown and ask for 4 equal tracks.
+        page.click('#we-split-btn')
+        page.wait_for_selector('#we-pop-split:not([hidden])')
         page.fill('#we-even-n', '4')
-        page.click('#we-pop-even button:has-text("place cuts")')
+        page.click('#we-pop-split button:text-is("place cuts")')
         # 3 interior cuts at the quarter points; 4 track slots, none skipped.
         page.wait_for_function(
             "() => Array.isArray(we.cuts) && we.cuts.length === 3", timeout=5_000)
@@ -625,8 +625,6 @@ def test_split_evenly_seeds_equal_cuts(stack, page):
                 f"cut {i} at {c}, expected ~{q * i} (total {state['total']})"
         assert len(state['titles']) == 4, state['titles']
         assert state['skipped'] == [False, False, False, False], state['skipped']
-        # Opening the even popover must have closed the silence popover.
-        assert page.is_hidden('#we-pop-silence')
     finally:
         for p in sides:
             try: p.unlink(missing_ok=True)
@@ -636,7 +634,7 @@ def test_split_evenly_seeds_equal_cuts(stack, page):
 # ── Shortcuts legend: toggle + mutual exclusion with suggest popovers ─────
 def test_shortcuts_legend_toggles_and_is_mutually_exclusive(stack, page):
     """The "⌨ keys" legend opens on click, closes on Esc, and is mutually
-    exclusive with the silence popover so the two toolbar dropdowns never
+    exclusive with the auto-split dropdown so the two header dropdowns never
     stack."""
     raw = stack["raw"]
     sides = _generate_side_flacs(raw, count=2)
@@ -649,14 +647,14 @@ def test_shortcuts_legend_toggles_and_is_mutually_exclusive(stack, page):
         page.click('#we-keys-btn')
         page.wait_for_selector('#we-pop-keys:not([hidden])')
         assert page.is_visible("text=play / pause")
-        # Opening "suggest from silence" closes the legend (mutual exclusion).
-        page.click('button:has-text("suggest from silence")')
-        page.wait_for_selector('#we-pop-silence:not([hidden])')
+        # Opening the auto-split dropdown closes the legend (mutual exclusion).
+        page.click('#we-split-btn')
+        page.wait_for_selector('#we-pop-split:not([hidden])')
         assert page.is_hidden('#we-pop-keys')
-        # Re-open the legend → silence closes.
+        # Re-open the legend → split dropdown closes.
         page.click('#we-keys-btn')
         page.wait_for_selector('#we-pop-keys:not([hidden])')
-        assert page.is_hidden('#we-pop-silence')
+        assert page.is_hidden('#we-pop-split')
         # Esc dismisses the legend (without closing the editor).
         page.keyboard.press('Escape')
         page.wait_for_selector('#we-pop-keys', state="hidden", timeout=3_000)

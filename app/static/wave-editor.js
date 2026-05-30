@@ -427,15 +427,14 @@ function openWaveEditor(fname) {
   document.getElementById('we-filename').textContent = headerLabel;
   document.getElementById('we-duration').textContent = fmtMMSS(we.total);
   document.getElementById('we-mini-end').textContent = fmtMMSS(we.total);
-  document.getElementById('we-pop-silence').hidden = true;
+  const popSplitReset = document.getElementById('we-pop-split');
+  if (popSplitReset) popSplitReset.hidden = true;
   const popKeysReset = document.getElementById('we-pop-keys');
   if (popKeysReset) {
     popKeysReset.hidden = true;
     const kb = document.getElementById('we-keys-btn');
     if (kb) kb.setAttribute('aria-expanded', 'false');
   }
-  const popEvenReset = document.getElementById('we-pop-even');
-  if (popEvenReset) popEvenReset.hidden = true;
   document.getElementById('we-search-status').textContent = '';
   document.getElementById('we-silence-status').textContent = '';
 
@@ -669,7 +668,6 @@ function weRenderSides() {
   host.hidden = false;
   const rows = sides.map((s, i) => {
     const isFirst = i === 0, isLast = i === sides.length - 1;
-    const dur = fmtMMSS(s.duration_seconds || 0);
     return `
       <div class="we-side-row" draggable="true" data-i="${i}"
            ondragstart="weSidesDragStart(event, ${i})"
@@ -680,7 +678,6 @@ function weRenderSides() {
         <span class="drag-handle" title="Drag to reorder">≡</span>
         <span class="num">${i + 1}.</span>
         <span class="name" title="${htmlEscape(s.filename)}">${htmlEscape(s.filename)}</span>
-        <span class="dur">${dur}</span>
         <span class="arrows">
           <button class="arrow-btn" onclick="weMoveSide(${i}, -1)" ${isFirst ? 'disabled' : ''} title="Move up">▲</button>
           <button class="arrow-btn" onclick="weMoveSide(${i},  1)" ${isLast  ? 'disabled' : ''} title="Move down">▼</button>
@@ -1103,9 +1100,11 @@ function weKeyDown(e) {
       e.preventDefault();
       // Dismiss an open popover first; only close the whole editor once
       // nothing is layered on top.
-      const popSilence = document.getElementById('we-pop-silence');
-      if (popSilence && !popSilence.hidden) {
-        popSilence.hidden = true;
+      const popSplit = document.getElementById('we-pop-split');
+      if (popSplit && !popSplit.hidden) {
+        popSplit.hidden = true;
+        const sb = document.getElementById('we-split-btn');
+        if (sb) sb.setAttribute('aria-expanded', 'false');
         return;
       }
       const popKeys = document.getElementById('we-pop-keys');
@@ -1113,11 +1112,6 @@ function weKeyDown(e) {
         popKeys.hidden = true;
         const kb = document.getElementById('we-keys-btn');
         if (kb) kb.setAttribute('aria-expanded', 'false');
-        return;
-      }
-      const popEven = document.getElementById('we-pop-even');
-      if (popEven && !popEven.hidden) {
-        popEven.hidden = true;
         return;
       }
       closeWaveEditor();
@@ -1552,7 +1546,12 @@ function onAudioTimeUpdate() {
 // Two cut-seeding popovers: "suggest from silence" (gap detection) and
 // "split evenly" (equal-interval fallback for gapless sides). Opening one
 // dismisses the other so they never overlap.
-const _WE_SUGGEST_POPS = { silence: 'we-pop-silence', even: 'we-pop-even' };
+// The three auto-cut tools (tracklist / silence / even) now share one
+// dropdown — `split` is the only suggest popover. The map is kept (rather
+// than inlined) so the toggle still reads generically and the keys-legend
+// mutual-exclusion below can iterate it.
+const _WE_SUGGEST_POPS = { split: 'we-pop-split' };
+const _WE_SUGGEST_BTNS = { split: 'we-split-btn' };
 
 function weToggleSuggest(which) {
   const id = _WE_SUGGEST_POPS[which];
@@ -1564,6 +1563,8 @@ function weToggleSuggest(which) {
     const el = document.getElementById(popId);
     if (el) el.hidden = (popId !== id) ? true : !willShow;
   }
+  const btn = document.getElementById(_WE_SUGGEST_BTNS[which]);
+  if (btn) btn.setAttribute('aria-expanded', String(willShow));
   // Don't let the shortcuts legend overlap a suggest panel.
   if (willShow) {
     const keys = document.getElementById('we-pop-keys');

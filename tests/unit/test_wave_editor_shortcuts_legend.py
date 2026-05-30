@@ -28,9 +28,9 @@ def html() -> str:
 
 def test_toggle_defined_and_mutually_exclusive(wave):
     assert "function weToggleShortcuts" in wave
-    # Opening keys hides the silence popover, and vice-versa.
+    # Opening keys hides the split popover, and vice-versa.
     assert "we-pop-keys" in wave
-    assert "getElementById('we-pop-silence')" in wave
+    assert "getElementById('we-pop-split')" in wave
 
 
 def test_esc_dismisses_keys_popover(wave):

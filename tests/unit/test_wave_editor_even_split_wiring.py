@@ -44,17 +44,17 @@ def test_split_evenly_uses_helper_and_persists(wave):
     assert "renderTracks();" in wave
 
 
-def test_popover_toggle_handles_even(wave):
-    # Both suggest popovers route through the one map; opening one closes the
-    # other. The 'even' kind must be registered.
-    assert "we-pop-even" in wave
-    assert "even: 'we-pop-even'" in wave
-    # Esc dismisses the even popover before closing the whole editor.
-    assert "getElementById('we-pop-even')" in wave
+def test_popover_toggle_handles_split(wave):
+    # All three auto-split tools (tracklist, silence, even) share a single
+    # 'split' popover routed through _WE_SUGGEST_POPS.
+    assert "we-pop-split" in wave
+    assert "split: 'we-pop-split'" in wave
+    # Esc dismisses the split popover before closing the whole editor.
+    assert "getElementById('we-pop-split')" in wave
 
 
 def test_html_exposes_button_input_and_popover(html):
-    assert "weToggleSuggest('even')" in html
-    assert 'id="we-pop-even"' in html
+    assert "weToggleSuggest('split')" in html
+    assert 'id="we-pop-split"' in html
     assert 'id="we-even-n"' in html
     assert "weSplitEvenly()" in html

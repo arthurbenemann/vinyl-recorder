@@ -457,7 +457,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .lib-table col.c-size     { width: 80px; }
 .lib-table col.c-fmt      { width: 70px; }
 .lib-table col.c-status   { width: 110px; }
-.lib-table col.c-actions  { width: 180px; }
+.lib-table col.c-actions  { width: 210px; }
 .lib-table th, .lib-table td { overflow: hidden; text-overflow: ellipsis; }
 /* Action cells host icon buttons that must stay fully visible. */
 .lib-table th:last-child, .lib-table td:last-child { overflow: visible; }
@@ -503,7 +503,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(2px); padding: 16px; }
 .modal-backdrop[hidden] { display: none; }
 .modal { background: var(--bg); border: 0.5px solid var(--border2); border-radius: 10px; padding: 18px 20px; width: 1040px; max-width: 100%; max-height: 100%; overflow-y: auto; }
-.modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .modal-title { font-family: var(--serif); font-size: 18px; }
 .modal-sub { font-size: 11px; color: var(--muted); margin-top: 2px; word-break: break-all; }
 
@@ -710,24 +710,20 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .pi-deploy-log .info { color: var(--blue); }
 .pi-deploy-status code { background: var(--surface2); border-radius: 3px; padding: 0 4px; }
 
-/* Wave editor — toolbar */
-/* Editor header right cluster: the auto-saved indicator + close button.
-   `we-saved` is hidden until the first debounced plan-save lands, then
-   shows a quiet "saved Xs ago" pill that ticks every few seconds while
-   the modal is open. Persistent (vs the earlier 1 s flash) so users who
-   close the modal between flashes can still tell their work persisted. */
-.we-header-right { display: flex; align-items: center; gap: 10px; }
+/* Wave editor — header (single row: title · album · play · time · dropdowns · close) */
+.we-modal-left { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; overflow: hidden; }
+.we-modal-left .modal-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+/* Editor header right cluster */
+.we-header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .we-saved {
   font-size: 10px; letter-spacing: 0.08em; color: var(--green);
   padding: 2px 6px; border: 0.5px solid rgba(99,153,34,0.35); border-radius: 4px;
   font-variant-numeric: tabular-nums;
 }
-.we-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-.we-toolbar .grow { flex: 1; }
-.we-toolbar .play-btn { width: 36px; height: 28px; border-radius: 4px; background: var(--surface); border: 0.5px solid var(--border2); color: var(--text); font-family: var(--mono); font-size: 14px; cursor: pointer; line-height: 1; }
-.we-toolbar .play-btn:hover { background: var(--surface2); }
-.we-toolbar .readout { font-family: var(--mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 80px; }
-.we-toolbar .readout strong { color: var(--text); font-weight: 500; }
+.play-btn { width: 36px; height: 28px; border-radius: 4px; background: var(--surface); border: 0.5px solid var(--border2); color: var(--text); font-family: var(--mono); font-size: 14px; cursor: pointer; line-height: 1; }
+.play-btn:hover { background: var(--surface2); }
+.readout { font-family: var(--mono); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 80px; }
+.readout strong { color: var(--text); font-weight: 500; }
 
 /* Wave editor — sides reorder + minimap + main waveform */
 .we-sides { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; align-items: center; font-size: 11px; color: var(--muted); }
@@ -739,7 +735,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .we-sides .drag-handle:active { cursor: grabbing; }
 .we-sides .we-side-row.dragging .drag-handle { cursor: grabbing; }
 .we-sides .num { color: var(--muted); font-variant-numeric: tabular-nums; }
-.we-sides .name { color: var(--text); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.we-sides .name { color: var(--text); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .we-sides .dur { color: var(--muted); font-variant-numeric: tabular-nums; }
 .we-sides .arrows { display: inline-flex; gap: 2px; }
 .we-sides .arrow-btn { width: 18px; height: 18px; padding: 0; border-radius: 3px; background: var(--surface2); border: 0.5px solid var(--border2); color: var(--muted); font-size: 9px; cursor: pointer; line-height: 1; }
@@ -789,7 +785,6 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .wave-side-badge { position: absolute; bottom: 2px; left: 3px; padding: 1px 5px; font-size: 9px; color: rgba(170,210,255,0.95); background: rgba(0,0,0,0.55); border: 0.5px solid rgba(55,138,221,0.55); border-radius: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
 .wave-readout { position: absolute; top: 4px; right: 6px; padding: 2px 6px; background: rgba(0,0,0,0.6); border-radius: 3px; font-size: 10px; color: var(--text); pointer-events: none; font-variant-numeric: tabular-nums; }
 .wave-axis { display: flex; justify-content: space-between; padding: 4px 6px; font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; background: var(--surface); border-top: 0.5px solid var(--border); }
-.wave-help { font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
 
 /* Silence-detection number inputs inside the suggest popover */
 .we-suggest-pop input[type="number"] {
@@ -827,6 +822,12 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .we-suggest-pop .candidate-title { font-size: 11px; }
 .we-suggest-pop .candidate-sub { font-size: 10px; }
 
+/* Wave editor — unified auto-split popover: sections separated by a rule */
+.we-split-pop { min-width: 400px; }
+.we-split-section { margin-bottom: 8px; }
+.we-split-pop .col-label { margin-top: 12px; padding-top: 10px; border-top: 0.5px solid var(--border); margin-bottom: 6px; }
+.we-split-pop .col-label:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+
 /* Wave editor — keyboard/mouse shortcuts legend */
 .we-keys-pop { min-width: 300px; }
 .we-keys-pop .col-label { margin-top: 8px; }
@@ -834,10 +835,15 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .we-keys-list { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: baseline; margin: 4px 0 2px; font-size: 11px; }
 .we-keys-list dt { white-space: nowrap; color: var(--fg); }
 .we-keys-list dd { margin: 0; color: var(--muted); }
+/* Legend note: explains the on-screen markers (side-switch line, sleeve
+   positions). Moved here from the always-present .wave-help strip so it
+   only costs space when the user opens the popover. */
+.we-keys-note { margin: 10px 0 0; padding-top: 8px; border-top: 0.5px solid var(--border); font-size: 11px; line-height: 1.5; color: var(--muted); max-width: 360px; }
+.we-keys-swatch { color: rgba(170,210,255,0.95); }
 kbd { display: inline-block; font: inherit; font-size: 10px; line-height: 1; padding: 3px 5px; margin-right: 2px; background: var(--surface); border: 0.5px solid var(--border2); border-bottom-width: 1.5px; border-radius: 4px; color: var(--fg); }
 
 /* Wave editor — track list */
-.wave-tracks { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; padding-right: 2px; margin-top: 8px; }
+.wave-tracks { display: flex; flex-direction: column; gap: 4px; max-height: clamp(200px, calc(100vh - 640px), 560px); overflow-y: auto; padding-right: 2px; margin-top: 8px; }
 .wave-track { display: grid; grid-template-columns: 36px 28px 1fr 110px 70px 24px 24px; gap: 6px; align-items: center; padding: 6px 10px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; }
 .wave-track .pn { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: clip; }
 .wave-track .play-track { width: 22px; height: 22px; padding: 0; border-radius: 4px; background: var(--surface2); border: 0.5px solid var(--border2); color: var(--text); font-size: 11px; cursor: pointer; line-height: 1; }
@@ -903,13 +909,18 @@ kbd { display: inline-block; font: inherit; font-size: 10px; line-height: 1; pad
 }
 
 /* Wave editor — post-split processing controls */
-.we-process { margin-top: 12px; padding: 10px 12px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; gap: 8px; }
-.we-process-stats { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.we-process { margin-top: 12px; padding: 8px 12px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; gap: 8px; }
+/* Loudness toggles (normalize / ReplayGain) ride in the stats row's empty
+   space; the row wraps on very narrow modals. */
+.we-process-stats { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .we-stats-label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; }
 .we-stats-text { color: var(--text); flex: 1; }
-.we-process-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+/* The four output selects share a single "output" group label rather than
+   repeating the word four times; tight column gap keeps them on one line. */
+.we-process-row { display: flex; align-items: center; gap: 6px 14px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+.we-process-group { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
 .we-process-toggle { display: flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; }
-.we-process-bits { display: flex; align-items: center; gap: 6px; color: var(--text); }
+.we-process-bits { display: flex; align-items: center; gap: 5px; color: var(--text); }
 .we-process-bits select { background: var(--surface2); border: 0.5px solid var(--border2); border-radius: 4px; color: var(--text); font-family: var(--mono); font-size: 11px; padding: 3px 6px; outline: none; cursor: pointer; }
 
 /* Combine modal — side reorder rows */
