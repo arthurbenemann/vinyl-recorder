@@ -1115,3 +1115,105 @@ def test_clear_cuts_is_undoable(stack, page):
         for p in sides:
             try: p.unlink(missing_ok=True)
             except Exception: pass
+
+
+# ── Applying a Discogs tracklist spreads tracks + seeds the lead-in ───────
+def test_tracklist_apply_spreads_tracks_and_seeds_lead_in(stack, page):
+    """Regression for the Discogs-load bug: a durationless multi-side
+    tracklist used to collapse every track onto its side's first track
+    (the rest showed "doesn't fit") and left track A1 with no handle.
+
+    Drive _weApplyTracklist with the real "It's Album Time" shape — 12
+    durationless tracks, 4 sides, continuous numbering — over a synthetic
+    400 s / 4×100 s layout (so the assertions don't depend on the encoded
+    FLAC durations). Assert every track lands in its own non-zero region in
+    the right side, skipped "silence" regions are seeded at the start /
+    between sides / end, and A1 (now region 1, after the lead-in skip) has
+    an editable start in the track list."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=4)
+    apply = """
+        () => {
+            we.total = 400;
+            we.sides = [{duration_seconds: 100}, {duration_seconds: 100},
+                        {duration_seconds: 100}, {duration_seconds: 100}];
+            we.viewStart = 0; we.viewEnd = we.total;
+            const titles = ['Intro','Leisure','Acapulco','Svensk','Strandbar',
+                'Delorean','Johnny','Alfonso','Swing1','Swing2','OhJoy','Norse'];
+            const positions = ['A1','A2','A3','B4','B5','B6','C7','C8','C9',
+                'D10','D11','D12'];
+            const td = titles.map((t, i) =>
+                ({title: t, duration_seconds: null, position: positions[i]}));
+            _weApplyTracklist(td, 'e2e');
+            we.viewStart = 0; we.viewEnd = we.total; drawAll();
+            const b = [0, ...we.cuts, we.total];
+            const regions = b.slice(0, -1).map((s, i) => ({
+                start: s, end: b[i + 1], dur: b[i + 1] - s,
+                skip: !!we.skipped[i], title: we.titles[i], pos: we.positions[i],
+            }));
+            const rows = Array.from(
+                document.querySelectorAll('#we-tracks .wave-track'));
+            const a1Row = rows[1];
+            const a1Start = a1Row && a1Row.querySelector('.start-input');
+            return {
+                aligned: we.titles.length === we.cuts.length + 1
+                      && we.skipped.length === we.cuts.length + 1
+                      && we.positions.length === we.cuts.length + 1,
+                nonSkipTitles: regions.filter(r => !r.skip).map(r => r.title),
+                nonSkipPos:    regions.filter(r => !r.skip).map(r => r.pos),
+                skipCount:     regions.filter(r => r.skip).length,
+                minDur:        Math.min(...regions.map(r => r.dur)),
+                leadInIsSkipAtZero: regions[0].skip && regions[0].start === 0,
+                firstTrackIsRegion1: !regions[1].skip && regions[1].title === 'Intro',
+                lastIsLeadOut: regions[regions.length - 1].skip
+                    && Math.abs(regions[regions.length - 1].end - 400) < 0.001,
+                perSideCounts: [0, 1, 2, 3].map(k => regions.filter(
+                    r => !r.skip && r.start >= k * 100 && r.start < (k + 1) * 100).length),
+                domRows: rows.length,
+                doesntFitRows: rows.filter(r => {
+                    const el = r.querySelector('.range');
+                    return el && /doesn.t fit/.test(el.textContent);
+                }).length,
+                waveCuts: document.querySelectorAll('#we-overlay .wave-cut').length,
+                a1StartEnabled: !!a1Row && !a1Row.classList.contains('skip')
+                    && !!a1Start && !a1Start.disabled,
+            };
+        }
+    """
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="TracklistApplyArtist", album="TracklistApplyAlbum"
+        )
+        r = page.evaluate(apply)
+
+        assert r["aligned"], "title/skip/position arrays desynced from cuts"
+        # Every Discogs track present, in order, in its own region.
+        assert r["nonSkipTitles"] == [
+            "Intro", "Leisure", "Acapulco", "Svensk", "Strandbar", "Delorean",
+            "Johnny", "Alfonso", "Swing1", "Swing2", "OhJoy", "Norse",
+        ], r["nonSkipTitles"]
+        assert r["nonSkipPos"] == [
+            "A1", "A2", "A3", "B4", "B5", "B6",
+            "C7", "C8", "C9", "D10", "D11", "D12",
+        ], r["nonSkipPos"]
+        # 4 lead-in skips (one per side) + 1 lead-out skip.
+        assert r["skipCount"] == 5, r["skipCount"]
+        # No zero-width region → nothing renders as "doesn't fit".
+        assert r["minDur"] >= 0.5, r["minDur"]
+        assert r["doesntFitRows"] == 0, r["doesntFitRows"]
+        # Lead-in / lead-out are seeded silence, and each side keeps its 3.
+        assert r["leadInIsSkipAtZero"], "no lead-in skip at t=0"
+        assert r["lastIsLeadOut"], "no lead-out skip at the album end"
+        assert r["perSideCounts"] == [3, 3, 3, 3], r["perSideCounts"]
+        # The reported fix: A1 is region 1 (after the lead-in) with a handle
+        # and an editable start — no special widget, just the skip mechanism.
+        assert r["firstTrackIsRegion1"], "A1 is not the first track region"
+        assert r["a1StartEnabled"], "track A1's start time is not editable"
+        assert r["waveCuts"] >= 1, "no draggable cut handles rendered"
+        assert r["domRows"] == 17, r["domRows"]
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
