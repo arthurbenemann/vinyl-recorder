@@ -903,13 +903,18 @@ kbd { display: inline-block; font: inherit; font-size: 10px; line-height: 1; pad
 }
 
 /* Wave editor — post-split processing controls */
-.we-process { margin-top: 12px; padding: 10px 12px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; gap: 8px; }
-.we-process-stats { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.we-process { margin-top: 12px; padding: 8px 12px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; display: flex; flex-direction: column; gap: 8px; }
+/* Loudness toggles (normalize / ReplayGain) ride in the stats row's empty
+   space; the row wraps on very narrow modals. */
+.we-process-stats { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .we-stats-label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; }
 .we-stats-text { color: var(--text); flex: 1; }
-.we-process-row { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+/* The four output selects share a single "output" group label rather than
+   repeating the word four times; tight column gap keeps them on one line. */
+.we-process-row { display: flex; align-items: center; gap: 6px 14px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+.we-process-group { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
 .we-process-toggle { display: flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; }
-.we-process-bits { display: flex; align-items: center; gap: 6px; color: var(--text); }
+.we-process-bits { display: flex; align-items: center; gap: 5px; color: var(--text); }
 .we-process-bits select { background: var(--surface2); border: 0.5px solid var(--border2); border-radius: 4px; color: var(--text); font-family: var(--mono); font-size: 11px; padding: 3px 6px; outline: none; cursor: pointer; }
 
 /* Combine modal — side reorder rows */

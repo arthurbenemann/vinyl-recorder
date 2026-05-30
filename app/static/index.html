@@ -434,18 +434,19 @@
           <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
           <div class="job-bar-text"><span class="job-bar-pct">0%</span></div>
         </div>
-        <button class="btn-small" id="we-measure-btn" onclick="weMeasure()" title="Scan the album audio to compute peak, noise floor, dynamic range, and effective bits.">measure</button>
-      </div>
-      <div class="we-process-row" style="flex-wrap:wrap">
         <label class="we-process-toggle">
-          <input type="checkbox" id="we-normalize"> normalize album
+          <input type="checkbox" id="we-normalize"> normalize
         </label>
         <label class="we-process-toggle"
                title="Write ReplayGain track + album loudness tags (FLAC only). Players normalise volume on playback; the audio itself is untouched.">
-          <input type="checkbox" id="we-replaygain"> ReplayGain tags
+          <input type="checkbox" id="we-replaygain"> ReplayGain
         </label>
+        <button class="btn-small" id="we-measure-btn" onclick="weMeasure()" title="Scan the album audio to compute peak, noise floor, dynamic range, and effective bits.">measure</button>
+      </div>
+      <div class="we-process-row">
+        <span class="we-process-group">output</span>
         <label class="we-process-bits">
-          output format
+          format
           <select id="we-format" onchange="weOnFormatChange()">
             <option value="flac" selected>FLAC (lossless, default)</option>
             <option value="wav">WAV (PCM, lossless)</option>
@@ -456,7 +457,7 @@
           </select>
         </label>
         <label class="we-process-bits">
-          output bit depth
+          bit depth
           <select id="we-bitdepth">
             <option value="0">keep source</option>
             <option value="16">16-bit</option>
@@ -465,7 +466,7 @@
         </label>
         <label class="we-process-bits"
                title="Stereo keeps the capture as-is. Mono (L+R) suits genuine mono pressings — it cancels out-of-phase groove noise. Left / Right rescue a single good channel from a damaged or miswired side.">
-          output channels
+          channels
           <select id="we-channels">
             <option value="stereo" selected>stereo (keep)</option>
             <option value="mono">mono (L+R sum)</option>
@@ -474,7 +475,7 @@
           </select>
         </label>
         <label class="we-process-bits">
-          output sample rate
+          sample rate
           <select id="we-sample-rate">
             <option value="0">keep source</option>
             <option value="44100">44.1 kHz (CD)</option>
