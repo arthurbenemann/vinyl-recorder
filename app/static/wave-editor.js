@@ -965,10 +965,56 @@ function weHoverLeave() {
   document.getElementById('we-readout').textContent = '';
 }
 
+// Drag anywhere on the waveform (not on a cut handle) to pan the viewport —
+// the same gesture as dragging the minimap rect. A press that stays within a
+// few pixels isn't a pan: it falls through to the click handler below, which
+// seeks (or, with shift, adds a cut). Mouse-only to match the editor's other
+// drag handlers (cut drag, minimap pan).
+let _weSuppressNextClick = false;
+function weWaveDown(e) {
+  // Left button only (right-click deletes a cut on a handle), and never on a
+  // shift-press — shift is reserved for add-cut, so shift+drag still adds.
+  if (e.button !== 0 || e.shiftKey) return;
+  // Presses on a cut handle run their own drag (weStartDrag stops
+  // propagation; this guards the rest) — don't start a pan there.
+  if (e.target.closest && e.target.closest('.wave-cut')) return;
+  _weSuppressNextClick = false;
+  const overlay = document.getElementById('we-overlay');
+  const r = _wrap().getBoundingClientRect();
+  const startX = e.clientX;
+  const startS = we.viewStart;
+  const len = we.viewEnd - we.viewStart;
+  let moved = false;
+  const onMove = ev => {
+    const dx = ev.clientX - startX;
+    if (!moved && Math.abs(dx) < 4) return;   // below threshold → still a click
+    moved = true;
+    if (overlay) overlay.classList.add('panning');
+    // Drag the waveform with the cursor: moving right reveals earlier audio,
+    // so the window's left edge moves back in time. Clamp to [0, total-len].
+    const dt = (dx / r.width) * len;
+    const s = Math.max(0, Math.min(Math.max(0, we.total - len), startS - dt));
+    we.viewStart = s;
+    we.viewEnd   = s + len;
+    drawAll();
+  };
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup',   onUp);
+    if (overlay) overlay.classList.remove('panning');
+    // Swallow the click that fires at the end of a real pan so it doesn't
+    // also seek; a no-move press leaves the flag false and clicks through.
+    if (moved) _weSuppressNextClick = true;
+  };
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup',   onUp);
+}
+
 // Click on bare waveform = seek playhead. Use the "+ add cut at playhead"
 // button (or shift-click) for adding cuts. This separation matches Audacity.
 function weAddCutAtClick(e) {
   if (we.dragging) return;                         // drop on drag-end, not a click
+  if (_weSuppressNextClick) { _weSuppressNextClick = false; return; }  // end of a pan
   const r = _wrap().getBoundingClientRect();
   const t = _xToTime(e.clientX - r.left);
   if (e.shiftKey) {

@@ -895,6 +895,79 @@ def test_shift_drag_translates_trailing_cuts(stack, page):
             except Exception: pass
 
 
+# ── Click-drag on the waveform pans the viewport ─────────────────────────
+def test_drag_pans_waveform(stack, page):
+    """Dragging on the waveform (away from a cut handle) pans the zoomed
+    viewport — moving left reveals later audio (viewStart increases), the
+    window length is preserved, and the trailing click is swallowed so the
+    pan doesn't also seek. A press that doesn't move still seeks."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    # 30 s album, zoomed to a 10 s window parked at [10, 20] so there's room
+    # to pan either direction. Full-album pixel↔time math via the wrap rect.
+    setup = """
+        we.total     = 30;
+        we.sides     = [{duration_seconds: 15}, {duration_seconds: 15}];
+        we.cuts      = [];
+        we.titles    = ['A'];
+        we.skipped   = [false];
+        we.positions = [''];
+        we.silences  = [];
+        we.viewStart = 10;
+        we.viewEnd   = 20;
+        if (weAudio) weAudio.seek(0);
+        drawAll();
+        const rect = document.getElementById('we-wrap').getBoundingClientRect();
+    """
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="PanDragArtist", album="PanDragAlbum"
+        )
+        rect = page.evaluate(
+            "() => {" + setup + " return {x: rect.left, y: rect.top,"
+            " w: rect.width, h: rect.height}; }"
+        )
+        cy = rect["y"] + rect["h"] / 2
+        # Drag left by a quarter of the width → viewStart moves forward by a
+        # quarter of the 10 s window (≈2.5 s). The overlay is the event
+        # surface (the canvas underneath is pointer-events:none).
+        x0 = rect["x"] + rect["w"] * 0.6
+        x1 = rect["x"] + rect["w"] * 0.35
+        page.mouse.move(x0, cy)
+        page.mouse.down()
+        # Several steps so the move clears the 4px pan threshold cleanly.
+        page.mouse.move(x0 - 20, cy)
+        page.mouse.move(x1, cy)
+        page.mouse.up()
+        state = page.evaluate(
+            "() => ({s: we.viewStart, e: we.viewEnd, cur: weAudio.currentTime})"
+        )
+        # Dragged left → later audio: viewStart increased from 10.
+        assert state["s"] > 10.0, f"drag should pan forward: {state}"
+        # Window length preserved at 10 s.
+        assert abs((state["e"] - state["s"]) - 10.0) < 1e-3, \
+            f"pan must preserve zoom window: {state}"
+        # ~2.5 s shift (0.25 * 10 s), tolerant of mouse-step rounding.
+        assert abs(state["s"] - 12.5) < 0.6, f"unexpected pan distance: {state}"
+        # The pan's trailing click must NOT have seeked the playhead.
+        assert state["cur"] == 0, f"pan should not seek: {state}"
+
+        # A press with no movement still seeks (click-to-seek preserved).
+        page.evaluate(setup)
+        seek_x = rect["x"] + rect["w"] * 0.5   # centre → t = 15 (mid 10–20)
+        page.mouse.move(seek_x, cy)
+        page.mouse.down()
+        page.mouse.up()
+        seeked = page.evaluate("() => weAudio.currentTime")
+        assert abs(seeked - 15.0) < 0.5, f"click should seek to ~15s: {seeked}"
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
 # ── Music row "N tracks" link expands an inline track list ───────────────
 def test_music_row_expands_into_track_list(stack, page):
     """Clicking the `N tracks` link in the Music section toggles an inline

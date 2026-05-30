@@ -759,6 +759,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 #we-canvas { outline: none; }
 #we-canvas:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .wave-overlay { position: absolute; inset: 0; cursor: crosshair; }
+.wave-overlay.panning { cursor: grabbing; }
 .wave-playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.65); pointer-events: none; box-shadow: 0 0 4px rgba(255,255,255,0.4); }
 .wave-cut { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); cursor: ew-resize; }
 .wave-cut:hover { background: var(--accent-hover); }

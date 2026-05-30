@@ -380,6 +380,7 @@
             <dl class="we-keys-list">
               <dt>scroll</dt><dd>zoom in / out</dd>
               <dt>click wave</dt><dd>move the playhead (seek)</dd>
+              <dt>drag wave</dt><dd>pan the zoomed view (when zoomed in)</dd>
               <dt><kbd>Shift</kbd>+click</dt><dd>add a cut</dd>
               <dt>drag a cut</dt><dd>nudge it (snaps to detected silences; stays within its side)</dd>
               <dt><kbd>Shift</kbd>+drag</dt><dd>move it + every later cut on that side</dd>
@@ -411,6 +412,7 @@
          onwheel="weWheel(event)">
       <canvas class="wave-img" id="we-canvas" width="2400" height="140" tabindex="0" role="application" aria-keyshortcuts="Space c p j k Delete s ArrowLeft ArrowRight" aria-label="Album waveform — space to play/pause, c to add a cut at the playhead, p to preview the nearest cut, arrow keys to nudge the nearest cut, j/k to jump between cuts"></canvas>
       <div class="wave-overlay" id="we-overlay"
+           onmousedown="weWaveDown(event)"
            onmousemove="weHoverMove(event)"
            onmouseleave="weHoverLeave()"
            onclick="weAddCutAtClick(event)"></div>
