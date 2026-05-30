@@ -968,6 +968,71 @@ def test_drag_pans_waveform(stack, page):
             except Exception: pass
 
 
+# ── Drag a track handle to reorder labels (audio stays put) ──────────────
+def test_drag_reorder_relabels_tracks(stack, page):
+    """Dragging a track row's handle reorders only the per-region labels
+    (title / skip / position) across the FIXED waveform segments — the cuts
+    (and therefore the album audio order) never move. A label dropped on a
+    segment that lives on another side picks up that side's number."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    # 30 s album, two 15 s sides. Cuts at 5/15/22 → 4 regions:
+    #   slot0 [0,5)   side A   slot1 [5,15)  side A
+    #   slot2 [15,22) side B   slot3 [22,30) side B
+    setup = """
+        we.total     = 30;
+        we.sides     = [{duration_seconds: 15}, {duration_seconds: 15}];
+        we.cuts      = [5, 15, 22];
+        we.titles    = ['T0', 'T1', 'T2', 'T3'];
+        we.skipped   = [false, false, false, false];
+        we.positions = ['', '', '', ''];
+        we.silences  = [];
+        we.viewStart = 0;
+        we.viewEnd   = 30;
+        drawAll();
+    """
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="ReorderArtist", album="ReorderAlbum"
+        )
+        page.evaluate("() => {" + setup + "}")
+
+        # Every rendered row exposes a draggable grip.
+        handles = page.eval_on_selector_all(
+            ".wave-track .drag-handle[draggable='true']", "els => els.length"
+        )
+        assert handles == 4, f"expected a drag handle per row, got {handles}"
+
+        # Move slot 0's label to slot 2 (a side-A track onto a side-B segment).
+        moved = page.evaluate("() => weMoveTrack(0, 2)")
+        assert moved is True, "weMoveTrack should report a change"
+        state = page.evaluate(
+            "() => ({titles: we.titles.slice(), cuts: we.cuts.slice()})"
+        )
+        # Labels reordered; the waveform cuts (audio) did NOT move.
+        assert state["titles"] == ["T1", "T2", "T0", "T3"], state
+        assert state["cuts"] == [5, 15, 22], f"cuts must stay fixed: {state}"
+
+        # T0 now sits on the side-B segment [15,22) → its derived position is a
+        # B-side number (manual split: position re-derives from the slot).
+        pos = page.evaluate("() => window._weEffectivePositions()[2]")
+        assert pos.startswith("B"), f"moved label should take the B side: {pos!r}"
+
+        # The skip flag travels with the row. Skip slot 0, then move it to the
+        # end — the skip must follow the label, not stay on the segment.
+        page.evaluate("() => { we.skipped = [true, false, false, false];"
+                      " renderTracks(); weMoveTrack(0, 3); }")
+        skipped = page.evaluate("() => we.skipped.slice()")
+        assert skipped == [False, False, False, True], \
+            f"skip should travel with the dragged row: {skipped}"
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
 # ── Music row "N tracks" link expands an inline track list ───────────────
 def test_music_row_expands_into_track_list(stack, page):
     """Clicking the `N tracks` link in the Music section toggles an inline
