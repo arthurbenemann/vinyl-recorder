@@ -329,23 +329,28 @@
 
     <div class="we-toolbar">
       <button class="play-btn" id="we-play" onclick="weTogglePlay()" title="Play / pause (Space)" aria-keyshortcuts="Space">▶</button>
-      <button class="btn-small" id="we-preview-btn" onclick="wePreviewCut()" title="Preview the nearest cut: play ~2s before to ~2s after the boundary, then stop (p)." aria-keyshortcuts="p">▶ preview cut (p)</button>
       <span class="readout">
         <strong id="we-time">0:00</strong> / <span id="we-duration">—</span>
       </span>
       <span class="grow"></span>
+      <!-- All three automatic cut-placement tools live behind one dropdown:
+           a saved tracklist, silence detection, and an even N-way split.
+           Each keeps its own ids + action handlers; only the toggle wrapper
+           is shared (weToggleSuggest('split')). -->
       <div class="we-suggest">
-        <button class="btn-small" id="we-load-tracklist-btn" onclick="weLoadTracklistFromTags()" title="Pull the tracklist from this album's saved Discogs / MusicBrainz id (tag the album first to set them)">↻ load tracklist</button>
-        <div class="search-status" id="we-search-status" style="margin-left:8px"></div>
-        <!-- Hidden legacy candidate slot — older auto-load paths used to
-             write status into #we-candidates; kept so any stale handler
-             writing here doesn't throw. -->
-        <div id="we-candidates" hidden></div>
-      </div>
-      <div class="we-suggest">
-        <button class="btn-small" onclick="weToggleSuggest('silence')">suggest from silence ▾</button>
-        <div class="we-suggest-pop" id="we-pop-silence" hidden>
-          <div class="col-label">Silence detection</div>
+        <button class="btn-small" id="we-split-btn" onclick="weToggleSuggest('split')" aria-haspopup="true" aria-expanded="false" title="Place cut markers automatically — from a saved Discogs / MusicBrainz tracklist, from detected silences, or evenly across the side.">✂ auto-split ▾</button>
+        <div class="we-suggest-pop we-split-pop" id="we-pop-split" hidden role="dialog" aria-label="Auto-place cuts">
+          <div class="col-label">From saved tracklist</div>
+          <div class="we-split-section">
+            <button class="btn" id="we-load-tracklist-btn" onclick="weLoadTracklistFromTags()" title="Pull the tracklist from this album's saved Discogs / MusicBrainz id (tag the album first to set them)">↻ load tracklist</button>
+            <div class="search-status" id="we-search-status"></div>
+            <!-- Hidden legacy candidate slot — older auto-load paths used to
+                 write status into #we-candidates; kept so any stale handler
+                 writing here doesn't throw. -->
+            <div id="we-candidates" hidden></div>
+          </div>
+
+          <div class="col-label">From silence</div>
           <div class="silence-controls">
             <div class="silence-row silence-slider"
                  title="Slider notches match the 8-bit quantisation in the album's .peaks.dat — that's the resolution at which silence is actually detectable. Useful range is roughly -42 dB (1) to -6 dB (64).">
@@ -377,14 +382,9 @@
             <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
             <div class="job-bar-text"><span class="job-bar-pct">0%</span></div>
           </div>
-        </div>
-      </div>
-      <div class="we-suggest">
-        <button class="btn-small" onclick="weToggleSuggest('even')"
-                title="Seed evenly-spaced cuts for a gapless side (live set, DJ mix, classical) where silence detection finds nothing. Drag the cuts onto the real boundaries afterwards.">split evenly ▾</button>
-        <div class="we-suggest-pop" id="we-pop-even" hidden>
-          <div class="col-label">Split into equal tracks</div>
-          <p class="even-hint">For a gapless side where "suggest from silence" finds nothing. Seeds evenly-spaced cuts — drag each onto the real boundary (use the <strong>▶</strong> on each track to listen).</p>
+
+          <div class="col-label">Even tracks</div>
+          <p class="even-hint">For a gapless side where silence detection finds nothing. Seeds evenly-spaced cuts — drag each onto the real boundary (use the <strong>▶</strong> on each track to listen).</p>
           <div class="silence-row silence-numbers">
             <label class="silence-num" for="we-even-n">
               <span class="silence-label">Tracks</span>

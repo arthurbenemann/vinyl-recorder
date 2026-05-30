@@ -739,7 +739,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .we-sides .drag-handle:active { cursor: grabbing; }
 .we-sides .we-side-row.dragging .drag-handle { cursor: grabbing; }
 .we-sides .num { color: var(--muted); font-variant-numeric: tabular-nums; }
-.we-sides .name { color: var(--text); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.we-sides .name { color: var(--text); max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .we-sides .dur { color: var(--muted); font-variant-numeric: tabular-nums; }
 .we-sides .arrows { display: inline-flex; gap: 2px; }
 .we-sides .arrow-btn { width: 18px; height: 18px; padding: 0; border-radius: 3px; background: var(--surface2); border: 0.5px solid var(--border2); color: var(--muted); font-size: 9px; cursor: pointer; line-height: 1; }
@@ -825,6 +825,12 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .we-suggest-pop .candidate-thumb { width: 32px; height: 32px; }
 .we-suggest-pop .candidate-title { font-size: 11px; }
 .we-suggest-pop .candidate-sub { font-size: 10px; }
+
+/* Wave editor — unified auto-split popover: sections separated by a rule */
+.we-split-pop { min-width: 400px; }
+.we-split-section { margin-bottom: 8px; }
+.we-split-pop .col-label { margin-top: 12px; padding-top: 10px; border-top: 0.5px solid var(--border); margin-bottom: 6px; }
+.we-split-pop .col-label:first-child { margin-top: 0; padding-top: 0; border-top: none; }
 
 /* Wave editor — keyboard/mouse shortcuts legend */
 .we-keys-pop { min-width: 300px; }

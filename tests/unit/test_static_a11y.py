@@ -65,10 +65,9 @@ def test_replaygain_toggle_present_and_wired(html, js):
 
 
 def test_wave_editor_preview_cut_wired(html):
-    """The split editor advertises + handles the `p` preview-cut shortcut
-    and exposes a preview button."""
-    assert 'id="we-preview-btn"' in html
-    assert "preview nearest cut" in html
+    """The split editor advertises + handles the `p` preview-cut shortcut.
+    The toolbar button was removed (P shortcut still works + is documented)."""
+    assert "preview the nearest cut" in html
     canvas_tag = html.split('id="we-canvas"')[1].split(">")[0]
     assert "p to preview the nearest cut" in canvas_tag
     we_js = (REPO_ROOT / "app" / "static" / "wave-editor.js").read_text(encoding="utf-8")
