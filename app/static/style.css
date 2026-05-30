@@ -503,7 +503,7 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65); display: flex; align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(2px); padding: 16px; }
 .modal-backdrop[hidden] { display: none; }
 .modal { background: var(--bg); border: 0.5px solid var(--border2); border-radius: 10px; padding: 18px 20px; width: 1040px; max-width: 100%; max-height: 100%; overflow-y: auto; }
-.modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .modal-title { font-family: var(--serif); font-size: 18px; }
 .modal-sub { font-size: 11px; color: var(--muted); margin-top: 2px; word-break: break-all; }
 
@@ -789,7 +789,6 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .wave-side-badge { position: absolute; bottom: 2px; left: 3px; padding: 1px 5px; font-size: 9px; color: rgba(170,210,255,0.95); background: rgba(0,0,0,0.55); border: 0.5px solid rgba(55,138,221,0.55); border-radius: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
 .wave-readout { position: absolute; top: 4px; right: 6px; padding: 2px 6px; background: rgba(0,0,0,0.6); border-radius: 3px; font-size: 10px; color: var(--text); pointer-events: none; font-variant-numeric: tabular-nums; }
 .wave-axis { display: flex; justify-content: space-between; padding: 4px 6px; font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; background: var(--surface); border-top: 0.5px solid var(--border); }
-.wave-help { font-size: 10px; color: var(--muted); margin-top: 6px; line-height: 1.6; }
 
 /* Silence-detection number inputs inside the suggest popover */
 .we-suggest-pop input[type="number"] {
@@ -834,6 +833,11 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 .we-keys-list { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: baseline; margin: 4px 0 2px; font-size: 11px; }
 .we-keys-list dt { white-space: nowrap; color: var(--fg); }
 .we-keys-list dd { margin: 0; color: var(--muted); }
+/* Legend note: explains the on-screen markers (side-switch line, sleeve
+   positions). Moved here from the always-present .wave-help strip so it
+   only costs space when the user opens the popover. */
+.we-keys-note { margin: 10px 0 0; padding-top: 8px; border-top: 0.5px solid var(--border); font-size: 11px; line-height: 1.5; color: var(--muted); max-width: 360px; }
+.we-keys-swatch { color: rgba(170,210,255,0.95); }
 kbd { display: inline-block; font: inherit; font-size: 10px; line-height: 1; padding: 3px 5px; margin-right: 2px; background: var(--surface); border: 0.5px solid var(--border2); border-bottom-width: 1.5px; border-radius: 4px; color: var(--fg); }
 
 /* Wave editor — track list */

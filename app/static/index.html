@@ -296,6 +296,33 @@
       <div class="we-header-right">
         <span class="we-saving" id="we-saving-indicator" role="status" aria-live="polite" hidden>Saving…</span>
         <span class="we-saved" id="we-saved" hidden></span>
+        <div class="we-suggest">
+          <button class="btn-small" id="we-keys-btn" onclick="weToggleShortcuts()" aria-haspopup="true" aria-expanded="false" title="Keyboard &amp; mouse shortcuts, and what the on-screen markers mean">⌨ keys &amp; help ▾</button>
+          <div class="we-suggest-pop we-keys-pop" id="we-pop-keys" hidden role="dialog" aria-label="Editor shortcuts and legend">
+            <div class="col-label">Keyboard</div>
+            <dl class="we-keys-list">
+              <dt><kbd>Space</kbd></dt><dd>play / pause</dd>
+              <dt><kbd>C</kbd></dt><dd>add a cut at the playhead</dd>
+              <dt><kbd>P</kbd></dt><dd>preview the nearest cut</dd>
+              <dt><kbd>←</kbd><kbd>→</kbd></dt><dd>nudge the nearest cut 0.1&nbsp;s (<kbd>Shift</kbd> = 1&nbsp;s)</dd>
+              <dt><kbd>J</kbd><kbd>K</kbd></dt><dd>jump to previous / next cut</dd>
+              <dt><kbd>S</kbd></dt><dd>skip / unskip the region at the playhead</dd>
+              <dt><kbd>Del</kbd></dt><dd>delete the nearest cut</dd>
+              <dt><kbd>Esc</kbd></dt><dd>close (or dismiss an open panel)</dd>
+            </dl>
+            <div class="col-label">Mouse</div>
+            <dl class="we-keys-list">
+              <dt>scroll</dt><dd>zoom in / out</dd>
+              <dt>click wave</dt><dd>move the playhead (seek)</dd>
+              <dt><kbd>Shift</kbd>+click</dt><dd>add a cut</dd>
+              <dt>drag a cut</dt><dd>nudge it (snaps to detected silences; stays within its side)</dd>
+              <dt><kbd>Shift</kbd>+drag</dt><dd>move it + every later cut on that side</dd>
+              <dt>right-click</dt><dd>delete the nearest cut</dd>
+              <dt><kbd>▶</kbd> on a track</dt><dd>play just that region</dd>
+            </dl>
+            <p class="we-keys-note"><span class="we-keys-swatch">┊</span> a side switch from the recording. Cut handles and track rows show sleeve-style positions (e.g. A1, B2) — auto-derived from the side layout, or from Discogs when a tracklist is applied.</p>
+          </div>
+        </div>
         <button class="btn-small" onclick="closeWaveEditor()">close</button>
       </div>
     </div>
@@ -353,25 +380,6 @@
         </div>
       </div>
       <div class="we-suggest">
-        <button class="btn-small" id="we-keys-btn" onclick="weToggleShortcuts()" aria-haspopup="true" aria-expanded="false" title="Keyboard & mouse shortcuts">⌨ keys ▾</button>
-        <div class="we-suggest-pop we-keys-pop" id="we-pop-keys" hidden role="dialog" aria-label="Editor shortcuts">
-          <div class="col-label">Keyboard</div>
-          <dl class="we-keys-list">
-            <dt><kbd>Space</kbd></dt><dd>play / pause</dd>
-            <dt><kbd>←</kbd><kbd>→</kbd></dt><dd>nudge playhead 0.1&nbsp;s (<kbd>Shift</kbd> = 1&nbsp;s)</dd>
-            <dt><kbd>J</kbd><kbd>K</kbd></dt><dd>jump to previous / next cut</dd>
-            <dt><kbd>Del</kbd></dt><dd>delete the nearest cut</dd>
-            <dt><kbd>S</kbd></dt><dd>skip / unskip the region at the playhead</dd>
-            <dt><kbd>Esc</kbd></dt><dd>close (or dismiss an open panel)</dd>
-          </dl>
-          <div class="col-label">Mouse</div>
-          <dl class="we-keys-list">
-            <dt>click wave</dt><dd>move the playhead</dd>
-            <dt>drag a cut</dt><dd>move it (stays within its side)</dd>
-            <dt><kbd>Shift</kbd>+drag</dt><dd>move it + every later cut on that side</dd>
-            <dt><kbd>▶</kbd> on a track</dt><dd>play just that region</dd>
-          </dl>
-        </div>
         <button class="btn-small" onclick="weToggleSuggest('even')"
                 title="Seed evenly-spaced cuts for a gapless side (live set, DJ mix, classical) where silence detection finds nothing. Drag the cuts onto the real boundaries afterwards.">split evenly ▾</button>
         <div class="we-suggest-pop" id="we-pop-even" hidden>
@@ -417,11 +425,6 @@
       </div>
     </div>
     <div class="wave-axis"><span id="we-t0">0:00</span><span id="we-t1">—</span></div>
-    <div class="wave-help">
-      <strong>scroll</strong> zoom · <strong>shift+click</strong> or <strong>c</strong> add cut · drag handle to nudge (snaps to detected silences) · right-click delete · click waveform to seek.<br>
-      <strong>space</strong> play/pause · <strong>c</strong> add cut at playhead · <strong>p</strong> preview nearest cut · <strong>←/→</strong> nudge nearest cut ±0.1s (shift = ±1s) · <strong>j/k</strong> jump prev/next cut · <strong>s</strong> skip region at playhead · <strong>delete</strong> remove nearest cut · <strong>esc</strong> close.<br>
-      <span style="opacity:0.85"><span style="color:rgba(170,210,255,0.95)">┊</span> side switch (from recording) · cut handles + track rows show sleeve-style positions (e.g. A1, B2) — auto-derived from the side layout, or from Discogs when a tracklist is applied.</span>
-    </div>
 
     <div class="col-label" style="margin-top:14px">Tracks</div>
     <div class="wave-tracks" id="we-tracks"></div>
