@@ -63,7 +63,7 @@ def _split_sync(json_body: dict) -> "_FakeResponse | object":
     job_id = r.json()["job_id"]
     for _ in range(600):   # up to 60 s
         jr = client.get(f"/api/jobs/{job_id}")
-        if jr.ok:
+        if jr.is_success:
             job = jr.json()
             if job["done"]:
                 if job["error"]:
