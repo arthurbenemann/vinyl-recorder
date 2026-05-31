@@ -1,3 +1,13 @@
+## v1.6.0 — 2026-05-31
+
+### Features
+- **wave-editor:** Drag-to-pan and drag handles to reorder track labels (#72)
+- **peaks:** Upgrade to 16-bit dat format; dB-based noise-floor slider (#73)
+
+### Bug Fixes
+- **wave-editor:** Spread Discogs tracklist tracks per side, seed lead-in (#71)
+- **wave-editor:** Widen actions column (#67), grow + compact wave-editor split view (#66) (#70)
+
 ## v1.5.0 — 2026-05-28
 
 ### Features
