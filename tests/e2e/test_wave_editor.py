@@ -748,7 +748,6 @@ def test_split_with_cuts_across_side_boundaries(stack, page):
                 }}
             }}
             """,
-            timeout=60_000,
         )
         assert 'music_relpath' in split_result, split_result
         relpath = split_result['music_relpath']
@@ -1131,7 +1130,6 @@ def test_music_row_expands_into_track_list(stack, page):
                 closeWaveEditor();
             }}
             """,
-            timeout=60_000,
         )
         # The row's `N tracks` link only renders once `a.split && a.track_count`
         # is true on the server side — wait for the post-split refresh to land.

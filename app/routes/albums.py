@@ -445,9 +445,21 @@ async def _run_split_bg(req: SplitRequest, manifest: dict) -> None:
 async def split_album(req: SplitRequest):
     """Start encoding per-track FLACs in the background. Returns immediately
     with the job_id so the browser can poll /api/jobs/{job_id} for progress.
-    The encode survives modal close / tab switch. Returns 409 if a split is
-    already running for this album — wait for it to finish or reload."""
+    The encode survives modal close / tab switch.
+    Pre-validation (bad params, missing files, disk space, duration) runs
+    synchronously so the route still returns 400/404/507/500 for those cases.
+    Returns 409 if a split is already running for this album."""
     manifest = _require_album(req.album_id)
+    try:
+        split_orchestrator.preflight_split(req, manifest)
+    except split_orchestrator.SplitValidationError as e:
+        raise HTTPException(400, str(e))
+    except split_orchestrator.SplitNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except split_orchestrator.SplitDiskSpaceError as e:
+        raise HTTPException(507, str(e))
+    except split_orchestrator.SplitProcessingError as e:
+        raise HTTPException(500, str(e))
     existing = _active_splits.get(req.album_id)
     if existing:
         raise HTTPException(409, "a split is already running for this album")

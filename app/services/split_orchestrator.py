@@ -654,6 +654,41 @@ def _persist_split_plan(req, relpath: str) -> None:
     albums_fs.write_manifest(req.album_id, manifest)
 
 
+def preflight_split(req, manifest: dict) -> None:  # noqa: ARG001
+    """Synchronous pre-validation run before spawning the background task,
+    so the route can return the right HTTP status code immediately. Raises
+    Split*Error on failure; does not start the encode or modify any files."""
+    if not req.tracks:
+        raise SplitValidationError("no tracks given")
+    if req.sample_rate not in ALLOWED_SPLIT_SAMPLE_RATES:
+        raise SplitValidationError(
+            f"unsupported sample_rate {req.sample_rate}; "
+            f"allowed: {sorted(ALLOWED_SPLIT_SAMPLE_RATES)}"
+        )
+    if req.output_format not in ALLOWED_OUTPUT_FORMATS:
+        raise SplitValidationError(
+            f"unsupported output_format {req.output_format!r}; "
+            f"allowed: {sorted(ALLOWED_OUTPUT_FORMATS)}"
+        )
+    if getattr(req, "channel_mode", "stereo") not in ALLOWED_CHANNEL_MODES:
+        raise SplitValidationError(
+            f"unsupported channel_mode {req.channel_mode!r}; "
+            f"allowed: {sorted(ALLOWED_CHANNEL_MODES)}"
+        )
+    try:
+        playlist, side_paths = albums_fs.album_concat_playlist(req.album_id)
+        playlist.unlink(missing_ok=True)
+    except FileNotFoundError as e:
+        raise SplitNotFoundError(str(e))
+    src_bytes = sum(p.stat().st_size for p in side_paths)
+    err = disk_space_error(max(LOW_SPACE_GB, src_bytes / 1e9 + 0.5), "split")
+    if err:
+        raise SplitDiskSpaceError(err)
+    total = sum((flac_duration_seconds(p) or 0.0) for p in side_paths)
+    if total <= 0:
+        raise SplitProcessingError("could not read source duration")
+
+
 async def split_album(req, manifest: dict) -> dict:
     """Cut the album into per-track FLACs in `music/{Artist}/{Album} (Year)/`,
     embed manifest tags + cover.jpg in each track, and persist the plan +
