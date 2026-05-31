@@ -1804,9 +1804,11 @@ async function weLoadTracklistFromTags() {
 // here — they live (and re-export themselves) inside
 // `modules/timeline-state.js` after the extraction.
 if (typeof window !== 'undefined') {
-  // Exposed for the Node-sandbox test that drives the 409 path.
-  window._savePlanNow        = _savePlanNow;
-  window._weEditorState      = we;
+  // Exposed for Node-sandbox tests.
+  window._savePlanNow           = _savePlanNow;
+  window._weEditorState         = we;
+  window._weRenderApproxStats   = _renderApproxStats;
+  window._weInvalidateMeasure   = invalidateMeasure;
 }
 
 function _weApplyTracklist(track_details, sourceLabel) {
