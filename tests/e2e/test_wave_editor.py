@@ -715,6 +715,7 @@ def test_split_with_cuts_across_side_boundaries(stack, page):
         # Run split via the API directly — the UI button is present but
         # this path keeps the test focused on the server-side -ss/-to
         # behaviour rather than the modal-confirmation flow.
+        # POST returns immediately with a job_id; poll until encode is done.
         split_result = page.evaluate(
             f"""
             async () => {{
@@ -734,9 +735,20 @@ def test_split_with_cuts_across_side_boundaries(stack, page):
                     }}),
                 }});
                 if (!r.ok) throw new Error('split failed: ' + r.status + ' ' + (await r.text()));
-                return r.json();
+                const {{ job_id }} = await r.json();
+                for (;;) {{
+                    await new Promise(res => setTimeout(res, 300));
+                    const jr = await fetch('/api/jobs/' + encodeURIComponent(job_id));
+                    if (!jr.ok) continue;
+                    const job = await jr.json();
+                    if (job.done) {{
+                        if (job.error) throw new Error('split error: ' + job.error);
+                        return job.result;
+                    }}
+                }}
             }}
-            """
+            """,
+            timeout=60_000,
         )
         assert 'music_relpath' in split_result, split_result
         relpath = split_result['music_relpath']
@@ -1085,6 +1097,7 @@ def test_music_row_expands_into_track_list(stack, page):
         # Split via API + refresh albums so the row moves into the Music
         # section. Then close the editor so the modal isn't capturing
         # focus when we click on the table beneath it.
+        # POST returns immediately; poll until the background encode finishes.
         page.evaluate(
             f"""
             async () => {{
@@ -1103,10 +1116,22 @@ def test_music_row_expands_into_track_list(stack, page):
                     }}),
                 }});
                 if (!r.ok) throw new Error('split failed: ' + r.status + ' ' + (await r.text()));
+                const {{ job_id }} = await r.json();
+                for (;;) {{
+                    await new Promise(res => setTimeout(res, 300));
+                    const jr = await fetch('/api/jobs/' + encodeURIComponent(job_id));
+                    if (!jr.ok) continue;
+                    const job = await jr.json();
+                    if (job.done) {{
+                        if (job.error) throw new Error('split error: ' + job.error);
+                        break;
+                    }}
+                }}
                 await refreshAlbums();
                 closeWaveEditor();
             }}
-            """
+            """,
+            timeout=60_000,
         )
         # The row's `N tracks` link only renders once `a.split && a.track_count`
         # is true on the server side — wait for the post-split refresh to land.
