@@ -1088,3 +1088,144 @@ def test_split_clears_prior_music_dir_before_re_emit(monkeypatch):
         assert all("stale" not in p.name for p in after)
     finally:
         _cleanup_album(aid)
+
+
+# ── split_job reconnect endpoint ─────────────────────────────────────────
+
+def test_split_job_endpoint_unknown_album_returns_404():
+    """GET /api/album/{id}/split_job returns 404 for an unknown album."""
+    r = _client().get("/api/album/no-such-album/split_job")
+    assert r.status_code == 404
+
+
+def test_split_job_endpoint_no_active_split(monkeypatch):
+    """GET /api/album/{id}/split_job returns {job_id: null} when no split is running."""
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side()
+    try:
+        r = _client().get(f"/api/album/{aid}/split_job")
+        assert r.status_code == 200
+        assert r.json() == {"job_id": None}
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_job_endpoint_returns_active_job(monkeypatch):
+    """GET /api/album/{id}/split_job returns job details when a split job is registered."""
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side()
+    try:
+        from services.jobs import start_job
+        from routes import albums as albums_mod
+        fake_id = "test_fake_job_123"
+        start_job(fake_id, "split")
+        albums_mod._active_splits[aid] = fake_id
+        r = _client().get(f"/api/album/{aid}/split_job")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["job_id"] == fake_id
+        assert body["done"] is False
+    finally:
+        from routes import albums as albums_mod
+        albums_mod._active_splits.pop(aid, None)
+        _cleanup_album(aid)
+
+
+def test_split_job_endpoint_stale_job_id_returns_null(monkeypatch):
+    """GET /api/album/{id}/split_job returns {job_id: null} when the job_id in
+    _active_splits no longer has a registry entry (GC'd or never started)."""
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side()
+    try:
+        from routes import albums as albums_mod
+        albums_mod._active_splits[aid] = "stale_job_id_not_in_registry"
+        r = _client().get(f"/api/album/{aid}/split_job")
+        assert r.status_code == 200
+        assert r.json() == {"job_id": None}
+    finally:
+        from routes import albums as albums_mod
+        albums_mod._active_splits.pop(aid, None)
+        _cleanup_album(aid)
+
+
+# ── duplicate-split 409 path ──────────────────────────────────────────────
+
+def test_split_already_running_returns_409(monkeypatch):
+    """POST /api/album/split returns 409 when a split is already in progress."""
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side()
+    try:
+        from routes import albums as albums_mod
+        albums_mod._active_splits[aid] = "already_running_job"
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+        })
+        assert r.status_code == 409
+        assert "already running" in r.json()["detail"]
+    finally:
+        from routes import albums as albums_mod
+        albums_mod._active_splits.pop(aid, None)
+        _cleanup_album(aid)
+
+
+# ── background error handling ─────────────────────────────────────────────
+
+def test_split_bg_exception_marks_job_failed(monkeypatch):
+    """If split_album raises an unexpected exception in the background task,
+    the job is marked done with an error so the UI can report failure."""
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side()
+
+    from services import split_orchestrator as orch
+
+    async def _fail(req, manifest):
+        raise RuntimeError("unexpected bg failure")
+
+    monkeypatch.setattr(orch, "split_album", _fail)
+
+    try:
+        client = _client()
+        r = client.post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+        })
+        assert r.status_code == 200
+        job_id = r.json()["job_id"]
+        jr = client.get(f"/api/jobs/{job_id}")
+        assert jr.status_code == 200
+        job = jr.json()
+        assert job["done"] is True
+        assert "unexpected bg failure" in job["error"]
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_bg_split_error_marks_job_failed(monkeypatch):
+    """If split_album raises a SplitProcessingError in the background task,
+    the job is marked done with the error message."""
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side()
+
+    from services import split_orchestrator as orch
+
+    async def _fail(req, manifest):
+        raise orch.SplitProcessingError("ffmpeg crashed in bg")
+
+    monkeypatch.setattr(orch, "split_album", _fail)
+
+    try:
+        client = _client()
+        r = client.post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+        })
+        assert r.status_code == 200
+        job_id = r.json()["job_id"]
+        jr = client.get(f"/api/jobs/{job_id}")
+        assert jr.status_code == 200
+        job = jr.json()
+        assert job["done"] is True
+        assert "ffmpeg crashed in bg" in job["error"]
+    finally:
+        _cleanup_album(aid)
