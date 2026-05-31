@@ -199,16 +199,14 @@ def _drive(page, sides, stack):
         """
         () => {
             const s = document.getElementById('we-noise');
-            s.value = 32;
+            s.value = -24;
             s.dispatchEvent(new Event('input', { bubbles: true }));
         }
         """
     )
     readout = page.text_content('#we-noise-readout') or ""
-    db = float(readout.replace(' dB', '').strip())
-    # 20*log10((32*256+127.5)/32768) = -11.91 dB. Allow ±0.5 for any
-    # mid-bin reconstruction tweak.
-    assert -12.4 <= db <= -11.4, f"slider readout off: {readout!r}"
+    # Slider is now dB-valued (-60..-6); readout should match exactly.
+    assert readout.strip() == "-24 dB", f"slider readout off: {readout!r}"
 
     # ── Silence detect via .dat returns sub-second ────────────────────
     t0 = time.time()
