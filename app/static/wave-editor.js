@@ -946,13 +946,14 @@ function weHoverMove(e) {
   document.getElementById('we-readout').textContent = fmtMMSS(_xToTime(we.hoverX));
 }
 
-// Snap a dragged cut to a nearby detected silence within 1s. Long silences
-// (album side flips, fade-outs followed by long lead-in) need a cut at the
-// start or the end, not the middle, so each silence contributes three snap
-// candidates and the closest one wins.
+// Snap a dragged cut to a nearby detected silence. The snap radius is
+// pixel-based (30 px) so zooming in gives finer precision — at low zoom the
+// cap of 1 s keeps it from reaching across large gaps.  Long silences need a
+// cut at the start/end, not the middle, so each silence contributes three
+// snap candidates and the closest one wins.
 function _snapToSilence(t) {
   if (!we.silences.length) return t;
-  const SNAP = 1.0;
+  const SNAP = Math.min(1.0, (30 / _wrapW()) * _viewLen());
   let best = null, bestDist = SNAP;
   for (const s of we.silences) {
     for (const cand of [s.start, (s.start + s.end) / 2, s.end]) {
@@ -1208,7 +1209,7 @@ function weKeyDown(e) {
     }
     case 'p':
     case 'P': {
-      // Audition the nearest cut (play around the boundary, then auto-stop).
+      // Jump to the nearest cut and play forward from that exact point.
       e.preventDefault();
       wePreviewCut();
       return;
@@ -1242,7 +1243,7 @@ function weStartDrag(i, e) {
     // only the ones sharing its raw recording side (see _weCutGroupSpan).
     // Cuts on later sides stay put, and weHoverMove clamps the group so it
     // can't be pushed across the side boundary.
-    we.dragging = { kind: 'cutGroup', ..._weCutGroupSpan(i), orig: we.cuts.slice() };
+    we.dragging = { kind: 'cutGroup', ..._weCutGroupSpan(i), orig: we.cuts.slice(), needsScroll: true };
   } else {
     // Constrain a single-cut drag to the raw recording side it sits in and
     // to the gap between its neighbours — so a marker can't be dragged
@@ -1253,7 +1254,7 @@ function weStartDrag(i, e) {
     const [sideLo, sideHi] = _weSideBounds(we.cuts[i]);
     const lo = Math.max(sideLo, i > 0 ? we.cuts[i - 1] : 0);
     const hi = Math.min(sideHi, i < we.cuts.length - 1 ? we.cuts[i + 1] : we.total);
-    we.dragging = { kind: 'cut', i, lo, hi };
+    we.dragging = { kind: 'cut', i, lo, hi, needsScroll: true };
   }
   const onMove = ev => weHoverMove(ev);
   const onUp   = () => {
@@ -1464,6 +1465,16 @@ function renderTracks() {
   }).join('');
   document.getElementById('we-go').disabled = exportable === 0;
   _persistDraft();
+  // On the first render after a drag starts, scroll the track row that begins
+  // at the dragged cut boundary to the top of the track list. needsScroll is
+  // cleared immediately so subsequent renders during the same drag don't
+  // fight a manual scroll by the user.
+  if (we.dragging?.needsScroll) {
+    const di = we.dragging.i;
+    const trackEl = host.children[di + 1];
+    if (trackEl) trackEl.scrollIntoView({ behavior: 'instant', block: 'start' });
+    we.dragging.needsScroll = false;
+  }
 }
 
 // ── Track reorder (relabel only) ──────────────────────────────────────────
@@ -1624,20 +1635,15 @@ function wePlayTrack(i) {
   renderTracks();
 }
 
-// Audition the cut nearest the playhead: play a couple seconds before to a
-// couple after, then auto-stop. Reuses the `playingEnd` watcher (same
-// mechanism as wePlayTrack), so no extra timer — and because playingEnd is
-// set, _jumpOverSkippedFromHere is bypassed, so the boundary plays through
-// even when an adjacent region is marked skip (which is what you want when
-// checking the cut).
+// Jump the playhead to the nearest cut and start playing from that exact
+// position. No auto-stop — press Space to pause. The old behaviour played
+// from cut-2s to cut+2s; now it just navigates and plays freely.
 function wePreviewCut() {
   if (!we.cuts.length || !weAudio.hasSrc) return;
   const i = _nearestCutIndex(weAudio.currentTime || 0);
-  const { start, end } = window._wePreviewWindow(we.cuts[i], we.total, 2, 2);
-  if (end <= start) return;
-  weAudio.seek(start);
+  weAudio.seek(we.cuts[i]);
   we.playingTrack = null;
-  we.playingEnd   = end;
+  we.playingEnd   = null;
   weAudio.play();
   document.getElementById('we-play').textContent = '⏸';
   we.isPlaying = true;

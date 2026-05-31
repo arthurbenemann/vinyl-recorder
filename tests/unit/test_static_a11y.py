@@ -73,7 +73,6 @@ def test_wave_editor_preview_cut_wired(html):
     we_js = (REPO_ROOT / "app" / "static" / "wave-editor.js").read_text(encoding="utf-8")
     assert "case 'p':" in we_js
     assert "function wePreviewCut(" in we_js
-    assert "_wePreviewWindow(" in we_js
 
 
 def test_track_length_hint_wired(css):

@@ -216,11 +216,15 @@ function _weCutsFromTracklist(td, sides, total) {
     if (span <= 0) continue;
     if (!idxs.length) { skipRegion(lo, hi); continue; }  // recorded side, no tracks
 
-    // Seed a lead-in skip on every side and a lead-out skip after the final
-    // track. Each gap is capped at a quarter of the side so even a very
-    // short side keeps at least half its span for music.
-    const gLead = Math.min(g, span * 0.25);
-    const gTail = isLast ? Math.min(g, (span - gLead) * 0.25) : 0;
+    // The first recorded side gets a lead-in (album start / needle-drop
+    // silence). Every side gets a lead-out (run-out groove / fade silence
+    // before a flip, or album end). This yields exactly ONE skip region at
+    // each side boundary — the lead-out of the preceding side — so the user
+    // has a single handle to position the flip gap (issue #75). Each gap is
+    // capped at a quarter of the side so even a very short side keeps at
+    // least half its span for music.
+    const gLead = (i === 0) ? Math.min(g, span * 0.25) : 0;
+    const gTail = Math.min(g, (span - gLead) * 0.25);
     const musicLo = lo + gLead;
     const musicHi = hi - gTail;
     const musicSpan = Math.max(0, musicHi - musicLo);
@@ -233,7 +237,7 @@ function _weCutsFromTracklist(td, sides, total) {
     const wsum = weights.reduce((a, b) => a + b, 0) || idxs.length;
     // Informational: the Discogs side runs longer than the recorded side
     // (wrong pressing / missing audio). We still scale it to fit.
-    if (sum > musicSpan + 0.001) overflow += 1;
+    if (sum > span + 0.001) overflow += 1;
 
     let cum = 0;
     for (let m = 0; m < idxs.length; m++) {
