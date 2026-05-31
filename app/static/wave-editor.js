@@ -1732,7 +1732,7 @@ async function _weAutoLoadFromIds(a) {
 // Persisted silence-detection settings. Keyed like the other namespaced
 // prefs (lib.sortBy, autoStopSilenceSeconds): a raw value per control.
 const WE_DETECT_PREFS = [
-  { id: 'we-noise',    key: 'we.noiseInt8',  def: 8,   min: 1,   max: 127 },
+  { id: 'we-noise',    key: 'we.noiseInt8',  def: 1,   min: 1,   max: 127 },
   { id: 'we-mindur',   key: 'we.minSilence', def: 1.5, min: 0.2, max: null },
   { id: 'we-skiplong', key: 'we.skipLong',   def: 15,  min: 2,   max: null },
 ];
