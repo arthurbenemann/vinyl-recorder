@@ -25,6 +25,8 @@ const we = {
   playingEnd:  null,         // time at which playback should auto-pause
   measured:    null,         // last /api/album/measure result, or null while stale
   approxPeakDb: null,        // peak read from .peaks.dat (instant, ±0.05 dB at vinyl peaks). Replaced by exact value on measure.
+  approxNoiseFloorDb: null,  // 5th-percentile of non-zero int16 values — rough noise-floor estimate, instant.
+  approxNoiseFloorQuantized: false, // true when estimate hit the lowest histogram bin (floor may be even quieter).
   peaks:       null,         // parsed .peaks.dat, fed to drawPeaks() on every redraw
   targetPeakDb: -1.0,        // overwritten from /api/config (default_split_target_peak_db)
   // True iff the user has actually edited cuts/titles/skip/etc since the
@@ -370,6 +372,8 @@ function openWaveEditor(fname) {
     playingEnd:  null,
     measured:    null,
     approxPeakDb: null,
+    approxNoiseFloorDb: null,
+    approxNoiseFloorQuantized: false,
     peaks:       null,
     sides:       [],   // populated below from the album manifest
     // Flips true once weLoadExistingSplit resolves. _savePlanNow gates on
@@ -621,6 +625,9 @@ async function _loadAndDrawPeaks(albumId) {
       document.getElementById('we-mini-end').textContent = fmtMMSS(we.total);
     }
     we.approxPeakDb = approxPeakDbFromPeaks(peaks);
+    const _nf = approxNoiseFloorDbFromPeaks(peaks);
+    we.approxNoiseFloorDb        = _nf ? _nf.db        : null;
+    we.approxNoiseFloorQuantized = _nf ? _nf.quantized : false;
     _renderApproxStats();
     drawAll();
   } catch (e) {
@@ -642,8 +649,10 @@ function _renderApproxStats() {
     text.textContent = _sourceFormatPrefix() + 'click measure to compute peak + noise floor';
     return;
   }
+  const noiseStr = we.approxNoiseFloorDb != null
+    ? ` · noise ${we.approxNoiseFloorQuantized ? '~< ' : '~'}${we.approxNoiseFloorDb.toFixed(0)} dB` : '';
   text.textContent = _sourceFormatPrefix()
-    + `peak ~${we.approxPeakDb.toFixed(1)} dB · click measure for noise floor`;
+    + `peak ~${we.approxPeakDb.toFixed(1)} dB${noiseStr} · click measure`;
 }
 
 // ── Sides reorder ─────────────────────────────────────────────────────────
@@ -782,6 +791,9 @@ async function weReorderSides(newOrder) {
     if (we.albumId === albumId) {
       we.peaks = peaks;
       we.approxPeakDb = approxPeakDbFromPeaks(peaks);
+      const _nf2 = approxNoiseFloorDbFromPeaks(peaks);
+      we.approxNoiseFloorDb        = _nf2 ? _nf2.db        : null;
+      we.approxNoiseFloorQuantized = _nf2 ? _nf2.quantized : false;
       _renderApproxStats();
       drawAll();
     }
@@ -1792,9 +1804,11 @@ async function weLoadTracklistFromTags() {
 // here — they live (and re-export themselves) inside
 // `modules/timeline-state.js` after the extraction.
 if (typeof window !== 'undefined') {
-  // Exposed for the Node-sandbox test that drives the 409 path.
-  window._savePlanNow        = _savePlanNow;
-  window._weEditorState      = we;
+  // Exposed for Node-sandbox tests.
+  window._savePlanNow           = _savePlanNow;
+  window._weEditorState         = we;
+  window._weRenderApproxStats   = _renderApproxStats;
+  window._weInvalidateMeasure   = invalidateMeasure;
 }
 
 function _weApplyTracklist(track_details, sourceLabel) {
@@ -2085,8 +2099,10 @@ function invalidateMeasure() {
   we.measured = null;
   const text = document.getElementById('we-stats-text');
   if (text && we.approxPeakDb != null) {
+    const noiseStr = we.approxNoiseFloorDb != null
+      ? ` · noise ${we.approxNoiseFloorQuantized ? '~< ' : '~'}${we.approxNoiseFloorDb.toFixed(0)} dB` : '';
     text.textContent = _sourceFormatPrefix()
-      + `peak ~${we.approxPeakDb.toFixed(1)} dB · cuts changed — re-measure`;
+      + `peak ~${we.approxPeakDb.toFixed(1)} dB${noiseStr} · cuts changed — re-measure`;
   } else if (text) {
     text.textContent = _sourceFormatPrefix() + 'cuts changed — re-measure';
   }

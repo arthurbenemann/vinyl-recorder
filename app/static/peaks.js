@@ -242,7 +242,52 @@ function approxPeakDbFromPeaks(peaks) {
   return 20 * Math.log10(Math.min(1, amp));
 }
 
+// Approximate noise floor in dBFS from the 5th-percentile of non-zero
+// absolute int16 values across all peak bodies. Rough (±3 dB) but instant.
+// Accepts the same dual-shape input as approxPeakDbFromPeaks.
+function approxNoiseFloorDbFromPeaks(peaks) {
+  if (!peaks) return null;
+  let bodies;
+  if (Array.isArray(peaks.sides)) {
+    bodies = peaks.sides.map(s => s.peaks && s.peaks.body).filter(Boolean);
+  } else if (peaks.body) {
+    bodies = [peaks.body];
+  } else {
+    return null;
+  }
+  // Linear-amplitude histogram: 512 bins, each 64 amplitude units wide.
+  // Bin b holds the count of absolute int16 values in [b*64, (b+1)*64).
+  // Zeros are excluded (true silence / gap frames contribute nothing).
+  const BINS = 512;
+  const hist = new Int32Array(BINS);
+  let total = 0;
+  for (const body of bodies) {
+    for (let i = 0; i < body.length; i++) {
+      const v = body[i];
+      const a = v < 0 ? -v : v;
+      if (a === 0) continue;
+      hist[Math.min(BINS - 1, a >> 6)]++;
+      total++;
+    }
+  }
+  if (total === 0) return null;
+  // Walk upward until we've accumulated 5% of non-zero samples.
+  const target = Math.ceil(total * 0.05);
+  let cum = 0;
+  for (let b = 0; b < BINS; b++) {
+    cum += hist[b];
+    if (cum >= target) {
+      const ampMid = Math.max(1, b * 64 + 32);
+      // quantized=true when we landed in bin 0: the true floor may be even
+      // quieter than the midpoint we can represent, so the caller shows `~>`.
+      return { db: 20 * Math.log10(ampMid / 32768), quantized: b === 0 };
+    }
+  }
+  return null;
+}
+
 window.parsePeaks = parsePeaks;
 window.loadAlbumPeaks = loadAlbumPeaks;
 window.drawPeaks = drawPeaks;
 window.approxPeakDbFromPeaks = approxPeakDbFromPeaks;
+window.approxNoiseFloorDbFromPeaks = approxNoiseFloorDbFromPeaks;
