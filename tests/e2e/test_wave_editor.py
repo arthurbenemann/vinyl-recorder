@@ -905,6 +905,13 @@ def test_drag_pans_waveform(stack, page):
     sides = _generate_side_flacs(raw, count=2)
     # 30 s album, zoomed to a 10 s window parked at [10, 20] so there's room
     # to pan either direction. Full-album pixel↔time math via the wrap rect.
+    #
+    # The waveform timeline is synthetic (we.total = 30), but weAudio plays
+    # the real combined fixture (only a few seconds long), so seek() clamps
+    # to the media and reading back currentTime can't confirm a 15 s seek.
+    # Spy on the requested album-time instead — that's the value the click
+    # handler computes and what the pan must suppress, independent of how
+    # short the backing audio happens to be.
     setup = """
         we.total     = 30;
         we.sides     = [{duration_seconds: 15}, {duration_seconds: 15}];
@@ -915,7 +922,14 @@ def test_drag_pans_waveform(stack, page):
         we.silences  = [];
         we.viewStart = 10;
         we.viewEnd   = 20;
-        if (weAudio) weAudio.seek(0);
+        // Spy: record every seek's requested album-time, before clamping.
+        if (!weAudio.__seekSpy) {
+            weAudio.__seekReqs = [];
+            const orig = weAudio.seek.bind(weAudio);
+            weAudio.seek = (t) => { weAudio.__seekReqs.push(t); return orig(t); };
+            weAudio.__seekSpy = true;
+        }
+        weAudio.__seekReqs = [];
         drawAll();
         const rect = document.getElementById('we-wrap').getBoundingClientRect();
     """
@@ -942,7 +956,8 @@ def test_drag_pans_waveform(stack, page):
         page.mouse.move(x1, cy)
         page.mouse.up()
         state = page.evaluate(
-            "() => ({s: we.viewStart, e: we.viewEnd, cur: weAudio.currentTime})"
+            "() => ({s: we.viewStart, e: we.viewEnd,"
+            " seeks: weAudio.__seekReqs.slice()})"
         )
         # Dragged left → later audio: viewStart increased from 10.
         assert state["s"] > 10.0, f"drag should pan forward: {state}"
@@ -951,8 +966,8 @@ def test_drag_pans_waveform(stack, page):
             f"pan must preserve zoom window: {state}"
         # ~2.5 s shift (0.25 * 10 s), tolerant of mouse-step rounding.
         assert abs(state["s"] - 12.5) < 0.6, f"unexpected pan distance: {state}"
-        # The pan's trailing click must NOT have seeked the playhead.
-        assert state["cur"] == 0, f"pan should not seek: {state}"
+        # The pan's trailing click must NOT have requested a seek.
+        assert state["seeks"] == [], f"pan should not seek: {state}"
 
         # A press with no movement still seeks (click-to-seek preserved).
         page.evaluate(setup)
@@ -960,8 +975,9 @@ def test_drag_pans_waveform(stack, page):
         page.mouse.move(seek_x, cy)
         page.mouse.down()
         page.mouse.up()
-        seeked = page.evaluate("() => weAudio.currentTime")
-        assert abs(seeked - 15.0) < 0.5, f"click should seek to ~15s: {seeked}"
+        reqs = page.evaluate("() => weAudio.__seekReqs.slice()")
+        assert len(reqs) == 1, f"a no-move press should seek exactly once: {reqs}"
+        assert abs(reqs[0] - 15.0) < 0.5, f"click should seek to ~15s: {reqs}"
     finally:
         for p in sides:
             try: p.unlink(missing_ok=True)
