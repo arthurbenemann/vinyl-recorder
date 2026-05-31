@@ -830,5 +830,6 @@ async def split_album(req, manifest: dict) -> dict:
             pass
 
     _persist_split_plan(req, relpath)
-    finish_job(req.job_id)
-    return {"music_relpath": relpath, "tracks": created}
+    result = {"music_relpath": relpath, "tracks": created}
+    finish_job(req.job_id, result=result)
+    return result

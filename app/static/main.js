@@ -55,7 +55,7 @@ import {
 } from './modules/onboarding.js';
 import { wsConnect, sendVisibility } from './modules/ws.js';
 import { applyConfig } from './modules/config.js';
-import { parseError, withJobProgress, showBar, hideBar } from './modules/api.js';
+import { parseError, withJobProgress, pollJobProgress, showBar, hideBar } from './modules/api.js';
 import { toast } from './modules/log.js';
 import {
   htmlEscape, fmtSourceFormat, fmtDuration, toastWithUndo,
@@ -161,6 +161,7 @@ window.toast = toast;
 window.toastWithUndo = toastWithUndo;
 window.parseError = parseError;
 window.withJobProgress = withJobProgress;
+window.pollJobProgress = pollJobProgress;
 window.showBar = showBar;
 window.hideBar = hideBar;
 window.htmlEscape = htmlEscape;

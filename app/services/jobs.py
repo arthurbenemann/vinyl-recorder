@@ -31,6 +31,7 @@ def start_job(job_id: str, label: str = "") -> None:
             "progress": 0.0,
             "done":     False,
             "error":    None,
+            "result":   None,
             "ts":       time.time(),
         }
 
@@ -48,7 +49,8 @@ def update_job(job_id: str, progress: float, phase: Optional[str] = None) -> Non
         j["ts"] = time.time()
 
 
-def finish_job(job_id: str, error: Optional[str] = None) -> None:
+def finish_job(job_id: str, error: Optional[str] = None,
+               result: Optional[dict] = None) -> None:
     if not job_id:
         return
     with _lock:
@@ -57,6 +59,7 @@ def finish_job(job_id: str, error: Optional[str] = None) -> None:
             return
         j["done"]     = True
         j["error"]    = error
+        j["result"]   = result
         j["progress"] = j["progress"] if error else 1.0
         j["ts"]       = time.time()
 

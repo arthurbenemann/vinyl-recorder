@@ -30,7 +30,7 @@ from services.ffmpeg import (
     safe_path_component,
 )
 from services.peaks import silence_runs_from_dat
-from services.jobs import finish_job, start_job
+from services.jobs import finish_job, get_job, start_job
 from services.split_orchestrator import _AUDIO_EXTS, _media_type_for
 from state import (
     CombineRequest, MUSIC_DIR, MeasureRequest, PlanUpdateRequest,
@@ -39,6 +39,10 @@ from state import (
 )
 
 router = APIRouter()
+
+# album_id → job_id for splits currently running in the background.
+# Cleared when the job finishes so the entry is only present while encoding.
+_active_splits: dict[str, str] = {}
 
 
 def _require_album(album_id: str) -> dict:
@@ -419,27 +423,59 @@ async def measure_album(req: MeasureRequest):
 
 # ── Split / track endpoints ──────────────────────────────────────────────
 
+async def _run_split_bg(req: SplitRequest, manifest: dict) -> None:
+    """Background task: run the split and clean up _active_splits when done."""
+    try:
+        await split_orchestrator.split_album(req, manifest)
+    except split_orchestrator.SplitNotFoundError as e:
+        finish_job(req.job_id, error=str(e))
+    except split_orchestrator.SplitValidationError as e:
+        finish_job(req.job_id, error=str(e))
+    except split_orchestrator.SplitDiskSpaceError as e:
+        finish_job(req.job_id, error=str(e))
+    except split_orchestrator.SplitProcessingError as e:
+        finish_job(req.job_id, error=str(e))
+    except Exception as e:
+        finish_job(req.job_id, error=str(e))
+    finally:
+        _active_splits.pop(req.album_id, None)
+
+
 @router.post("/api/album/split")
 async def split_album(req: SplitRequest):
-    """Cut the album into per-track FLACs in `music/{Artist}/{Album} (Year)/`,
-    embed manifest tags + cover.jpg in each track, and persist the plan +
-    `music_relpath` back into `album.json`. Idempotent on re-run — clears
-    any prior music dir first (including the case where artist/album tags
-    changed and the music_relpath moved).
-
-    Pure HTTP shim: validate the album exists, hand off to the
-    orchestrator, translate domain exceptions to HTTP."""
+    """Start encoding per-track FLACs in the background. Returns immediately
+    with the job_id so the browser can poll /api/jobs/{job_id} for progress.
+    The encode survives modal close / tab switch. If a split is already running
+    for this album, returns the existing job_id unchanged."""
     manifest = _require_album(req.album_id)
-    try:
-        return await split_orchestrator.split_album(req, manifest)
-    except split_orchestrator.SplitNotFoundError as e:
-        raise HTTPException(404, str(e))
-    except split_orchestrator.SplitValidationError as e:
-        raise HTTPException(400, str(e))
-    except split_orchestrator.SplitDiskSpaceError as e:
-        raise HTTPException(507, str(e))
-    except split_orchestrator.SplitProcessingError as e:
-        raise HTTPException(500, str(e))
+    existing = _active_splits.get(req.album_id)
+    if existing:
+        return {"job_id": existing, "status": "running"}
+    job_id = req.job_id or ""
+    if not job_id:
+        import uuid
+        job_id = "j_" + uuid.uuid4().hex[:12]
+    req = req.model_copy(update={"job_id": job_id})
+    start_job(job_id, "split")
+    _active_splits[req.album_id] = job_id
+    asyncio.create_task(_run_split_bg(req, manifest))
+    return {"job_id": job_id, "status": "started"}
+
+
+@router.get("/api/album/{album_id}/split_job")
+async def album_split_job(album_id: str):
+    """Return the active or most-recently-completed split job for an album.
+    Used by the wave editor to reconnect to an in-progress encode after the
+    modal is closed and reopened. Returns {job_id, done, progress, error,
+    result} or {job_id: null} if no job is known."""
+    _require_album(album_id)
+    job_id = _active_splits.get(album_id)
+    if not job_id:
+        return {"job_id": None}
+    job = get_job(job_id)
+    if not job:
+        return {"job_id": None}
+    return {"job_id": job_id, **job}
 
 
 @router.get("/api/album/{album_id}/tracks")
