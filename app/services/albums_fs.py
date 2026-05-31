@@ -273,6 +273,9 @@ def album_concat_playlist(album_id: str) -> tuple[Path, list[Path]]:
     return playlist, side_paths
 
 
+_AUDIO_EXTS = frozenset((".flac", ".mp3", ".ogg", ".m4a", ".wav"))
+
+
 def _summarize_album(album_id: str, manifest: dict) -> dict:
     """Build the UI-shaped row for `/api/albums`. Stats come from the first
     side (cheap) — total duration is summed across sides without re-encoding.
@@ -305,6 +308,29 @@ def _summarize_album(album_id: str, manifest: dict) -> dict:
     kept_tracks = [t for t in (plan or {}).get("tracks", []) if not t.get("skip")]
     tags = manifest.get("tags") or {}
     music_relpath = manifest.get("music_relpath")
+    # For split albums, add the emitted music-dir files to the size total so
+    # it reflects all storage used by the album (issues #78 and #80).  When
+    # sources have been purged the side_paths list is empty, so without this
+    # step size_mb would show zero.  Also derive duration and format from the
+    # exported FLACs when no in-progress sides remain (locked/external albums).
+    if music_relpath:
+        music_dir = MUSIC_DIR / music_relpath
+        if music_dir.is_dir():
+            music_files = sorted(
+                p for p in music_dir.iterdir()
+                if p.is_file() and p.suffix.lower() in _AUDIO_EXTS
+            )
+            size_bytes += sum(p.stat().st_size for p in music_files)
+            if not side_fmts:
+                first_flac = next(
+                    (p for p in music_files if p.suffix.lower() == ".flac"), None
+                )
+                if first_flac:
+                    fmt = flac_format(first_flac)
+                    total_dur = sum(
+                        flac_duration_seconds(p) or 0.0
+                        for p in music_files if p.suffix.lower() == ".flac"
+                    ) or None
     # `split` is the "tracks have been emitted to music/" signal — drives
     # the UI's In-progress vs Music partition. A plan can exist as a pure
     # draft (saved by the editor mid-edit) without an emit having happened
