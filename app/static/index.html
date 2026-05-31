@@ -320,11 +320,11 @@
             <div class="col-label">From silence</div>
             <div class="silence-controls">
               <div class="silence-row silence-slider"
-                   title="Slider notches match the 8-bit quantisation in the album's .peaks.dat — that's the resolution at which silence is actually detectable. Useful range is roughly -38.6 dB (1) to -6 dB (64).">
+                   title="Silence threshold in dBFS. Any bucket below this level counts as silence. -36 dB ≈ 1/64 of full scale, a good default for vinyl surface noise.">
                 <label class="silence-label" for="we-noise">Noise floor</label>
-                <input type="range" id="we-noise" min="1" max="127" value="1" step="1"
-                       oninput="document.getElementById('we-noise-readout').textContent = weNoiseSliderDb(this.value) + ' dB'">
-                <span id="we-noise-readout" class="silence-readout">-38.6 dB</span>
+                <input type="range" id="we-noise" min="-60" max="-6" value="-36" step="1"
+                       oninput="document.getElementById('we-noise-readout').textContent = this.value + ' dB'">
+                <span id="we-noise-readout" class="silence-readout">-36 dB</span>
               </div>
               <div class="silence-row silence-numbers">
                 <label class="silence-num" for="we-mindur">

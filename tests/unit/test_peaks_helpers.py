@@ -13,13 +13,19 @@ import pytest
 from services import peaks as peaks_mod
 
 
+def _valid_16bit_dat_bytes(sample_rate=96000, spp=256, length=1) -> bytes:
+    """Minimal valid v1 16-bit audiowaveform dat (flags=0x0)."""
+    header = struct.pack("<iIiII", 1, 0, sample_rate, spp, length)
+    body = bytes(length * 4)  # length buckets × 2 int16 values × 2 bytes
+    return header + body
+
+
 # ── is_fresh ─────────────────────────────────────────────────────────────
 def test_is_fresh_when_dat_newer_than_src(tmp_path):
     src = tmp_path / "side.flac"
     dat = tmp_path / "side.peaks.dat"
     src.write_bytes(b"x")
-    dat.write_bytes(b"y")
-    # Force dat's mtime to be strictly after src's.
+    dat.write_bytes(_valid_16bit_dat_bytes())
     import os
     os.utime(src, (1_000_000, 1_000_000))
     os.utime(dat, (1_000_100, 1_000_100))
@@ -30,7 +36,7 @@ def test_is_fresh_when_dat_older_than_src(tmp_path):
     src = tmp_path / "side.flac"
     dat = tmp_path / "side.peaks.dat"
     src.write_bytes(b"x")
-    dat.write_bytes(b"y")
+    dat.write_bytes(_valid_16bit_dat_bytes())
     import os
     os.utime(src, (1_000_100, 1_000_100))
     os.utime(dat, (1_000_000, 1_000_000))
@@ -42,30 +48,44 @@ def test_is_fresh_returns_false_when_either_missing(tmp_path):
     assert peaks_mod.is_fresh(tmp_path / "nope.dat", tmp_path / "nope.flac") is False
 
 
+def test_is_fresh_returns_false_for_8bit_dat(tmp_path):
+    """A stale 8-bit dat (flags=0x1) must be re-rendered to upgrade it to
+    16-bit, so is_fresh() returns False even when the mtime is fresh."""
+    src = tmp_path / "side.flac"
+    dat = tmp_path / "side.peaks.dat"
+    src.write_bytes(b"x")
+    # Write an 8-bit header (flags=0x1).
+    dat.write_bytes(struct.pack("<iIiII", 1, 0x1, 96000, 256, 1) + b"\x00" * 2)
+    import os
+    os.utime(src, (1_000_000, 1_000_000))
+    os.utime(dat, (1_000_100, 1_000_100))
+    assert peaks_mod.is_fresh(dat, src) is False
+
+
 # ── read_header ──────────────────────────────────────────────────────────
-def _v1_header(sample_rate=96000, spp=256, length=10, flags=0x1) -> bytes:
-    """Build a valid v1 (mono, 20-byte) audiowaveform header."""
+def _v1_header(sample_rate=96000, spp=256, length=10, flags=0x0) -> bytes:
+    """Build a valid v1 (mono, 20-byte) audiowaveform header. flags=0 → 16-bit."""
     return struct.pack("<iIiII", 1, flags, sample_rate, spp, length)
 
 
-def _v2_header(channels=2, sample_rate=96000, spp=256, length=10, flags=0x1) -> bytes:
+def _v2_header(channels=2, sample_rate=96000, spp=256, length=10, flags=0x0) -> bytes:
     return struct.pack("<iIiII", 2, flags, sample_rate, spp, length) + struct.pack("<i", channels)
 
 
 def test_read_header_parses_v1(tmp_path):
     dat = tmp_path / "v1.dat"
-    # Header + 2*length body bytes (min,max per bucket) so file looks legit.
-    dat.write_bytes(_v1_header() + b"\x00" * 20)
+    # Header + 4*length body bytes (min,max int16 per bucket) so file looks legit.
+    dat.write_bytes(_v1_header() + b"\x00" * 40)
     h = peaks_mod.read_header(dat)
     assert h["version"] == 1
     assert h["channels"] == 1
     assert h["header_size"] == 20
-    assert h["bits"] == 8
+    assert h["bits"] == 16
 
 
 def test_read_header_parses_v2(tmp_path):
     dat = tmp_path / "v2.dat"
-    dat.write_bytes(_v2_header(channels=2) + b"\x00" * 40)
+    dat.write_bytes(_v2_header(channels=2) + b"\x00" * 80)
     h = peaks_mod.read_header(dat)
     assert h["version"] == 2
     assert h["channels"] == 2
@@ -84,7 +104,7 @@ def test_read_header_short_v2_header_raises(tmp_path):
     must not silently misread the channel count from off-the-end."""
     dat = tmp_path / "short_v2.dat"
     # Pack 20 bytes claiming version=2 but truncated.
-    head = struct.pack("<iIiII", 2, 0x1, 96000, 256, 10)
+    head = struct.pack("<iIiII", 2, 0x0, 96000, 256, 10)
     dat.write_bytes(head)  # only 20 bytes — short for v2
     with pytest.raises(ValueError):
         peaks_mod.read_header(dat)
@@ -97,15 +117,15 @@ def test_read_header_unsupported_version_raises(tmp_path):
         peaks_mod.read_header(dat)
 
 
-# ── read_peaks_int8 — wrong bit depth guard ──────────────────────────────
-def test_read_peaks_int8_rejects_16_bit_files(tmp_path):
-    """The wave editor stack assumes int8; opening a 16-bit dat must fail
-    fast rather than misinterpret two bytes per bucket as one."""
-    dat = tmp_path / "16bit.dat"
-    # flags bit 0 = 0 → 16-bit per the audiowaveform format spec.
-    dat.write_bytes(_v1_header(flags=0x0) + b"\x00" * 40)
+# ── read_peaks_raw — wrong bit depth guard ───────────────────────────────
+def test_read_peaks_raw_rejects_8bit_files(tmp_path):
+    """The wave editor stack requires int16; opening an 8-bit dat must fail
+    fast rather than misinterpret one byte per value as two."""
+    dat = tmp_path / "8bit.dat"
+    # flags bit 0 = 1 → 8-bit per the audiowaveform format spec.
+    dat.write_bytes(_v1_header(flags=0x1) + b"\x00" * 20)
     with pytest.raises(ValueError, match="8-bit"):
-        peaks_mod.read_peaks_int8(dat)
+        peaks_mod.read_peaks_raw(dat)
 
 
 # ── render_peaks failure paths (mock subprocess) ─────────────────────────

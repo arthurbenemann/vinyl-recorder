@@ -283,15 +283,12 @@ async def album_side_audio(album_id: str, side_idx: int):
 async def detect_silences(req: SilenceDetectRequest):
     """Scan the album's `.peaks.dat` for silent runs.
 
-    The threshold is in audiowaveform's 8-bit quantised amplitude (1..127);
-    each step is one of the 127 distinguishable levels in the .dat. The
-    legacy `noise_db` field is mapped to int8 via mid-bin reconstruction
-    when `threshold_int8` isn't supplied, so older clients keep working.
-    Returns `[{start, end, duration}, ...]` — same shape the editor's
-    silence-band rendering already consumes.
+    `noise_db` (dBFS) is converted to an int16 threshold matching the
+    16-bit .peaks.dat format. Returns `[{start, end, duration}, ...]` —
+    same shape the editor's silence-band rendering already consumes.
     """
     _require_album(req.album_id)
-    threshold_int8 = _resolve_threshold_int8(req)
+    threshold = _resolve_threshold(req)
     manifest = albums_fs.reconcile_sides(req.album_id)
     sides = manifest.get("sides") or []
     if not sides:
@@ -319,7 +316,7 @@ async def detect_silences(req: SilenceDetectRequest):
     d = albums_fs.album_dir(req.album_id)
     for s, dat in zip(sides, dats):
         per_side = await asyncio.to_thread(
-            silence_runs_from_dat, dat, threshold_int8, 0.0,
+            silence_runs_from_dat, dat, threshold, 0.0,
         )
         for run in per_side:
             raw.append({
@@ -341,20 +338,17 @@ async def detect_silences(req: SilenceDetectRequest):
 
     silences = [r for r in merged if r["duration"] >= req.min_silence]
     return {"silences": silences,
-            "threshold_int8": threshold_int8,
+            "threshold_int16": threshold,
             "min_silence": req.min_silence}
 
 
-def _resolve_threshold_int8(req: SilenceDetectRequest) -> int:
-    """Either an explicit `threshold_int8` from the slider, or a legacy
-    `noise_db` (e.g. -40 dB) mapped onto the 1..127 grid via mid-bin
-    reconstruction. Clamps to 1..127 so a threshold of 0 doesn't silently
-    match the entire album."""
-    if req.threshold_int8 is not None:
-        return max(1, min(127, int(req.threshold_int8)))
+def _resolve_threshold(req: SilenceDetectRequest) -> int:
+    """`noise_db` (dBFS) mapped onto the 1..32767 int16 grid.
+    Clamps to 1..32767 so a threshold of 0 doesn't silently match the
+    entire album."""
     db = float(req.noise_db)
     amp = 10.0 ** (db / 20.0)
-    return max(1, min(127, round(amp * 127)))
+    return max(1, min(32767, round(amp * 32767)))
 
 
 def _astats_filter_for_ranges(ranges: Optional[list[list[float]]]) -> str:

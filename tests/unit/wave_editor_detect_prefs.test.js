@@ -47,31 +47,33 @@ function check(name, got, want) {
   }
 }
 
-// ── valid values pass straight through ───────────────────────────────────
-check('noise: in range int',        val('20',  8, 1, 127), 20);
-check('noise: lower bound 1',        val('1',   8, 1, 127), 1);
-check('noise: upper bound 127',      val('127', 8, 1, 127), 127);
-check('mindur: in range float',      val('2.5', 1.5, 0.2, null), 2.5);
-check('skiplong: open-ended high',   val('600', 15, 2, null), 600);
+// ── noise slider: dB range [-60, -6], default -36 ───────────────────────
+check('noise: in range int',          val('-20', -36, -60, -6), -20);
+check('noise: lower bound -60',       val('-60', -36, -60, -6), -60);
+check('noise: upper bound -6',        val('-6',  -36, -60, -6), -6);
+
+// ── other sliders (unchanged) ────────────────────────────────────────────
+check('mindur: in range float',       val('2.5', 1.5, 0.2, null), 2.5);
+check('skiplong: open-ended high',    val('600', 15,  2,   null), 600);
 
 // ── out of range / junk → fallback ───────────────────────────────────────
-check('noise: above max → default',  val('200', 8, 1, 127), 8);
-check('noise: below min → default',  val('0',   8, 1, 127), 8);
-check('noise: negative → default',   val('-5',  8, 1, 127), 8);
-check('mindur: below min → default', val('0.1', 1.5, 0.2, null), 1.5);
-check('skiplong: below min → default', val('1', 15, 2, null), 15);
+check('noise: above max → default',   val('-5',  -36, -60, -6), -36);
+check('noise: below min → default',   val('-61', -36, -60, -6), -36);
+check('noise: positive → default',    val('5',   -36, -60, -6), -36);
+check('mindur: below min → default',  val('0.1', 1.5, 0.2, null), 1.5);
+check('skiplong: below min → default', val('1',  15,  2,   null), 15);
 
 // ── corrupt / missing stored values → fallback ───────────────────────────
-check('null (no stored pref) → default',  val(null, 8, 1, 127), 8);
-check('empty string → default',           val('',   8, 1, 127), 8);
+check('null (no stored pref) → default',  val(null,  -36, -60, -6), -36);
+check('empty string → default',           val('',    -36, -60, -6), -36);
 check('non-numeric junk → default',       val('abc', 1.5, 0.2, null), 1.5);
-check('NaN literal → default',            val('NaN', 8, 1, 127), 8);
+check('NaN literal → default',            val('NaN', -36, -60, -6), -36);
 check('Infinity literal → default',       val('Infinity', 15, 2, null), 15);
 
 // parseFloat is lenient: "12abc" → 12, which is a deliberate accept (a
 // trailing-unit typo still yields a usable number) — pin it so the
 // behaviour is a choice, not an accident.
-check('trailing junk parses leading number', val('12abc', 8, 1, 127), 12);
+check('trailing junk parses leading number', val('-12abc', -36, -60, -6), -12);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
