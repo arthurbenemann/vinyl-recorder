@@ -934,13 +934,14 @@ function weHoverMove(e) {
   document.getElementById('we-readout').textContent = fmtMMSS(_xToTime(we.hoverX));
 }
 
-// Snap a dragged cut to a nearby detected silence within 1s. Long silences
-// (album side flips, fade-outs followed by long lead-in) need a cut at the
-// start or the end, not the middle, so each silence contributes three snap
-// candidates and the closest one wins.
+// Snap a dragged cut to a nearby detected silence. The snap radius is
+// pixel-based (30 px) so zooming in gives finer precision — at low zoom the
+// cap of 1 s keeps it from reaching across large gaps.  Long silences need a
+// cut at the start/end, not the middle, so each silence contributes three
+// snap candidates and the closest one wins.
 function _snapToSilence(t) {
   if (!we.silences.length) return t;
-  const SNAP = 1.0;
+  const SNAP = Math.min(1.0, (30 / _wrapW()) * _viewLen());
   let best = null, bestDist = SNAP;
   for (const s of we.silences) {
     for (const cand of [s.start, (s.start + s.end) / 2, s.end]) {
