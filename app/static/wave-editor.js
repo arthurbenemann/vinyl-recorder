@@ -1623,20 +1623,15 @@ function wePlayTrack(i) {
   renderTracks();
 }
 
-// Jump to the cut nearest the playhead and play forward, auto-stopping 3 s
-// after the cut. Seeks to the exact cut position (not before it) so the
-// playhead lands at the boundary. _jumpOverSkippedFromHere is bypassed
-// because playingEnd is set, so the boundary plays through even when the
-// adjacent region is marked skip.
+// Jump the playhead to the nearest cut and start playing from that exact
+// position. No auto-stop — press Space to pause. The old behaviour played
+// from cut-2s to cut+2s; now it just navigates and plays freely.
 function wePreviewCut() {
   if (!we.cuts.length || !weAudio.hasSrc) return;
   const i = _nearestCutIndex(weAudio.currentTime || 0);
-  const cut = we.cuts[i];
-  const end  = Math.min(we.total, cut + 3);
-  if (end <= cut) return;
-  weAudio.seek(cut);
+  weAudio.seek(we.cuts[i]);
   we.playingTrack = null;
-  we.playingEnd   = end;
+  we.playingEnd   = null;
   weAudio.play();
   document.getElementById('we-play').textContent = '⏸';
   we.isPlaying = true;

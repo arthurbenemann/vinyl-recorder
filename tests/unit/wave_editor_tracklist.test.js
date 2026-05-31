@@ -103,11 +103,14 @@ const aligned = (r) =>
 
 // ── per-side: durationless tracks even-split inside each side ─────────────
 // The reported bug: a release with no Discogs durations collapsed every
-// track onto its side's first track. Now they spread evenly, with a lead-in
-// skip before each side and a lead-out skip at the end.
-check('per-side durationless: even split + lead-in/flip/lead-out skips',
+// track onto its side's first track. Now they spread evenly.
+// Silence layout (issue #75): the first side gets a lead-in at t=0 plus a
+// lead-out at its end; every subsequent side gets only a lead-out.  This
+// yields exactly ONE skip region at each side boundary (the preceding side's
+// lead-out) so there's a single handle to position the flip gap.
+check('per-side durationless: even split + lead-in/A-lead-out/single-flip-handle',
   cutsFor(t([['T1',null,'A1'],['T2',null,'A2'],['T3',null,'B1'],['T4',null,'B2']]), s(100,100), 200),
-  { cuts: [2,51,100,102,150,198],
+  { cuts: [2,50,98,100,149,198],
     titles: ['','T1','T2','','T3','T4',''],
     skipped: [true,false,false,true,false,false,true],
     positions: ['','A1','A2','','B1','B2',''],
@@ -116,7 +119,7 @@ check('per-side durationless: even split + lead-in/flip/lead-out skips',
 // ── per-side: durations present weight the split (proportional fill) ──────
 check('per-side weighted: 30/60 split fills side A 1:2',
   cutsFor(t([['T1',30,'A1'],['T2',60,'A2'],['T3',60,'B1'],['T4',30,'B2']]), s(92,94), 186),
-  { cuts: [2,32,92,94,154,184],
+  { cuts: [2,31.333,90,92,153.333,184],
     titles: ['','T1','T2','','T3','T4',''],
     skipped: [true,false,false,true,false,false,true],
     positions: ['','A1','A2','','B1','B2',''],
@@ -125,12 +128,12 @@ check('per-side weighted: 30/60 split fills side A 1:2',
 // ── per-side: a Discogs side longer than the recording is scaled + flagged
 check('per-side overflow: oversize side is scaled to fit and counted',
   cutsFor(t([['T1',80,'A1'],['T2',80,'A2'],['T3',40,'B1'],['T4',40,'B2']]), s(100,100), 200),
-  { cuts: [2,51,100,102,150,198], overflow: 1 });
+  { cuts: [2,50,98,100,149,198], overflow: 1 });
 
 // ── per-side: multi-disc "1-01" / "2-01" map to sides 0 and 1
 check('per-side: multi-disc "1-01" / "2-01" treated as sides 0 and 1',
   cutsFor(t([['T1',null,'1-01'],['T2',null,'1-02'],['T3',null,'2-01'],['T4',null,'2-02']]), s(100,100), 200),
-  { cuts: [2,51,100,102,150,198],
+  { cuts: [2,50,98,100,149,198],
     positions: ['','1-01','1-02','','2-01','2-02',''],
     overflow: 0 });
 
@@ -138,7 +141,7 @@ check('per-side: multi-disc "1-01" / "2-01" treated as sides 0 and 1',
 check('clamp: extra Discogs side stacks onto the recording\'s last side',
   cutsFor(t([['T1',null,'A1'],['T2',null,'A2'],['T3',null,'B1'],['T4',null,'B2'],['T5',null,'C1'],['T6',null,'C2']]),
     s(100,100), 200),
-  { cuts: [2,51,100,102,126,150,174,198],
+  { cuts: [2,50,98,100,124.5,149,173.5,198],
     titles: ['','T1','T2','','T3','T4','T5','T6',''],
     skipped: [true,false,false,true,false,false,false,false,true],
     positions: ['','A1','A2','','B1','B2','C1','C2',''],

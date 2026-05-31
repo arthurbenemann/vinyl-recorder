@@ -1203,7 +1203,7 @@ def test_wave_editor_keyboard_add_and_nudge_cut(stack, page):
 
 # ── Keyboard: preview the nearest cut (p) ────────────────────────────────
 def test_wave_editor_preview_cut_plays_around_boundary(stack, page):
-    """`p` jumps to the exact nearest cut and plays forward 3 s (issue #74)."""
+    """`p` seeks to the exact nearest cut and starts playing (no auto-stop, issue #74)."""
     raw = stack["raw"]
     sides = _generate_side_flacs(raw, count=2)
     try:
@@ -1220,11 +1220,11 @@ def test_wave_editor_preview_cut_plays_around_boundary(stack, page):
         )
         page.evaluate("document.getElementById('we-canvas').focus()")
         page.keyboard.press("p")
-        # Seeks to the exact cut and starts a bounded play (playingEnd = cut+3).
+        # Seeks to the exact cut and starts free playback (no auto-stop).
         page.wait_for_function(
             f"() => we.isPlaying === true"
             f" && Math.abs(weAudio.currentTime - {cut}) < 0.6"
-            f" && we.playingEnd != null && Math.abs(we.playingEnd - ({cut} + 3)) < 0.01",
+            f" && we.playingEnd === null",
             timeout=5_000,
         )
     finally:
