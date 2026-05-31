@@ -237,7 +237,7 @@ function _weCutsFromTracklist(td, sides, total) {
     const wsum = weights.reduce((a, b) => a + b, 0) || idxs.length;
     // Informational: the Discogs side runs longer than the recorded side
     // (wrong pressing / missing audio). We still scale it to fit.
-    if (sum > musicSpan + 0.001) overflow += 1;
+    if (sum > span + 0.001) overflow += 1;
 
     let cum = 0;
     for (let m = 0; m < idxs.length; m++) {
