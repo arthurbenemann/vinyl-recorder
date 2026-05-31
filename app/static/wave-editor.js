@@ -650,7 +650,7 @@ function _renderApproxStats() {
     return;
   }
   const noiseStr = we.approxNoiseFloorDb != null
-    ? ` · noise ${we.approxNoiseFloorQuantized ? '~> ' : '~'}${we.approxNoiseFloorDb.toFixed(0)} dB` : '';
+    ? ` · noise ${we.approxNoiseFloorQuantized ? '~< ' : '~'}${we.approxNoiseFloorDb.toFixed(0)} dB` : '';
   text.textContent = _sourceFormatPrefix()
     + `peak ~${we.approxPeakDb.toFixed(1)} dB${noiseStr} · click measure`;
 }
@@ -2100,7 +2100,7 @@ function invalidateMeasure() {
   const text = document.getElementById('we-stats-text');
   if (text && we.approxPeakDb != null) {
     const noiseStr = we.approxNoiseFloorDb != null
-      ? ` · noise ${we.approxNoiseFloorQuantized ? '~> ' : '~'}${we.approxNoiseFloorDb.toFixed(0)} dB` : '';
+      ? ` · noise ${we.approxNoiseFloorQuantized ? '~< ' : '~'}${we.approxNoiseFloorDb.toFixed(0)} dB` : '';
     text.textContent = _sourceFormatPrefix()
       + `peak ~${we.approxPeakDb.toFixed(1)} dB${noiseStr} · cuts changed — re-measure`;
   } else if (text) {

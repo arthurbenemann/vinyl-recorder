@@ -123,7 +123,7 @@ we.approxNoiseFloorQuantized = false;
 render();
 check('peak+noise → ~peak present',  statsText(), /peak ~-3\.2 dB/);
 check('peak+noise → ~noise present', statsText(), /noise ~-50 dB/);
-check('peak+noise → no ~> prefix',   !statsText().includes('~>'), true);
+check('peak+noise → no ~< prefix',  !statsText().includes('~<'), true);
 check('peak+noise → click measure',  statsText(), /click measure/);
 
 // ── case 4: peak + quantized noise floor ────────────────────────────────────
@@ -132,7 +132,7 @@ we.approxPeakDb       = -3.2;
 we.approxNoiseFloorDb = -60;
 we.approxNoiseFloorQuantized = true;
 render();
-check('quantized → ~> prefix shown',  statsText(), /noise ~> -60 dB/);
+check('quantized → ~<prefix shown',  statsText(), /noise ~< -60 dB/);
 check('quantized → peak still there', statsText(), /peak ~-3\.2 dB/);
 
 // ── case 5: measured wins over approx ───────────────────────────────────────
@@ -163,7 +163,7 @@ we.approxNoiseFloorDb = -60;
 we.approxNoiseFloorQuantized = true;
 we.measured = { peak_db: -3.0 };
 win._weInvalidateMeasure();
-check('cuts banner quantized → ~> prefix', statsText(), /noise ~> -60 dB/);
+check('cuts banner quantized → ~<prefix', statsText(), /noise ~< -60 dB/);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
