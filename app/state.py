@@ -424,8 +424,7 @@ class SplitRequest(BaseModel):
 
 class SilenceDetectRequest(BaseModel):
     album_id: str
-    noise_db: float = -40.0           # legacy dB threshold (clients pre-slider)
-    threshold_int8: Optional[int] = None  # 1..127 — 8-bit quantised threshold matching .peaks.dat resolution
+    noise_db: float = -36.0           # silence threshold in dBFS; converted to int16 units server-side
     min_silence: float = 1.5
     job_id: Optional[str] = None
 

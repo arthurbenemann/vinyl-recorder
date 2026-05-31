@@ -3,14 +3,14 @@
 // after the initial fetch all zoom and pan is local, sub-millisecond
 // canvas redraw with no network round-trip.
 //
-// One .dat per side (mono, `-b 8`, `-z 256`) — the editor fetches them
+// One .dat per side (mono, `-b 16`, `-z 256`) — the editor fetches them
 // in parallel and `drawPeaks` stitches them at draw time. Per-side keeps
-// the payload small (~45 KB per minute of audio at 96 kHz) and avoids a
+// the payload small (~90 KB per minute of audio at 96 kHz) and avoids a
 // multi-second concat-then-render round trip on first open.
 
 'use strict';
 
-// Parse a BBC audiowaveform binary dat (8-bit min/max). The format has two
+// Parse a BBC audiowaveform binary dat (16-bit min/max). The format has two
 // header layouts (see WaveformBuffer.cpp `version = channels==1 ? 1 : 2`):
 //
 //   v1 (mono, 20-byte header, body starts at offset 20):
@@ -23,7 +23,7 @@
 //
 // audiowaveform downmixes to mono by default, so the common case is v1.
 // Misreading a v1 file as v2 produces a bogus `channels` (the first 4
-// body bytes interpreted as int32) — that overflowed the Int8Array
+// body bytes interpreted as int32) — that overflowed the typed array
 // length parameter and surfaced as "Invalid typed array length".
 function parsePeaks(arrayBuffer) {
   const view = new DataView(arrayBuffer);
@@ -45,16 +45,17 @@ function parsePeaks(arrayBuffer) {
     throw new Error('unsupported audiowaveform dat version: ' + version);
   }
   const bits = (flags & 0x1) ? 8 : 16;
-  if (bits !== 8) throw new Error('expected 8-bit peak data; got ' + bits);
+  if (bits !== 16) throw new Error('expected 16-bit peak data; got ' + bits);
   if (channels < 1 || channels > 8) {
     throw new Error('unexpected channel count: ' + channels);
   }
-  const expectedBody = length * 2 * channels;
+  // 16-bit: 2 bytes per int16, 2 values (min,max) per channel per bucket.
+  const expectedBodyBytes = length * 2 * channels * 2;
   const availableBody = arrayBuffer.byteLength - headerSize;
   // Trust the smaller of the two so a truncated payload doesn't blow up
-  // the Int8Array constructor; clamp to >=0 so it can never go negative.
-  const bodyBytes = Math.max(0, Math.min(expectedBody, availableBody));
-  const body = new Int8Array(arrayBuffer, headerSize, bodyBytes);
+  // the Int16Array constructor; align down to 2-byte boundary.
+  const bodyBytes = Math.max(0, Math.min(expectedBodyBytes, availableBody)) & ~1;
+  const body = new Int16Array(arrayBuffer, headerSize, bodyBytes >> 1);
   const duration = sampleRate > 0
     ? (length * samplesPerPixel) / sampleRate
     : 0;
@@ -166,7 +167,7 @@ function drawPeaks(canvas, peaks, viewStart, viewEnd, color) {
   const bucketSec = spp / sr;
   if (bucketSec <= 0) return;
   const channels = Math.max(1, ref.channels || 1);
-  const bucketBytes = 2 * channels;
+  const bucketElems = 2 * channels;  // int16 elements per bucket (min,max per ch)
 
   // Pre-compute, for each pixel column, the side whose time range
   // covers that column's start. Sides are in order with monotonic
@@ -175,7 +176,7 @@ function drawPeaks(canvas, peaks, viewStart, viewEnd, color) {
     const tStart = viewStart + (c / W) * len;
     const tEnd   = viewStart + ((c + 1) / W) * len;
 
-    let minV = 127, maxV = -128;
+    let minV = 32767, maxV = -32768;
     // Walk every side that overlaps [tStart, tEnd]. In practice all but
     // one side contribute zero buckets, but a column that straddles a
     // side boundary will visit two — both are reduced into the same
@@ -194,7 +195,7 @@ function drawPeaks(canvas, peaks, viewStart, viewEnd, color) {
       let b1 = Math.max(b0, Math.min(length, Math.ceil(local1 / bucketSec)));
       if (b1 <= b0) b1 = Math.min(length, b0 + 1);  // ensure ≥1 bucket per column
       for (let i = b0; i < b1; i++) {
-        const base = i * bucketBytes;
+        const base = i * bucketElems;
         for (let ch = 0; ch < channels; ch++) {
           const m1 = body[base + 2 * ch];
           const m2 = body[base + 2 * ch + 1];
@@ -204,8 +205,8 @@ function drawPeaks(canvas, peaks, viewStart, viewEnd, color) {
       }
     }
     if (minV > maxV) continue;
-    const yMin = mid - (maxV / 127) * (H / 2);
-    const yMax = mid - (minV / 127) * (H / 2);
+    const yMin = mid - (maxV / 32767) * (H / 2);
+    const yMax = mid - (minV / 32767) * (H / 2);
     const h = Math.max(1, yMax - yMin);
     ctx.fillRect(c, yMin, 1, h);
   }
@@ -213,11 +214,9 @@ function drawPeaks(canvas, peaks, viewStart, viewEnd, color) {
   ctx.fillRect(0, Math.round(mid), W, 1);
 }
 
-// Approximate album peak in dBFS, computed from the loaded .dat. Mid-bin
-// reconstruction: int8 v -> amplitude (v*256 + 127.5)/32768. Accurate to
-// ±0.07 dB at vinyl-typical peaks (within 6 dB of full scale). Shown as
-// "~ -X.X dB" in the editor until astats has run, at which point the
-// exact value replaces it.
+// Approximate album peak in dBFS, computed from the loaded .dat.
+// int16 value v -> amplitude v/32768. Accurate to ±0.0003 dBFS.
+// Shown as "~ -X.X dB" in the editor until astats has run.
 function approxPeakDbFromPeaks(peaks) {
   if (!peaks) return null;
   // Same dual-shape input as drawPeaks: either a parsed dat or a
@@ -239,7 +238,7 @@ function approxPeakDbFromPeaks(peaks) {
     }
   }
   if (peakInt <= 0) return null;
-  const amp = (peakInt * 256 + 127.5) / 32768;
+  const amp = peakInt / 32768;
   return 20 * Math.log10(Math.min(1, amp));
 }
 

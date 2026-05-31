@@ -19,7 +19,7 @@ INDEX = REPO_ROOT / "app" / "static" / "index.html"
 # The three persisted controls and the localStorage key each maps to. Kept in
 # one place so a key rename has to update both the code and this test in step.
 PREFS = {
-    "we-noise": "we.noiseInt8",
+    "we-noise": "we.noiseDb",
     "we-mindur": "we.minSilence",
     "we-skiplong": "we.skipLong",
 }

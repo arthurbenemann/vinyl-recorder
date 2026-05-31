@@ -45,15 +45,6 @@ const we = {
   planConflict: false,
 };
 
-// Slider-readout helper: convert 1..127 to dB. Mid-bin reconstruction:
-// amp = (v*256 + 127.5) / 32768; dB = 20*log10(amp). Slider notches match
-// the 8-bit quantisation in .peaks.dat so each step is one detectable
-// amplitude level.
-function weNoiseSliderDb(v) {
-  const n = Math.max(1, Math.min(127, parseInt(v, 10) || 1));
-  const amp = (n * 256 + 127.5) / 32768;
-  return (20 * Math.log10(Math.min(1, amp))).toFixed(1);
-}
 
 function fmtMMSS(sec) {
   if (sec == null || isNaN(sec)) return '';
@@ -1861,7 +1852,7 @@ async function _weAutoLoadFromIds(a) {
 // Persisted silence-detection settings. Keyed like the other namespaced
 // prefs (lib.sortBy, autoStopSilenceSeconds): a raw value per control.
 const WE_DETECT_PREFS = [
-  { id: 'we-noise',    key: 'we.noiseInt8',  def: 8,   min: 1,   max: 127 },
+  { id: 'we-noise',    key: 'we.noiseDb',    def: -36, min: -60, max: -6  },
   { id: 'we-mindur',   key: 'we.minSilence', def: 1.5, min: 0.2, max: null },
   { id: 'we-skiplong', key: 'we.skipLong',   def: 15,  min: 2,   max: null },
 ];
@@ -1892,8 +1883,8 @@ function _weHydrateDetectSettings() {
   // oninput only fires on user drag, not on this programmatic set.
   const noise   = document.getElementById('we-noise');
   const readout = document.getElementById('we-noise-readout');
-  if (noise && readout && typeof weNoiseSliderDb === 'function') {
-    readout.textContent = weNoiseSliderDb(noise.value) + ' dB';
+  if (noise && readout) {
+    readout.textContent = noise.value + ' dB';
   }
 }
 
@@ -1905,9 +1896,7 @@ async function weDetectShowOnly() {
 }
 
 async function weDetectInternal({ replace }) {
-  // The slider holds an int8 threshold (1..127) matching .peaks.dat
-  // resolution; the dB equivalent is computed for display only.
-  const thresholdInt8 = parseInt(document.getElementById('we-noise').value, 10) || 8;
+  const noiseDb = parseFloat(document.getElementById('we-noise').value) || -36;
   const mindur  = parseFloat(document.getElementById('we-mindur').value)   || 1.5;
   const skipMin = parseFloat(document.getElementById('we-skiplong').value) || 15;
   const status  = document.getElementById('we-silence-status');
@@ -1919,7 +1908,7 @@ async function weDetectInternal({ replace }) {
       const r = await fetch('/api/album/detect-silences', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
-          album_id: we.albumId, threshold_int8: thresholdInt8,
+          album_id: we.albumId, noise_db: noiseDb,
           min_silence: mindur, job_id: jobId,
         }),
       });

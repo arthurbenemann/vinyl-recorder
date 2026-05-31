@@ -10,23 +10,23 @@ from pathlib import Path
 import pytest
 
 from services.peaks import (
-    peak_db_from_dat, read_header, read_peaks_int8, silence_runs_from_dat,
+    peak_db_from_dat, read_header, read_peaks_raw, silence_runs_from_dat,
 )
 
 
 def _write_dat(path: Path, sample_rate: int, samples_per_pixel: int,
-               buckets, channels: int = 1, flags_bits8: bool = True,
+               buckets, channels: int = 1, flags_bits16: bool = True,
                version: int = 1) -> Path:
-    """Write a synthetic audiowaveform binary peak file.
+    """Write a synthetic audiowaveform binary peak file (16-bit by default).
 
     Defaults to **v1 mono** because that's what audiowaveform produces by
     default (it downmixes to mono unless --split-channels is passed). For
-    v1: 20-byte header, no `channels` field, body = 2*length int8 bytes.
-    For v2: 24-byte header with channels, body = 2*length*channels int8.
+    v1: 20-byte header, no `channels` field, body = 4*length int16 bytes.
+    For v2: 24-byte header with channels, body = 4*length*channels int16.
     Each entry in `buckets` is either (min, max) for mono or
     [(minC0, maxC0), (minC1, maxC1)…] for multi-channel.
     """
-    flags = 0x1 if flags_bits8 else 0x0
+    flags = 0x0 if flags_bits16 else 0x1  # bit 0: 1=8-bit, 0=16-bit
     if version == 1:
         header = struct.pack("<iIiII", 1, flags, sample_rate, samples_per_pixel, len(buckets))
     elif version == 2:
@@ -40,12 +40,10 @@ def _write_dat(path: Path, sample_rate: int, samples_per_pixel: int,
     for entry in buckets:
         if version == 1 or channels == 1:
             mn, mx = entry
-            body.append(mn & 0xFF)
-            body.append(mx & 0xFF)
+            body.extend(struct.pack("<hh", mn, mx))
         else:
             for mn, mx in entry:
-                body.append(mn & 0xFF)
-                body.append(mx & 0xFF)
+                body.extend(struct.pack("<hh", mn, mx))
     path.write_bytes(header + bytes(body))
     return path
 
@@ -58,8 +56,8 @@ def test_read_header_v1_mono(tmp_path):
     dat = _write_dat(tmp_path / "mono.peaks.dat", 96000, 256, [(-10, 12), (-2, 5)])
     head = read_header(dat)
     assert head == {
-        "version": 1, "flags": 1, "sample_rate": 96000,
-        "samples_per_pixel": 256, "length": 2, "channels": 1, "bits": 8,
+        "version": 1, "flags": 0, "sample_rate": 96000,
+        "samples_per_pixel": 256, "length": 2, "channels": 1, "bits": 16,
         "header_size": 20,
     }
 
@@ -81,49 +79,52 @@ def test_read_header_rejects_unsupported_version(tmp_path):
     # Any version that isn't 1 or 2 is malformed; refuse rather than
     # mis-render. The wave editor surfaces this as "waveform unavailable".
     bad = tmp_path / "bad.dat"
-    bad.write_bytes(struct.pack("<iIiII", 99, 1, 48000, 256, 0))
+    bad.write_bytes(struct.pack("<iIiII", 99, 0, 48000, 256, 0))
     with pytest.raises(ValueError, match="version"):
         read_header(bad)
 
 
-def test_read_peaks_int8_v1_payload(tmp_path):
+def test_read_peaks_raw_v1_payload(tmp_path):
     # Round-trip a known v1 sequence to confirm the bytes survive verbatim
     # AND the body offset is 20 (not 24) — the bug that caused the editor's
     # "Invalid typed array length" was reading 4 body bytes as an int32
     # `channels` field at offset 20.
     dat = _write_dat(tmp_path / "p.dat", 48000, 128, [(-50, 70), (5, 120), (-127, -5)])
-    head, body = read_peaks_int8(dat)
+    head, body = read_peaks_raw(dat)
     assert head["version"] == 1
     assert head["header_size"] == 20
     assert head["length"] == 3
-    assert list(body) == [206, 70, 5, 120, 129, 251]
+    # 3 buckets × 2 int16 values × 2 bytes = 12 bytes
+    assert len(body) == 12
+    vals = struct.unpack("<6h", body)
+    assert vals == (-50, 70, 5, 120, -127, -5)
 
 
-def test_read_peaks_int8_rejects_16bit(tmp_path):
-    # 16-bit data would mis-quantise the silence threshold scan. Refuse it
-    # rather than silently misinterpret bytes as something they're not.
-    dat = _write_dat(tmp_path / "q.dat", 48000, 256, [(0, 0)], flags_bits8=False)
+def test_read_peaks_raw_rejects_8bit(tmp_path):
+    # 8-bit data has flags bit 0 = 1. Refuse it rather than misinterpret.
+    dat = _write_dat(tmp_path / "q.dat", 48000, 256, [(0, 0)], flags_bits16=False)
     with pytest.raises(ValueError, match="8-bit"):
-        read_peaks_int8(dat)
+        read_peaks_raw(dat)
 
 
 # ── Peak math ────────────────────────────────────────────────────────────
 
 def test_peak_db_uses_max_abs_envelope(tmp_path):
-    # Bucket 0 peaks at v=64 (mid-bin amp ≈ 0.5039 → ≈ -5.95 dBFS); bucket 1
-    # peaks at v=100 (≈ -2.10 dBFS). Album peak comes from the louder bucket.
-    p = _write_dat(tmp_path / "a.dat", 96000, 256, [(-32, 64), (-100, 50)])
+    # Bucket 0 peaks at v=8000 (amp 8000/32768 ≈ 0.244 → ≈ -12.2 dBFS);
+    # bucket 1 peaks at v=16000 (amp ≈ 0.488 → ≈ -6.2 dBFS). Album peak
+    # comes from the louder bucket.
+    p = _write_dat(tmp_path / "a.dat", 96000, 256, [(-4000, 8000), (-16000, 5000)])
     db = peak_db_from_dat(p)
     assert db is not None
-    assert -2.15 < db < -2.05
+    assert -6.3 < db < -6.1
 
 
 def test_peak_db_picks_negative_extreme(tmp_path):
-    # |v|=90 from min, max=5 is small. The envelope must use |min|.
-    p = _write_dat(tmp_path / "n.dat", 48000, 256, [(-90, 5)])
+    # |v|=20000 from min, max=500 is small. The envelope must use |min|.
+    p = _write_dat(tmp_path / "n.dat", 48000, 256, [(-20000, 500)])
     db = peak_db_from_dat(p)
-    # amp = (90*256 + 127.5)/32768 ≈ 0.7068, 20*log10 ≈ -3.02 dB.
-    assert -3.10 < db < -2.95
+    # amp = 20000/32768 ≈ 0.6104, 20*log10 ≈ -4.29 dB.
+    assert -4.35 < db < -4.25
 
 
 def test_peak_db_returns_none_for_silent(tmp_path):
@@ -134,11 +135,11 @@ def test_peak_db_returns_none_for_silent(tmp_path):
 
 
 def test_peak_db_at_full_scale_caps_at_zero_dbfs(tmp_path):
-    # v=127 sits at the edge of int8; mid-bin amp clamps to 1.0 so the
-    # readout is 0 dBFS, not a small positive value.
-    p = _write_dat(tmp_path / "m.dat", 48000, 256, [(-127, 127)])
+    # v=32767 sits at the edge of int16; amp = 32767/32768 ≈ 1.0 so the
+    # readout is 0 dBFS.
+    p = _write_dat(tmp_path / "m.dat", 48000, 256, [(-32767, 32767)])
     db = peak_db_from_dat(p)
-    assert db is not None and -0.05 <= db <= 0.0
+    assert db is not None and -0.01 <= db <= 0.0
 
 
 def test_peak_db_returns_none_on_corrupt_file(tmp_path):
@@ -155,11 +156,11 @@ def test_silence_detects_quiet_window(tmp_path):
     # samples_per_pixel/sample_rate = 1 s per bucket. Three quiet buckets
     # (level=2) flanked by loud ones; threshold=8 catches the quiet run.
     dat = _write_dat(tmp_path / "q.dat", 256, 256, [
-        (-50, 50),
+        (-500, 500),
         (-2, 2), (-1, 1), (-2, 1),
-        (-50, 50),
+        (-500, 500),
     ])
-    runs = silence_runs_from_dat(dat, threshold_int8=8, min_duration_s=2.0)
+    runs = silence_runs_from_dat(dat, threshold=8, min_duration_s=2.0)
     assert len(runs) == 1
     assert runs[0]["start"] == pytest.approx(1.0)
     assert runs[0]["end"]   == pytest.approx(4.0)
@@ -171,9 +172,9 @@ def test_silence_skips_runs_below_min_duration(tmp_path):
     # placement relies on min_silence to filter inter-track gaps from
     # mid-song breath — never emit short hits.
     dat = _write_dat(tmp_path / "q.dat", 256, 256, [
-        (-50, 50), (-1, 1), (-50, 50)
+        (-500, 500), (-1, 1), (-500, 500)
     ])
-    runs = silence_runs_from_dat(dat, threshold_int8=8, min_duration_s=2.0)
+    runs = silence_runs_from_dat(dat, threshold=8, min_duration_s=2.0)
     assert runs == []
 
 
@@ -182,26 +183,26 @@ def test_silence_emits_trailing_run(tmp_path):
     # at the end of a side wouldn't get a cut and would drag into the
     # next track's lead-in.
     dat = _write_dat(tmp_path / "tail.dat", 256, 256, [
-        (-50, 50), (-1, 1), (-1, 1), (-1, 1)
+        (-500, 500), (-1, 1), (-1, 1), (-1, 1)
     ])
-    runs = silence_runs_from_dat(dat, threshold_int8=8, min_duration_s=2.0)
+    runs = silence_runs_from_dat(dat, threshold=8, min_duration_s=2.0)
     assert len(runs) == 1
     assert runs[0]["start"] == pytest.approx(1.0)
     assert runs[0]["end"]   == pytest.approx(4.0)
 
 
 def test_silence_threshold_zero_returns_empty(tmp_path):
-    # The slider's lower bound is 1; clamp threshold_int8 to >=1 in the
+    # The slider's lower bound is 1; clamp threshold to >=1 in the
     # API layer. The scanner short-circuits on 0 to avoid emitting the
     # entire album as one giant silent run.
     dat = _write_dat(tmp_path / "s.dat", 256, 256, [(0, 0), (0, 0)])
-    assert silence_runs_from_dat(dat, threshold_int8=0, min_duration_s=1.0) == []
+    assert silence_runs_from_dat(dat, threshold=0, min_duration_s=1.0) == []
 
 
 def test_silence_loud_album_returns_no_runs(tmp_path):
     # Threshold below every bucket's envelope -> no runs detected.
-    dat = _write_dat(tmp_path / "loud.dat", 256, 256, [(-100, 100)] * 5)
-    assert silence_runs_from_dat(dat, threshold_int8=10, min_duration_s=1.0) == []
+    dat = _write_dat(tmp_path / "loud.dat", 256, 256, [(-1000, 1000)] * 5)
+    assert silence_runs_from_dat(dat, threshold=10, min_duration_s=1.0) == []
 
 
 def test_silence_v2_stereo_combines_channels(tmp_path):
@@ -213,16 +214,16 @@ def test_silence_v2_stereo_combines_channels(tmp_path):
     dat = _write_dat(
         tmp_path / "stereo.peaks.dat", 256, 256,
         [
-            [(-50, 50), (-48, 48)],   # bucket 0: loud both
-            [(-1, 1),   (-1, 1)],     # bucket 1: quiet both
-            [(-1, 1),   (-1, 1)],     # bucket 2: quiet both
-            [(-50, 50), (-1, 1)],     # bucket 3: loud L (despite quiet R) → not silence
-            [(-1, 1),   (-1, 1)],     # bucket 4: quiet both
-            [(-50, 50), (-50, 50)],   # bucket 5: loud
+            [(-500, 500), (-480, 480)],   # bucket 0: loud both
+            [(-1, 1),     (-1, 1)],       # bucket 1: quiet both
+            [(-1, 1),     (-1, 1)],       # bucket 2: quiet both
+            [(-500, 500), (-1, 1)],       # bucket 3: loud L (despite quiet R) → not silence
+            [(-1, 1),     (-1, 1)],       # bucket 4: quiet both
+            [(-500, 500), (-500, 500)],   # bucket 5: loud
         ],
         channels=2, version=2,
     )
-    runs = silence_runs_from_dat(dat, threshold_int8=8, min_duration_s=1.5)
+    runs = silence_runs_from_dat(dat, threshold=8, min_duration_s=1.5)
     # Only buckets 1+2 (2 s) qualify; bucket 4 alone (1 s) is too short.
     assert len(runs) == 1
     assert runs[0]["start"] == pytest.approx(1.0)
@@ -263,12 +264,13 @@ def test_audiowaveform_v1_output_round_trips(tmp_path):
     # re-evaluate the editor's channel-combine path.
     assert head["version"] == 1
     assert head["channels"] == 1
+    assert head["bits"] == 16
     assert head["sample_rate"] == 48000
     assert head["samples_per_pixel"] == 256
     assert head["length"] > 0
-    # The body has exactly 2*length bytes (min/max int8 per bucket).
+    # The body has exactly 4*length bytes (min/max int16 per bucket).
     body_bytes = dat.stat().st_size - head["header_size"]
-    assert body_bytes == head["length"] * 2
+    assert body_bytes == head["length"] * 4
     # ffmpeg's lavfi sine generator outputs around -20 dBFS by default —
     # we don't care about the exact level, just that it parses to a real
     # finite number (not None, not the v1/v2 bug's nonsense value).

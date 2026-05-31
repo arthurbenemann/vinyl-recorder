@@ -1,12 +1,9 @@
-"""Unit tests for routes/albums._resolve_threshold_int8.
+"""Unit tests for routes/albums._resolve_threshold.
 
-The mapping is what the slider UI on the wave-editor relies on: each of
-the 127 notches sets the silence-detection threshold in the same int8
-units the .peaks.dat is stored in. Legacy clients that still POST the
-old `noise_db` field must keep working — those go through the dB → int8
-fallback path.
+The mapping converts a dBFS noise-floor value from the wave-editor slider
+into an int16 threshold (1..32767) matching the .peaks.dat 16-bit format.
 """
-from routes.albums import _resolve_threshold_int8
+from routes.albums import _resolve_threshold
 from state import SilenceDetectRequest
 
 
@@ -14,37 +11,30 @@ def _req(**kwargs) -> SilenceDetectRequest:
     return SilenceDetectRequest(album_id="abcdef01", **kwargs)
 
 
-def test_explicit_threshold_int8_passed_through():
-    # Slider sets threshold_int8 directly; the dB field is ignored.
-    assert _resolve_threshold_int8(_req(threshold_int8=8, noise_db=-99)) == 8
-    assert _resolve_threshold_int8(_req(threshold_int8=64)) == 64
+def test_noise_db_maps_to_int16():
+    # 0 dBFS -> amp 1.0 -> int16 = 32767. -6 dB -> amp ~0.501 -> int16 ~16424.
+    # -36 dB -> amp ~0.01585 -> int16 ~519. -60 dB -> amp ~0.001 -> int16 ~33.
+    assert _resolve_threshold(_req(noise_db=0.0))   == 32767
+    assert 16400 <= _resolve_threshold(_req(noise_db=-6.0))  <= 16450
+    assert 510   <= _resolve_threshold(_req(noise_db=-36.0)) <= 530
+    assert 30    <= _resolve_threshold(_req(noise_db=-60.0)) <= 36
 
 
-def test_explicit_threshold_int8_clamps_to_useful_range():
-    # < 1 would make the scanner short-circuit (everything silent); > 127
-    # has no representable amplitude bucket above it.
-    assert _resolve_threshold_int8(_req(threshold_int8=0))   == 1
-    assert _resolve_threshold_int8(_req(threshold_int8=-5))  == 1
-    assert _resolve_threshold_int8(_req(threshold_int8=200)) == 127
+def test_default_minus_36_db_maps_to_around_519():
+    # The slider default is -36 dB ≈ 1/64 of full scale.
+    val = _resolve_threshold(_req())
+    assert 510 <= val <= 530
 
 
-def test_legacy_noise_db_mapped_to_int8():
-    # 0 dBFS -> amp 1.0 -> int8 = 127. -6 dB -> amp ~0.5 -> int8 ~64.
-    # -42 dB -> amp ~0.0079 -> int8 ~1 (the practical floor).
-    assert _resolve_threshold_int8(_req(noise_db=0.0))   == 127
-    assert _resolve_threshold_int8(_req(noise_db=-6.0))  == 64
-    assert _resolve_threshold_int8(_req(noise_db=-42.0)) == 1
+def test_extreme_quiet_clamps_to_one():
+    # Very quiet thresholds (e.g. -90 dB) must clamp to 1, not go to 0
+    # (threshold 0 would short-circuit the scanner and detect nothing).
+    val = _resolve_threshold(_req(noise_db=-90.0))
+    assert val == 1
 
 
-def test_legacy_default_minus_40_db_maps_to_low_int8():
-    # The previous endpoint defaulted to -40 dB; the int8 equivalent is
-    # within ±1 of the slider's default value of 8 (≈ -24 dB).
-    val = _resolve_threshold_int8(_req())
-    assert 1 <= val <= 2  # -40 dB ≈ amp 0.01 ≈ int8 1.27 -> rounds to 1
-
-
-def test_int8_takes_priority_over_db():
-    # Both fields set: the explicit int8 wins. Mismatched values would be
-    # the new client signalling intent the old field can't express.
-    req = _req(threshold_int8=20, noise_db=-99)
-    assert _resolve_threshold_int8(req) == 20
+def test_above_zero_db_clamps_to_max():
+    # Positive dBFS is impossible for a real signal but the API should not
+    # blow up — clamp to the int16 ceiling.
+    val = _resolve_threshold(_req(noise_db=6.0))
+    assert val == 32767

@@ -7,8 +7,16 @@ otherwise call render_peaks once and cache the result.
 """
 import json
 import os
+import struct
 from pathlib import Path
 from unittest.mock import patch
+
+
+def _valid_16bit_dat() -> bytes:
+    """Minimal valid v1 16-bit audiowaveform dat body (flags=0x0 → 16-bit)."""
+    header = struct.pack("<iIiII", 1, 0, 96000, 256, 1)
+    body = b"\x00" * 4  # 1 bucket × 2 int16 values
+    return header + body
 
 
 def _seed_album(tmp_path: Path, monkeypatch, sides: list[str]) -> str:
@@ -77,7 +85,7 @@ def test_ensure_side_peaks_cache_skips_when_fresh(tmp_path, monkeypatch):
     # Pre-populate the dat with an mtime newer than the source side.
     dat = albums_fs.peaks_cache_path_for_side(album_id, "a.flac")
     dat.parent.mkdir(parents=True, exist_ok=True)
-    dat.write_bytes(b"\x00" * 32)
+    dat.write_bytes(_valid_16bit_dat())
     src = albums_fs.album_dir(album_id) / "a.flac"
     os.utime(dat, (src.stat().st_atime, src.stat().st_mtime + 5))
 
@@ -100,7 +108,7 @@ def test_ensure_side_peaks_cache_re_renders_when_side_advances(tmp_path, monkeyp
     for s in ("a.flac", "b.flac"):
         dat = albums_fs.peaks_cache_path_for_side(album_id, s)
         dat.parent.mkdir(parents=True, exist_ok=True)
-        dat.write_bytes(b"\x00" * 32)
+        dat.write_bytes(_valid_16bit_dat())
         src = albums_fs.album_dir(album_id) / s
         os.utime(dat, (src.stat().st_atime, src.stat().st_mtime + 5))
 
