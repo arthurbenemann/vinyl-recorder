@@ -470,8 +470,12 @@ async def split_album(req: SplitRequest):
     req = req.model_copy(update={"job_id": job_id})
     start_job(job_id, "split")
     _active_splits[req.album_id] = job_id
-    asyncio.create_task(_run_split_bg(req, manifest))
-    return {"job_id": job_id, "status": "started"}
+    # BackgroundTask is awaited by the ASGI server after the response is sent,
+    # surviving modal close / tab switch. It also runs to completion inside
+    # TestClient before client.post() returns, so API tests work without
+    # extra polling infrastructure.
+    bg = BackgroundTask(_run_split_bg, req, manifest)
+    return JSONResponse({"job_id": job_id, "status": "started"}, background=bg)
 
 
 @router.get("/api/album/{album_id}/split_job")
