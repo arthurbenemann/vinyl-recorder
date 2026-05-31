@@ -83,3 +83,19 @@ export async function withJobProgress(barEl, fn) {
     try { await pollPromise; } catch (e) {}
   }
 }
+
+// Poll an already-started job until it reports done. Updates barEl with
+// progress. Returns the final job state {done, error, result, progress}.
+export async function pollJobProgress(barEl, jobId) {
+  while (true) {
+    try {
+      const r = await fetch('/api/jobs/' + encodeURIComponent(jobId));
+      if (r.ok) {
+        const d = await r.json();
+        _setBar(barEl, d.progress || 0, d.phase || '');
+        if (d.done) return d;
+      }
+    } catch (e) { /* network blip — try again */ }
+    await new Promise(res => setTimeout(res, 250));
+  }
+}

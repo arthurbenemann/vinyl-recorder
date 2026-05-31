@@ -180,6 +180,7 @@ def test_jobs_endpoint_returns_known_shape():
             "label":    "measure",
             "done":     False,
             "error":    None,
+            "result":   None,
         }
     finally:
         finish_job("api-test-job")

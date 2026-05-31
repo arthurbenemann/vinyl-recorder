@@ -16,7 +16,7 @@ def test_lifecycle_progress_then_finish():
     start_job("j1", label="combine")
     assert get_job("j1") == {
         "label": "combine", "phase": "", "progress": 0.0,
-        "done": False, "error": None, "ts": get_job("j1")["ts"],
+        "done": False, "error": None, "result": None, "ts": get_job("j1")["ts"],
     }
     update_job("j1", 0.5, phase="encoding tracks")
     j = get_job("j1")

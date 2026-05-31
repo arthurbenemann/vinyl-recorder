@@ -473,6 +473,10 @@ function openWaveEditor(fname) {
   // first-time open of an MB-tagged album auto-suggests a tracklist instead
   // of forcing the user to run the search by hand.
   weLoadExistingSplit(fname).then(() => _weAutoLoadFromIds(a));
+  // If a background encode is already running for this album (e.g. the user
+  // closed the modal mid-encode and reopened it), reconnect to it so the
+  // progress bar resumes and the editor closes automatically on completion.
+  _weReconnectSplitJob(fname);
 }
 
 // Repopulate cuts, titles, and skip flags from album.json.plan. Covers
@@ -2048,37 +2052,79 @@ async function weApplySplit() {
       return;
     }
   }
+  await _weSplitRun(tracks, bitDepth, sampleRate, outputFormat, channelMode,
+                    replaygain, normalize);
+}
+
+async function _weReconnectSplitJob(albumId) {
+  let jobId;
+  try {
+    const r = await fetch(`/api/album/${encodeURIComponent(albumId)}/split_job`);
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.job_id || d.done) return;
+    jobId = d.job_id;
+  } catch (e) { return; }
+
+  const btn = document.getElementById('we-go');
+  const bar = document.getElementById('we-split-bar');
+  if (btn) { btn.disabled = true; btn.textContent = 'splitting…'; }
+  showBar(bar, 'encoding tracks');
+  try {
+    const job = await pollJobProgress(bar, jobId);
+    if (we.albumId !== albumId) return; // editor switched albums while polling
+    if (job.error) {
+      toast('✗ split failed: ' + job.error, 'err');
+      if (typeof recordAlbumFailure === 'function')
+        recordAlbumFailure(albumId, 'split', job.error);
+      return;
+    }
+    const d = job.result;
+    toast(`✓ Split into ${d.tracks.length} tracks`, 'ok');
+    if (typeof noteAlbumSuccess === 'function') noteAlbumSuccess(albumId);
+    closeWaveEditor();
+    refreshAlbums();
+  } finally {
+    if (we.albumId === albumId) {
+      if (btn) { btn.disabled = false; btn.textContent = 'apply split'; }
+      hideBar(bar);
+    }
+  }
+}
+
+async function _weSplitRun(tracks, bitDepth, sampleRate, outputFormat,
+                            channelMode, replaygain, normalize) {
   const btn = document.getElementById('we-go');
   const bar = document.getElementById('we-split-bar');
   btn.disabled = true; btn.textContent = 'splitting…';
   showBar(bar, 'encoding tracks');
   try {
-    const d = await withJobProgress(bar, async (jobId) => {
-      const body = { album_id: we.albumId, tracks, bit_depth: bitDepth, sample_rate: sampleRate, output_format: outputFormat, channel_mode: channelMode, replaygain, job_id: jobId };
-      if (normalize) {
-        body.normalize         = true;
-        body.target_peak_db    = we.targetPeakDb;
-        body.measured_peak_db  = we.measured.peak_db;
-      }
-      const r = await fetch('/api/album/split', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) throw new Error(await parseError(r));
-      return r.json();
+    // POST returns immediately with a job_id; the encode runs in the
+    // background so closing the modal won't cancel it.
+    const body = { album_id: we.albumId, tracks, bit_depth: bitDepth,
+                   sample_rate: sampleRate, output_format: outputFormat,
+                   channel_mode: channelMode, replaygain };
+    if (normalize) {
+      body.normalize        = true;
+      body.target_peak_db   = we.targetPeakDb;
+      body.measured_peak_db = we.measured.peak_db;
+    }
+    const r = await fetch('/api/album/split', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body),
     });
+    if (!r.ok) throw new Error(await parseError(r));
+    const { job_id: jobId } = await r.json();
+    // Poll until the background encode finishes.
+    const job = await pollJobProgress(bar, jobId);
+    if (job.error) throw new Error(job.error);
+    const d = job.result;
     toast(`✓ Split into ${d.tracks.length} tracks`, 'ok');
-    // Clear any prior session-failure pill on this album — the rerun worked.
     if (typeof noteAlbumSuccess === 'function') noteAlbumSuccess(we.albumId);
-    // No draft to clear — the split route already wrote the same plan to
-    // album.json (alongside `music_relpath`). Closing the editor leaves
-    // the plan in place so re-edit picks up where this run left off.
     closeWaveEditor();
     refreshAlbums();
   } catch (e) {
     toast('✗ split failed: ' + e.message, 'err');
-    // Persist the failure beyond the toast so the user can see at a glance
-    // which album had a problem when scanning the library.
     if (typeof recordAlbumFailure === 'function') {
       recordAlbumFailure(we.albumId, 'split', e.message);
     }

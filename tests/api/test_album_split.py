@@ -29,9 +29,48 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 
+import time as _time
+
+
 def _client():
     from main import app
     return TestClient(app)
+
+
+class _FakeResponse:
+    """Mimics requests.Response well enough for the tests in this file."""
+    def __init__(self, status_code: int, data):
+        self.status_code = status_code
+        self._data = data
+        self.text = str(data)
+
+    def json(self):
+        return self._data
+
+
+def _split_sync(json_body: dict) -> "_FakeResponse | object":
+    """POST /api/album/split and wait for the background job to finish.
+
+    If the route returns a non-200 (pre-validation error), that response is
+    returned as-is so error-path tests still see the right status code.
+    On 200 the function polls /api/jobs/<id> until done, then returns a
+    _FakeResponse whose .json() matches the old synchronous response shape
+    so success-path assertions need no changes."""
+    client = _client()
+    r = client.post("/api/album/split", json=json_body)
+    if r.status_code != 200:
+        return r
+    job_id = r.json()["job_id"]
+    for _ in range(600):   # up to 60 s
+        jr = client.get(f"/api/jobs/{job_id}")
+        if jr.is_success:
+            job = jr.json()
+            if job["done"]:
+                if job["error"]:
+                    return _FakeResponse(500, {"detail": job["error"]})
+                return _FakeResponse(200, job["result"])
+        _time.sleep(0.1)
+    raise TimeoutError(f"split job {job_id} did not finish in 60 s")
 
 
 # ── Test scaffolding ─────────────────────────────────────────────────────
@@ -145,7 +184,7 @@ def _cleanup_album(aid: str) -> None:
 
 def test_split_unknown_album_returns_404(monkeypatch):
     _MockSplitEnv(monkeypatch)
-    r = _client().post("/api/album/split", json={
+    r = _split_sync({
         "album_id": "not-a-real-id",
         "tracks": [{"title": "T1", "duration_seconds": 60}],
     })
@@ -156,7 +195,7 @@ def test_split_no_tracks_returns_400(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side()
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid, "tracks": [],
         })
         assert r.status_code == 400
@@ -176,7 +215,7 @@ def test_split_album_with_no_sides_returns_404(monkeypatch):
     albums_fs.album_dir(aid).mkdir(parents=True)
     albums_fs.write_manifest(aid, {"sides": [], "tags": {}})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid, "tracks": [{"title": "T1", "duration_seconds": 10}],
         })
         assert r.status_code == 404
@@ -188,7 +227,7 @@ def test_split_disk_full_returns_507(monkeypatch):
     _MockSplitEnv(monkeypatch, disk_free_gb_value=0.1)
     aid = _make_album_with_side()
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid, "tracks": [{"title": "T1", "duration_seconds": 10}],
         })
         assert r.status_code == 507
@@ -205,7 +244,7 @@ def test_split_unreadable_duration_returns_500(monkeypatch):
 
     aid = _make_album_with_side()
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid, "tracks": [{"title": "T1", "duration_seconds": 10}],
         })
         assert r.status_code == 500
@@ -217,7 +256,7 @@ def test_split_ffmpeg_failure_surfaces_as_500(monkeypatch):
     env = _MockSplitEnv(monkeypatch, ffmpeg_rc=1)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
         })
@@ -235,7 +274,7 @@ def test_split_writes_rip_log_sidecar(monkeypatch):
     _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B", "year": "1999"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 300},
                        {"title": "T2", "duration_seconds": 300}],
@@ -261,7 +300,7 @@ def test_split_writes_folder_cover(monkeypatch):
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     albums_fs.write_cover(aid, b"\xff\xd8\xff\xe0fake-jpeg-bytes")
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 300}],
         })
@@ -280,7 +319,7 @@ def test_split_no_cover_no_folder_cover(monkeypatch):
     _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 300}],
         })
@@ -297,7 +336,7 @@ def test_split_writes_m3u_and_cue(monkeypatch):
     _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "Bee"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "One", "duration_seconds": 300},
                        {"title": "Two", "duration_seconds": 300}],
@@ -324,7 +363,7 @@ def test_split_last_track_extends_to_total(monkeypatch):
     try:
         # Two tracks of 100 s each; total = 600 s. Track 2 should run from
         # 100 → 600, not 100 → 200.
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [
                 {"title": "T1", "duration_seconds": 100},
@@ -348,7 +387,7 @@ def test_split_skip_track_advances_cursor_without_output(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [
                 {"title": "Intro Skip", "duration_seconds": 30, "skip": True},
@@ -378,7 +417,7 @@ def test_split_zero_duration_track_skipped(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [
                 {"title": "Z",  "duration_seconds": 0},
@@ -407,7 +446,7 @@ def test_split_output_filenames_zero_padded_by_total(monkeypatch):
         # 12 outputs (1 skip + 12 keeps; 12 → 2-digit padding).
         tracks = [{"title": "Skip", "duration_seconds": 5, "skip": True}]
         tracks += [{"title": f"T{i}", "duration_seconds": 40} for i in range(1, 13)]
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid, "tracks": tracks,
         })
         assert r.status_code == 200, r.text
@@ -427,7 +466,7 @@ def test_split_sanitizes_track_titles_in_filenames(monkeypatch):
     _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": 'a/b\\c"d', "duration_seconds": 60}],
         })
@@ -448,7 +487,7 @@ def test_split_empty_title_falls_back_to_safe_label(monkeypatch):
     _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "///", "duration_seconds": 60}],
         })
@@ -472,7 +511,7 @@ def test_split_normalize_adds_volume_filter(monkeypatch):
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
         # measured peak -4 dB, target -1 dB → +3 dB gain.
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "normalize": True,
@@ -494,7 +533,7 @@ def test_split_mono_adds_pan_filter(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "channel_mode": "mono",
@@ -510,7 +549,7 @@ def test_split_stereo_default_no_pan_filter(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
         })
@@ -526,7 +565,7 @@ def test_split_rejects_bad_channel_mode(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "channel_mode": "surround",
@@ -541,7 +580,7 @@ def test_split_no_normalize_no_volume_filter(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "normalize": False,
@@ -560,7 +599,7 @@ def test_split_aformat_skipped_when_target_matches_source(monkeypatch):
     env = _MockSplitEnv(monkeypatch, src_bit_depth=24)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "bit_depth": 24,
@@ -580,7 +619,7 @@ def test_split_16bit_downconvert_dithers_via_aresample(monkeypatch):
     env = _MockSplitEnv(monkeypatch, src_bit_depth=24)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "bit_depth": 16,
@@ -603,7 +642,7 @@ def test_split_sample_rate_default_keeps_source(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
         })
@@ -623,7 +662,7 @@ def test_split_sample_rate_adds_ar_and_soxr_filter(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "sample_rate": 44100,
@@ -648,7 +687,7 @@ def test_split_sample_rate_combines_with_bit_depth(monkeypatch):
     env = _MockSplitEnv(monkeypatch, src_bit_depth=24)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "bit_depth": 16,
@@ -673,7 +712,7 @@ def test_split_unsupported_sample_rate_rejected(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "sample_rate": 12345,
@@ -693,7 +732,7 @@ def test_split_unsupported_output_format_rejected(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "output_format": "wma",  # not in the allowed set
@@ -711,7 +750,7 @@ def test_split_default_output_format_is_flac(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
         })
@@ -735,7 +774,7 @@ def test_split_mp3_uses_libmp3lame_and_inline_metadata(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B", "year": "2024"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "output_format": "mp3",
@@ -765,7 +804,7 @@ def test_split_wav_24bit_uses_pcm_s24le(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "output_format": "wav",
@@ -791,7 +830,7 @@ def test_split_output_format_persisted_in_plan(monkeypatch):
 
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "output_format": "m4a-alac",
@@ -811,7 +850,7 @@ def test_split_sample_rate_persisted_in_plan(monkeypatch):
 
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "sample_rate": 96000,
@@ -830,7 +869,7 @@ def test_split_concat_input_used(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [
                 {"title": "T1", "duration_seconds": 100},
@@ -864,7 +903,7 @@ def test_split_writes_tag_args_per_track(monkeypatch):
         "country": "UK",
     })
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "Comfortably Numb", "duration_seconds": 60}],
         })
@@ -900,7 +939,7 @@ def test_split_includes_mb_and_discogs_ids_when_present(monkeypatch):
         "discogs_release_id":  9999,
     })
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
         })
@@ -923,7 +962,7 @@ def test_split_imports_cover_when_present(monkeypatch):
         # Drop a fake cover.jpg into the album dir.
         albums_fs.write_cover(aid, b"\xff\xd8\xff fake jpeg")
 
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
         })
@@ -941,7 +980,7 @@ def test_split_no_cover_skips_picture_import(monkeypatch):
     env = _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
         })
@@ -967,7 +1006,7 @@ def test_split_writes_plan_and_music_relpath_to_manifest(monkeypatch):
     aid = _make_album_with_side(tags={"artist": "Foo", "album": "Bar",
                                       "year": "2020"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
             "normalize": True,
@@ -994,7 +1033,7 @@ def test_split_response_body_shape(monkeypatch):
     _MockSplitEnv(monkeypatch)
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
         })
@@ -1023,7 +1062,7 @@ def test_split_clears_prior_music_dir_before_re_emit(monkeypatch):
     aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
     try:
         # First split.
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
         })
@@ -1039,7 +1078,7 @@ def test_split_clears_prior_music_dir_before_re_emit(monkeypatch):
 
         # Re-split — same plan; the stale file should disappear and only
         # the freshly-written track remains.
-        r = _client().post("/api/album/split", json={
+        r = _split_sync({
             "album_id": aid,
             "tracks": [{"title": "T1", "duration_seconds": 60}],
         })
@@ -1047,5 +1086,146 @@ def test_split_clears_prior_music_dir_before_re_emit(monkeypatch):
         after = sorted(music_dir.glob("*.flac"))
         assert len(after) == 1
         assert all("stale" not in p.name for p in after)
+    finally:
+        _cleanup_album(aid)
+
+
+# ── split_job reconnect endpoint ─────────────────────────────────────────
+
+def test_split_job_endpoint_unknown_album_returns_404():
+    """GET /api/album/{id}/split_job returns 404 for an unknown album."""
+    r = _client().get("/api/album/no-such-album/split_job")
+    assert r.status_code == 404
+
+
+def test_split_job_endpoint_no_active_split(monkeypatch):
+    """GET /api/album/{id}/split_job returns {job_id: null} when no split is running."""
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side()
+    try:
+        r = _client().get(f"/api/album/{aid}/split_job")
+        assert r.status_code == 200
+        assert r.json() == {"job_id": None}
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_job_endpoint_returns_active_job(monkeypatch):
+    """GET /api/album/{id}/split_job returns job details when a split job is registered."""
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side()
+    try:
+        from services.jobs import start_job
+        from routes import albums as albums_mod
+        fake_id = "test_fake_job_123"
+        start_job(fake_id, "split")
+        albums_mod._active_splits[aid] = fake_id
+        r = _client().get(f"/api/album/{aid}/split_job")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["job_id"] == fake_id
+        assert body["done"] is False
+    finally:
+        from routes import albums as albums_mod
+        albums_mod._active_splits.pop(aid, None)
+        _cleanup_album(aid)
+
+
+def test_split_job_endpoint_stale_job_id_returns_null(monkeypatch):
+    """GET /api/album/{id}/split_job returns {job_id: null} when the job_id in
+    _active_splits no longer has a registry entry (GC'd or never started)."""
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side()
+    try:
+        from routes import albums as albums_mod
+        albums_mod._active_splits[aid] = "stale_job_id_not_in_registry"
+        r = _client().get(f"/api/album/{aid}/split_job")
+        assert r.status_code == 200
+        assert r.json() == {"job_id": None}
+    finally:
+        from routes import albums as albums_mod
+        albums_mod._active_splits.pop(aid, None)
+        _cleanup_album(aid)
+
+
+# ── duplicate-split 409 path ──────────────────────────────────────────────
+
+def test_split_already_running_returns_409(monkeypatch):
+    """POST /api/album/split returns 409 when a split is already in progress."""
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side()
+    try:
+        from routes import albums as albums_mod
+        albums_mod._active_splits[aid] = "already_running_job"
+        r = _client().post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+        })
+        assert r.status_code == 409
+        assert "already running" in r.json()["detail"]
+    finally:
+        from routes import albums as albums_mod
+        albums_mod._active_splits.pop(aid, None)
+        _cleanup_album(aid)
+
+
+# ── background error handling ─────────────────────────────────────────────
+
+def test_split_bg_exception_marks_job_failed(monkeypatch):
+    """If split_album raises an unexpected exception in the background task,
+    the job is marked done with an error so the UI can report failure."""
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side()
+
+    from services import split_orchestrator as orch
+
+    async def _fail(req, manifest):
+        raise RuntimeError("unexpected bg failure")
+
+    monkeypatch.setattr(orch, "split_album", _fail)
+
+    try:
+        client = _client()
+        r = client.post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+        })
+        assert r.status_code == 200
+        job_id = r.json()["job_id"]
+        jr = client.get(f"/api/jobs/{job_id}")
+        assert jr.status_code == 200
+        job = jr.json()
+        assert job["done"] is True
+        assert "unexpected bg failure" in job["error"]
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_bg_split_error_marks_job_failed(monkeypatch):
+    """If split_album raises a SplitProcessingError in the background task,
+    the job is marked done with the error message."""
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side()
+
+    from services import split_orchestrator as orch
+
+    async def _fail(req, manifest):
+        raise orch.SplitProcessingError("ffmpeg crashed in bg")
+
+    monkeypatch.setattr(orch, "split_album", _fail)
+
+    try:
+        client = _client()
+        r = client.post("/api/album/split", json={
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 60}],
+        })
+        assert r.status_code == 200
+        job_id = r.json()["job_id"]
+        jr = client.get(f"/api/jobs/{job_id}")
+        assert jr.status_code == 200
+        job = jr.json()
+        assert job["done"] is True
+        assert "ffmpeg crashed in bg" in job["error"]
     finally:
         _cleanup_album(aid)

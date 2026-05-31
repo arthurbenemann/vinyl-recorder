@@ -273,6 +273,7 @@ async def job_status(job_id: str):
         "label":    j["label"],
         "done":     j["done"],
         "error":    j["error"],
+        "result":   j.get("result"),
     }
 
 
