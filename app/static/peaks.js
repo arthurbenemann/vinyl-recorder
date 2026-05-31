@@ -278,7 +278,9 @@ function approxNoiseFloorDbFromPeaks(peaks) {
     cum += hist[b];
     if (cum >= target) {
       const ampMid = Math.max(1, b * 64 + 32);
-      return 20 * Math.log10(ampMid / 32768);
+      // quantized=true when we landed in bin 0: the true floor may be even
+      // quieter than the midpoint we can represent, so the caller shows `~>`.
+      return { db: 20 * Math.log10(ampMid / 32768), quantized: b === 0 };
     }
   }
   return null;
