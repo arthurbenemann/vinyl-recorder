@@ -895,6 +895,160 @@ def test_shift_drag_translates_trailing_cuts(stack, page):
             except Exception: pass
 
 
+# ── Click-drag on the waveform pans the viewport ─────────────────────────
+def test_drag_pans_waveform(stack, page):
+    """Dragging on the waveform (away from a cut handle) pans the zoomed
+    viewport — moving left reveals later audio (viewStart increases), the
+    window length is preserved, and the trailing click is swallowed so the
+    pan doesn't also seek. A press that doesn't move still seeks."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    # 30 s album, zoomed to a 10 s window parked at [10, 20] so there's room
+    # to pan either direction. Full-album pixel↔time math via the wrap rect.
+    #
+    # The waveform timeline is synthetic (we.total = 30), but weAudio plays
+    # the real combined fixture (only a few seconds long), so seek() clamps
+    # to the media and reading back currentTime can't confirm a 15 s seek.
+    # Spy on the requested album-time instead — that's the value the click
+    # handler computes and what the pan must suppress, independent of how
+    # short the backing audio happens to be.
+    setup = """
+        we.total     = 30;
+        we.sides     = [{duration_seconds: 15}, {duration_seconds: 15}];
+        we.cuts      = [];
+        we.titles    = ['A'];
+        we.skipped   = [false];
+        we.positions = [''];
+        we.silences  = [];
+        we.viewStart = 10;
+        we.viewEnd   = 20;
+        // Spy: record every seek's requested album-time, before clamping.
+        if (!weAudio.__seekSpy) {
+            weAudio.__seekReqs = [];
+            const orig = weAudio.seek.bind(weAudio);
+            weAudio.seek = (t) => { weAudio.__seekReqs.push(t); return orig(t); };
+            weAudio.__seekSpy = true;
+        }
+        weAudio.__seekReqs = [];
+        drawAll();
+        const rect = document.getElementById('we-wrap').getBoundingClientRect();
+    """
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="PanDragArtist", album="PanDragAlbum"
+        )
+        rect = page.evaluate(
+            "() => {" + setup + " return {x: rect.left, y: rect.top,"
+            " w: rect.width, h: rect.height}; }"
+        )
+        cy = rect["y"] + rect["h"] / 2
+        # Drag left by a quarter of the width → viewStart moves forward by a
+        # quarter of the 10 s window (≈2.5 s). The overlay is the event
+        # surface (the canvas underneath is pointer-events:none).
+        x0 = rect["x"] + rect["w"] * 0.6
+        x1 = rect["x"] + rect["w"] * 0.35
+        page.mouse.move(x0, cy)
+        page.mouse.down()
+        # Several steps so the move clears the 4px pan threshold cleanly.
+        page.mouse.move(x0 - 20, cy)
+        page.mouse.move(x1, cy)
+        page.mouse.up()
+        state = page.evaluate(
+            "() => ({s: we.viewStart, e: we.viewEnd,"
+            " seeks: weAudio.__seekReqs.slice()})"
+        )
+        # Dragged left → later audio: viewStart increased from 10.
+        assert state["s"] > 10.0, f"drag should pan forward: {state}"
+        # Window length preserved at 10 s.
+        assert abs((state["e"] - state["s"]) - 10.0) < 1e-3, \
+            f"pan must preserve zoom window: {state}"
+        # ~2.5 s shift (0.25 * 10 s), tolerant of mouse-step rounding.
+        assert abs(state["s"] - 12.5) < 0.6, f"unexpected pan distance: {state}"
+        # The pan's trailing click must NOT have requested a seek.
+        assert state["seeks"] == [], f"pan should not seek: {state}"
+
+        # A press with no movement still seeks (click-to-seek preserved).
+        page.evaluate(setup)
+        seek_x = rect["x"] + rect["w"] * 0.5   # centre → t = 15 (mid 10–20)
+        page.mouse.move(seek_x, cy)
+        page.mouse.down()
+        page.mouse.up()
+        reqs = page.evaluate("() => weAudio.__seekReqs.slice()")
+        assert len(reqs) == 1, f"a no-move press should seek exactly once: {reqs}"
+        assert abs(reqs[0] - 15.0) < 0.5, f"click should seek to ~15s: {reqs}"
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
+# ── Drag a track handle to reorder labels (audio stays put) ──────────────
+def test_drag_reorder_relabels_tracks(stack, page):
+    """Dragging a track row's handle reorders only the per-region labels
+    (title / skip / position) across the FIXED waveform segments — the cuts
+    (and therefore the album audio order) never move. A label dropped on a
+    segment that lives on another side picks up that side's number."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=2)
+    # 30 s album, two 15 s sides. Cuts at 5/15/22 → 4 regions:
+    #   slot0 [0,5)   side A   slot1 [5,15)  side A
+    #   slot2 [15,22) side B   slot3 [22,30) side B
+    setup = """
+        we.total     = 30;
+        we.sides     = [{duration_seconds: 15}, {duration_seconds: 15}];
+        we.cuts      = [5, 15, 22];
+        we.titles    = ['T0', 'T1', 'T2', 'T3'];
+        we.skipped   = [false, false, false, false];
+        we.positions = ['', '', '', ''];
+        we.silences  = [];
+        we.viewStart = 0;
+        we.viewEnd   = 30;
+        drawAll();
+    """
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="ReorderArtist", album="ReorderAlbum"
+        )
+        page.evaluate("() => {" + setup + "}")
+
+        # Every rendered row exposes a draggable grip.
+        handles = page.eval_on_selector_all(
+            ".wave-track .drag-handle[draggable='true']", "els => els.length"
+        )
+        assert handles == 4, f"expected a drag handle per row, got {handles}"
+
+        # Move slot 0's label to slot 2 (a side-A track onto a side-B segment).
+        moved = page.evaluate("() => weMoveTrack(0, 2)")
+        assert moved is True, "weMoveTrack should report a change"
+        state = page.evaluate(
+            "() => ({titles: we.titles.slice(), cuts: we.cuts.slice()})"
+        )
+        # Labels reordered; the waveform cuts (audio) did NOT move.
+        assert state["titles"] == ["T1", "T2", "T0", "T3"], state
+        assert state["cuts"] == [5, 15, 22], f"cuts must stay fixed: {state}"
+
+        # T0 now sits on the side-B segment [15,22) → its derived position is a
+        # B-side number (manual split: position re-derives from the slot).
+        pos = page.evaluate("() => window._weEffectivePositions()[2]")
+        assert pos.startswith("B"), f"moved label should take the B side: {pos!r}"
+
+        # The skip flag travels with the row. Skip slot 0, then move it to the
+        # end — the skip must follow the label, not stay on the segment.
+        page.evaluate("() => { we.skipped = [true, false, false, false];"
+                      " renderTracks(); weMoveTrack(0, 3); }")
+        skipped = page.evaluate("() => we.skipped.slice()")
+        assert skipped == [False, False, False, True], \
+            f"skip should travel with the dragged row: {skipped}"
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
+
+
 # ── Music row "N tracks" link expands an inline track list ───────────────
 def test_music_row_expands_into_track_list(stack, page):
     """Clicking the `N tracks` link in the Music section toggles an inline

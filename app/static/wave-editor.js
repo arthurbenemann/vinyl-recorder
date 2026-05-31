@@ -965,10 +965,56 @@ function weHoverLeave() {
   document.getElementById('we-readout').textContent = '';
 }
 
+// Drag anywhere on the waveform (not on a cut handle) to pan the viewport —
+// the same gesture as dragging the minimap rect. A press that stays within a
+// few pixels isn't a pan: it falls through to the click handler below, which
+// seeks (or, with shift, adds a cut). Mouse-only to match the editor's other
+// drag handlers (cut drag, minimap pan).
+let _weSuppressNextClick = false;
+function weWaveDown(e) {
+  // Left button only (right-click deletes a cut on a handle), and never on a
+  // shift-press — shift is reserved for add-cut, so shift+drag still adds.
+  if (e.button !== 0 || e.shiftKey) return;
+  // Presses on a cut handle run their own drag (weStartDrag stops
+  // propagation; this guards the rest) — don't start a pan there.
+  if (e.target.closest && e.target.closest('.wave-cut')) return;
+  _weSuppressNextClick = false;
+  const overlay = document.getElementById('we-overlay');
+  const r = _wrap().getBoundingClientRect();
+  const startX = e.clientX;
+  const startS = we.viewStart;
+  const len = we.viewEnd - we.viewStart;
+  let moved = false;
+  const onMove = ev => {
+    const dx = ev.clientX - startX;
+    if (!moved && Math.abs(dx) < 4) return;   // below threshold → still a click
+    moved = true;
+    if (overlay) overlay.classList.add('panning');
+    // Drag the waveform with the cursor: moving right reveals earlier audio,
+    // so the window's left edge moves back in time. Clamp to [0, total-len].
+    const dt = (dx / r.width) * len;
+    const s = Math.max(0, Math.min(Math.max(0, we.total - len), startS - dt));
+    we.viewStart = s;
+    we.viewEnd   = s + len;
+    drawAll();
+  };
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup',   onUp);
+    if (overlay) overlay.classList.remove('panning');
+    // Swallow the click that fires at the end of a real pan so it doesn't
+    // also seek; a no-move press leaves the flag false and clicks through.
+    if (moved) _weSuppressNextClick = true;
+  };
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup',   onUp);
+}
+
 // Click on bare waveform = seek playhead. Use the "+ add cut at playhead"
 // button (or shift-click) for adding cuts. This separation matches Audacity.
 function weAddCutAtClick(e) {
   if (we.dragging) return;                         // drop on drag-end, not a click
+  if (_weSuppressNextClick) { _weSuppressNextClick = false; return; }  // end of a pan
   const r = _wrap().getBoundingClientRect();
   const t = _xToTime(e.clientX - r.left);
   if (e.shiftKey) {
@@ -1388,7 +1434,15 @@ function renderTracks() {
     // announcement makes sense out of order ("Play track 3" vs "Play").
     const ctx = (we.titles[i] && we.titles[i].trim()) ? `${num}: ${we.titles[i]}` : `${num}`;
     return `
-      <div class="${rowClass.join(' ')}">
+      <div class="${rowClass.join(' ')}"
+           ondragover="weTrackDragOver(event, ${i})"
+           ondragleave="weTrackDragLeave(event)"
+           ondrop="weTrackDrop(event, ${i})">
+        <span class="drag-handle" draggable="true"
+              ondragstart="weTrackDragStart(event, ${i})"
+              ondragend="weTrackDragEnd(event)"
+              title="Drag to reorder — labels move, audio stays in place"
+              aria-label="${htmlEscape('Drag to reorder track ' + ctx)}">≡</span>
         <span class="pn">${num}</span>
         <button class="play-track ${playing}" onclick="wePlayTrack(${i})" title="Play this region" aria-label="${htmlEscape('Play track ' + ctx)}" ${unfit ? 'disabled' : ''}>▶</button>
         <input type="text" value="${htmlEscape(titleVal)}" ${titleAttrs} aria-label="${htmlEscape('Title for track ' + num)}">
@@ -1407,6 +1461,81 @@ function renderTracks() {
   }).join('');
   document.getElementById('we-go').disabled = exportable === 0;
   _persistDraft();
+}
+
+// ── Track reorder (relabel only) ──────────────────────────────────────────
+// Drag a track row's handle to move its label onto a different fixed segment.
+// The waveform cuts (segment boundaries) never move, so the AUDIO order on
+// disk is unchanged — only which title/skip/position sits on which segment is
+// reordered. A label dropped on a segment that lives on another side picks up
+// that side's number: on a manual split the side letter re-derives from the
+// destination slot; with an explicit Discogs tracklist the position travels
+// with the row. This is the "relabel only" reorder — it never re-slices or
+// re-times the audio.
+//
+// Only the grip is draggable (the row carries editable inputs, which a
+// draggable ancestor would make unselectable); the row itself is the drop
+// zone. Mirrors the sides-reorder DnD (weSidesDrag*) one level down.
+let _weTrackDragFrom = null;
+function weTrackDragStart(e, i) {
+  _weTrackDragFrom = i;
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(i));
+  }
+  const row = e.currentTarget.closest ? e.currentTarget.closest('.wave-track') : null;
+  if (row) {
+    row.classList.add('dragging');
+    // Drag the whole row as the ghost image, not just the grip.
+    if (e.dataTransfer && e.dataTransfer.setDragImage) {
+      e.dataTransfer.setDragImage(row, 0, 0);
+    }
+  }
+}
+function weTrackDragOver(e, i) {
+  if (_weTrackDragFrom == null || _weTrackDragFrom === i) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  e.currentTarget.classList.add('drag-over');
+}
+function weTrackDragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
+function weTrackDrop(e, j) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over');
+  const i = _weTrackDragFrom;
+  _weTrackDragFrom = null;
+  weMoveTrack(i, j);
+}
+function weTrackDragEnd(e) {
+  _weTrackDragFrom = null;
+  document.querySelectorAll('.wave-track.dragging, .wave-track.drag-over')
+    .forEach(r => r.classList.remove('dragging', 'drag-over'));
+}
+
+// Move the per-region label triple (title, skip, position) from slot `from`
+// to slot `to`, shifting the rows between them. `we.cuts` is untouched so the
+// segments — and the album audio under them — keep their place and length;
+// only the labels are reordered. Returns true if the arrays changed.
+function weMoveTrack(from, to) {
+  const n = we.titles.length;
+  if (from == null || to == null) return false;
+  from |= 0; to |= 0;
+  if (from < 0 || from >= n || to < 0 || to >= n || from === to) return false;
+  const move = arr => {
+    if (!Array.isArray(arr) || arr.length !== n) return;
+    arr.splice(to, 0, arr.splice(from, 1)[0]);
+  };
+  move(we.titles);
+  move(we.skipped);
+  move(we.positions);   // length-guarded; '' entries simply re-derive per slot
+  we.dirty = true;
+  // Moving a skip flag onto a different-length segment changes which audio is
+  // excluded, so any cached peak/loudness measurement is stale.
+  if (we.skipped.some(Boolean)) invalidateMeasure();
+  renderWaveformOverlay();
+  renderMinimapOverlay();
+  renderTracks();
+  return true;
 }
 
 function weSetTitle(i, v) {
