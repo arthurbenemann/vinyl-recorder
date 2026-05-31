@@ -445,12 +445,12 @@ async def _run_split_bg(req: SplitRequest, manifest: dict) -> None:
 async def split_album(req: SplitRequest):
     """Start encoding per-track FLACs in the background. Returns immediately
     with the job_id so the browser can poll /api/jobs/{job_id} for progress.
-    The encode survives modal close / tab switch. If a split is already running
-    for this album, returns the existing job_id unchanged."""
+    The encode survives modal close / tab switch. Returns 409 if a split is
+    already running for this album — wait for it to finish or reload."""
     manifest = _require_album(req.album_id)
     existing = _active_splits.get(req.album_id)
     if existing:
-        return {"job_id": existing, "status": "running"}
+        raise HTTPException(409, "a split is already running for this album")
     job_id = req.job_id or ""
     if not job_id:
         import uuid
