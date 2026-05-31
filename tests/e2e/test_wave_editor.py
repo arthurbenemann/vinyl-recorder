@@ -521,7 +521,7 @@ def test_silence_detection_settings_persist_across_reload(stack, page):
         # Start from a known-clean slate so a prior test's saved prefs don't
         # mask a regression where hydration silently does nothing.
         page.evaluate(
-            "() => ['we.noiseInt8','we.minSilence','we.skipLong']"
+            "() => ['we.noiseDb','we.minSilence','we.skipLong']"
             ".forEach(k => localStorage.removeItem(k))"
         )
         album_id = _combine_then_open_editor(
@@ -534,7 +534,7 @@ def test_silence_detection_settings_persist_across_reload(stack, page):
             "min: document.getElementById('we-mindur').value, "
             "skip: document.getElementById('we-skiplong').value })"
         )
-        assert defaults == {"noise": "8", "min": "1.5", "skip": "15"}, defaults
+        assert defaults == {"noise": "-36", "min": "1.5", "skip": "15"}, defaults
         # Change all three and fire `change` so the persist listener runs
         # (mirrors the user dragging the slider / blurring a number field).
         page.evaluate(
@@ -545,19 +545,19 @@ def test_silence_detection_settings_persist_across_reload(stack, page):
                     el.value = v;
                     el.dispatchEvent(new Event('change'));
                 };
-                set('we-noise', '24');
+                set('we-noise', '-24');
                 set('we-mindur', '3.2');
                 set('we-skiplong', '40');
             }
             """
         )
         stored = page.evaluate(
-            "() => ({ noise: localStorage.getItem('we.noiseInt8'), "
+            "() => ({ noise: localStorage.getItem('we.noiseDb'), "
             "min: localStorage.getItem('we.minSilence'), "
             "skip: localStorage.getItem('we.skipLong') })"
         )
-        assert stored == {"noise": "24", "min": "3.2", "skip": "40"}, stored
-        expected_readout = page.evaluate("() => weNoiseSliderDb(24) + ' dB'")
+        assert stored == {"noise": "-24", "min": "3.2", "skip": "40"}, stored
+        expected_readout = "-24 dB"
 
         # Full reload wipes in-page `we` state; localStorage is the only
         # carrier. Reopen the same album's editor and reveal the popover.
@@ -582,10 +582,10 @@ def test_silence_detection_settings_persist_across_reload(stack, page):
             "skip: document.getElementById('we-skiplong').value, "
             "readout: document.getElementById('we-noise-readout').textContent })"
         )
-        assert seeded["noise"] == "24", seeded
+        assert seeded["noise"] == "-24", seeded
         assert seeded["min"] == "3.2", seeded
         assert seeded["skip"] == "40", seeded
-        # The dB readout must reflect the seeded slider, not the -24.0 dB the
+        # The dB readout must reflect the seeded slider, not the -36 dB the
         # static HTML ships (the inline oninput only fires on user drag).
         assert seeded["readout"] == expected_readout, seeded
     finally:
