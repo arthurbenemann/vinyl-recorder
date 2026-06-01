@@ -1,3 +1,12 @@
+## v1.7.0 — 2026-06-01
+
+### Features
+- **wave-editor:** Show estimated noise floor next to peak in stats line (#81)
+- Background split encoding — survives modal close (#77) (#83)
+
+### Bug Fixes
+- P key jump to exact cut, drag scroll, album size for locked albums (#74, #76, #78, #80) (#82)
+
 ## v1.6.0 — 2026-05-31
 
 ### Features
