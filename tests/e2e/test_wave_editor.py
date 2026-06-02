@@ -1389,3 +1389,90 @@ def test_tracklist_apply_spreads_tracks_and_seeds_lead_in(stack, page):
         for p in sides:
             try: p.unlink(missing_ok=True)
             except Exception: pass
+
+
+# ── Pre/post-silence buffer: magnets sit 0.5s inside each edge ────────────
+def test_silence_buffer_magnets_bands_and_slider_off(stack, page):
+    """A detected silence keeps a 0.5s buffer of quiet on each side of the
+    music. Cuts magnet-snap to 0.5s *inside* each edge (not onto the raw
+    start/end), the band renders an amber core flanked by two fainter buffer
+    strips, a sub-1s silence collapses to a single centre magnet + one plain
+    band, and dragging the noise slider to its 'off' notch clears everything."""
+    raw = stack["raw"]
+    sides = _generate_side_flacs(raw, count=3)
+    # Synthetic state: 30 s album, full viewport (so every band is on-screen),
+    # a 10 s silence [10,20] and a sub-1 s silence [25,25.6]. Driven directly so
+    # the assertions don't depend on the encoded FLAC durations.
+    setup = """
+        we.total     = 30;
+        we.sides     = [{duration_seconds: 30}];
+        we.cuts      = [];
+        we.titles    = ['T1'];
+        we.skipped   = [false];
+        we.positions = [''];
+        we.viewStart = 0;
+        we.viewEnd   = 30;
+        we.silences  = [
+            {start: 10, end: 20,   duration: 10},
+            {start: 25, end: 25.6, duration: 0.6},
+        ];
+        drawAll();
+    """
+    try:
+        page.goto(RECORDER_URL)
+        page.wait_for_load_state("networkidle")
+        _combine_then_open_editor(
+            page, sides, artist="SilenceBufferArtist", album="SilenceBufferAlbum"
+        )
+        r = page.evaluate(
+            "() => {" + setup + """
+                const r3 = a => a.map(x => Math.round(x * 1000) / 1000);
+                return {
+                    longMagnets:   r3(_silenceMagnets(we.silences[0])),
+                    shortMagnets:  r3(_silenceMagnets(we.silences[1])),
+                    snapNearEnd:   Math.round(_snapToSilence(19.55) * 1000) / 1000,
+                    snapNearStart: Math.round(_snapToSilence(10.45) * 1000) / 1000,
+                    snapShort:     Math.round(_snapToSilence(25.28) * 1000) / 1000,
+                    cores:   document.querySelectorAll('#we-overlay .wave-silence').length,
+                    buffers: document.querySelectorAll('#we-overlay .wave-silence-buffer').length,
+                };
+            }"""
+        )
+        # ≥1 s silence → three magnets: 0.5 s inside each edge + the midpoint.
+        # The raw edges (10, 20) are deliberately no longer candidates.
+        assert r["longMagnets"] == pytest.approx([10.5, 15.0, 19.5]), r["longMagnets"]
+        # <1 s silence → a single centre magnet only.
+        assert r["shortMagnets"] == pytest.approx([25.3]), r["shortMagnets"]
+        # Snapping lands on the inner buffer edges / centre, never the raw edge.
+        assert r["snapNearEnd"]   == pytest.approx(19.5), r["snapNearEnd"]
+        assert r["snapNearStart"] == pytest.approx(10.5), r["snapNearStart"]
+        assert r["snapShort"]     == pytest.approx(25.3), r["snapShort"]
+        # Rendering: long silence = 1 amber core + 2 buffer strips; short = 1
+        # plain core, no buffers.
+        assert r["cores"]   == 2, r["cores"]
+        assert r["buffers"] == 2, r["buffers"]
+
+        # The slider's 'off' notch clears detected silences (highlights +
+        # magnets) and the readout reads "off".
+        off = page.evaluate(
+            """
+            () => {
+                const el = document.getElementById('we-noise');
+                el.value = '-61';
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                return {
+                    silences: we.silences.length,
+                    readout:  document.getElementById('we-noise-readout').textContent,
+                    cores:    document.querySelectorAll('#we-overlay .wave-silence').length,
+                    buffers:  document.querySelectorAll('#we-overlay .wave-silence-buffer').length,
+                };
+            }
+            """
+        )
+        assert off["silences"] == 0, off
+        assert off["readout"] == "off", off
+        assert off["cores"] == 0 and off["buffers"] == 0, off
+    finally:
+        for p in sides:
+            try: p.unlink(missing_ok=True)
+            except Exception: pass
