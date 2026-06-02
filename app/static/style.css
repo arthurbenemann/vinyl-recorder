@@ -779,6 +779,10 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
 }
 .wave-cut .grip.grip-labeled:hover { background: var(--accent-hover); }
 .wave-silence { position: absolute; top: 0; bottom: 0; background: rgba(186,117,23,0.18); pointer-events: none; }
+/* Pre/post-silence buffer: the 0.5s of quiet kept either side of the music.
+   Same amber as .wave-silence at a lower alpha, so it reads as a fainter shade
+   closer to the --wave-bg background. No magnet of its own — see _silenceMagnets. */
+.wave-silence-buffer { position: absolute; top: 0; bottom: 0; background: rgba(186,117,23,0.07); pointer-events: none; }
 .wave-side-switch { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1.5px dashed rgba(55,138,221,0.7); pointer-events: none; }
 /* Anchored to the bottom — after a per-side Discogs apply the side-start
    cut sits exactly on the side-switch line, so a top-anchored badge would

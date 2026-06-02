@@ -950,17 +950,44 @@ function weHoverMove(e) {
   document.getElementById('we-readout').textContent = fmtMMSS(_xToTime(we.hoverX));
 }
 
+// A detected silence keeps a small buffer of quiet on either side of the
+// music: cuts magnet-snap to WE_SILENCE_BUFFER seconds *inside* each edge (so a
+// split lands clear of where the music starts/stops, not right on it). The same
+// buffer is drawn as a fainter pre/post strip and reused by the detect-&-replace
+// auto-seed, so the magnets and the visuals can't drift apart.
+const WE_SILENCE_BUFFER = 0.5;   // seconds of quiet protected at each silence edge
+const WE_NOISE_OFF = -61;        // noise-slider bottom notch: detection off / clear
+
+// Magnet (snap) candidates for one silence. Under 2×buffer there's no room for
+// two buffers, so a sub-1s silence offers a single centre magnet, not three.
+function _silenceMagnets(s) {
+  const mid = (s.start + s.end) / 2;
+  if (s.duration < 2 * WE_SILENCE_BUFFER) return [mid];
+  return [s.start + WE_SILENCE_BUFFER, mid, s.end - WE_SILENCE_BUFFER];
+}
+
+// Visual decomposition of a silence: an amber core with a fainter "pre" and
+// "post" buffer strip at each edge. Too short to split → one plain band.
+function _silenceBands(s) {
+  const buf = WE_SILENCE_BUFFER;
+  if (s.duration < 2 * buf) return [{ start: s.start, end: s.end, cls: 'wave-silence' }];
+  return [
+    { start: s.start,       end: s.start + buf, cls: 'wave-silence-buffer' },
+    { start: s.start + buf, end: s.end - buf,   cls: 'wave-silence' },
+    { start: s.end - buf,   end: s.end,         cls: 'wave-silence-buffer' },
+  ];
+}
+
 // Snap a dragged cut to a nearby detected silence. The snap radius is
 // pixel-based (30 px) so zooming in gives finer precision — at low zoom the
-// cap of 1 s keeps it from reaching across large gaps.  Long silences need a
-// cut at the start/end, not the middle, so each silence contributes three
-// snap candidates and the closest one wins.
+// cap of 1 s keeps it from reaching across large gaps. Each silence offers the
+// magnets from _silenceMagnets() and the closest one within radius wins.
 function _snapToSilence(t) {
   if (!we.silences.length) return t;
   const SNAP = Math.min(1.0, (30 / _wrapW()) * _viewLen());
   let best = null, bestDist = SNAP;
   for (const s of we.silences) {
-    for (const cand of [s.start, (s.start + s.end) / 2, s.end]) {
+    for (const cand of _silenceMagnets(s)) {
       const d = Math.abs(t - cand);
       if (d < bestDist) { best = cand; bestDist = d; }
     }
@@ -1289,18 +1316,21 @@ function weDeleteCut(i, e) {
 
 function renderWaveformOverlay() {
   const overlay = document.getElementById('we-overlay');
-  overlay.querySelectorAll('.wave-cut, .wave-silence, .wave-skip, .wave-side-switch, .wave-playhead').forEach(el => el.remove());
+  overlay.querySelectorAll('.wave-cut, .wave-silence, .wave-silence-buffer, .wave-skip, .wave-side-switch, .wave-playhead').forEach(el => el.remove());
 
-  // Silence highlights (amber bands) from the last detection.
+  // Silence highlights from the last detection: an amber core plus a fainter
+  // pre/post buffer strip at each edge (the quiet the magnets protect).
   for (const s of we.silences) {
-    if (s.end <= we.viewStart || s.start >= we.viewEnd) continue;
-    const a = ((Math.max(s.start, we.viewStart) - we.viewStart) / _viewLen()) * 100;
-    const b = ((Math.min(s.end,   we.viewEnd)   - we.viewStart) / _viewLen()) * 100;
-    const el = document.createElement('div');
-    el.className = 'wave-silence';
-    el.style.left  = a + '%';
-    el.style.width = (b - a) + '%';
-    overlay.appendChild(el);
+    for (const band of _silenceBands(s)) {
+      if (band.end <= we.viewStart || band.start >= we.viewEnd) continue;
+      const a = ((Math.max(band.start, we.viewStart) - we.viewStart) / _viewLen()) * 100;
+      const b = ((Math.min(band.end,   we.viewEnd)   - we.viewStart) / _viewLen()) * 100;
+      const el = document.createElement('div');
+      el.className = band.cls;
+      el.style.left  = a + '%';
+      el.style.width = (b - a) + '%';
+      overlay.appendChild(el);
+    }
   }
 
   // Skipped regions (grey diagonal hatch). Drawn on top of silence bands so
@@ -1876,7 +1906,7 @@ async function _weAutoLoadFromIds(a) {
 // Persisted silence-detection settings. Keyed like the other namespaced
 // prefs (lib.sortBy, autoStopSilenceSeconds): a raw value per control.
 const WE_DETECT_PREFS = [
-  { id: 'we-noise',    key: 'we.noiseDb',    def: -36, min: -60, max: -6  },
+  { id: 'we-noise',    key: 'we.noiseDb',    def: -36, min: WE_NOISE_OFF, max: -6 },
   { id: 'we-mindur',   key: 'we.minSilence', def: 1.5, min: 0.2, max: null },
   { id: 'we-skiplong', key: 'we.skipLong',   def: 15,  min: 2,   max: null },
 ];
@@ -1905,11 +1935,17 @@ function _weHydrateDetectSettings() {
   }
   // Re-sync the dB readout to the (re-seeded) noise slider — the inline
   // oninput only fires on user drag, not on this programmatic set.
-  const noise   = document.getElementById('we-noise');
+  const noise = document.getElementById('we-noise');
+  if (noise) weNoiseInput(noise);
+}
+
+// Noise-slider input: update the dB readout, and treat the bottom "off" notch
+// as a clear — drop the detected silences so the highlights and magnets vanish.
+function weNoiseInput(el) {
+  const off = Number(el.value) <= WE_NOISE_OFF;
   const readout = document.getElementById('we-noise-readout');
-  if (noise && readout) {
-    readout.textContent = noise.value + ' dB';
-  }
+  if (readout) readout.textContent = off ? 'off' : el.value + ' dB';
+  if (off && we.silences.length) { we.silences = []; drawAll(); }
 }
 
 async function weDetectAndApply() {
@@ -1920,10 +1956,19 @@ async function weDetectShowOnly() {
 }
 
 async function weDetectInternal({ replace }) {
-  const noiseDb = parseFloat(document.getElementById('we-noise').value) || -36;
+  const status  = document.getElementById('we-silence-status');
+  const noiseRaw = parseFloat(document.getElementById('we-noise').value);
+  if (noiseRaw <= WE_NOISE_OFF) {
+    // Slider parked at the "off" notch — nothing to detect; clear any existing
+    // highlights so "off" consistently means no silences.
+    we.silences = [];
+    status.textContent = 'detection off — raise the noise floor to detect';
+    drawAll();
+    return;
+  }
+  const noiseDb = noiseRaw || -36;
   const mindur  = parseFloat(document.getElementById('we-mindur').value)   || 1.5;
   const skipMin = parseFloat(document.getElementById('we-skiplong').value) || 15;
-  const status  = document.getElementById('we-silence-status');
   const bar     = document.getElementById('we-silence-bar');
   status.textContent = 'detecting silences…';
   showBar(bar, 'scanning');
@@ -1952,8 +1997,11 @@ async function weDetectInternal({ replace }) {
       const cuts = [];
       for (const s of we.silences) {
         if (s.duration >= skipMin) {
-          cuts.push(s.start, s.end);
-          skipRanges.push([s.start, s.end]);
+          // Keep WE_SILENCE_BUFFER of quiet on each adjacent track (matches the
+          // drag magnets); skip only the dead air between the buffered cuts.
+          const a = s.start + WE_SILENCE_BUFFER, b = s.end - WE_SILENCE_BUFFER;
+          cuts.push(a, b);
+          skipRanges.push([a, b]);
         } else if (s.duration >= CUTOFF) {
           cuts.push((s.start + s.end) / 2);
         }
