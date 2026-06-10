@@ -550,17 +550,13 @@ def _arm_impl(req: RecordRequest) -> dict:
     bytes_per_second = max(1, (fmt.get("sample_rate", 0) or 0)
                               * (fmt.get("channels", 0) or 0)
                               * bytes_per_sample)
-    # Trigger threshold: ARM_SIGNAL_THRESHOLD_DB when set, else the same
-    # dBFS knob as silence auto-stop — "signal" and "silence" are one
-    # boundary, ops-calibrated via SILENCE_THRESHOLD_DB to sit between the
-    # source's noise floor and music, and one knob keeps arm + auto-stop
-    # consistent. The dedicated override exists for quiet material
-    # (pianissimo openings, low-gain rigs) that needs a more sensitive
-    # trigger than the silence boundary without also making auto-stop
-    # hair-triggered.
-    threshold_db = (ARM_SIGNAL_THRESHOLD_DB
-                    if ARM_SIGNAL_THRESHOLD_DB is not None
-                    else DEFAULT_SILENCE_THRESHOLD_DB)
+    # Trigger threshold: a per-chunk PEAK boundary (default -20 dBFS),
+    # independent of the silence auto-stop knob. The detector fires on the
+    # needle set-down transient itself — see services/arm.py for why peak
+    # beats smoothed RMS here (quiet albums) and how the default rejects
+    # runout-groove clicks. `_silence_threshold_int` converts dBFS to the
+    # integer scale shared by audioop.rms and audioop.max.
+    threshold_db = ARM_SIGNAL_THRESHOLD_DB
     detector = ArmDetector(
         threshold_int=_silence_threshold_int(threshold_db, bytes_per_sample),
         bytes_per_sample=bytes_per_sample,
@@ -580,7 +576,7 @@ def _arm_impl(req: RecordRequest) -> dict:
         # Upstream died between acquire and subscribe — roll back.
         _disarm_impl("upstream")
         raise HTTPException(409, "stream not connected")
-    bus.log(f"◉ Auto-record armed — starts on signal ≥ {threshold_db:g} dBFS "
+    bus.log(f"◉ Auto-record armed — starts on peak ≥ {threshold_db:g} dBFS "
             f"(self-disarms after {ARM_AUTO_DISARM_HOURS:g} h)", "info")
     bus.publish({"type": "record", "event": "armed"})
     return {"armed": True}

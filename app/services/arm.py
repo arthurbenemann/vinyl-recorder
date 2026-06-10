@@ -3,57 +3,56 @@ away").
 
 The arm feature keeps the upstream live (the arm endpoint holds a lifecycle
 ref) and runs every PCM chunk through this detector; when it fires, the
-route layer starts a normal recording — pre-roll then back-fills the few
-hundred milliseconds the detection took, so the lead-in groove is never
-lost.
+route layer starts a normal recording — pre-roll then back-fills the
+detection latency, so the lead-in groove is never lost.
 
 Kept free of route/upstream imports so unit tests can drive the detection
 math directly with synthetic PCM, no threads or subprocesses involved.
 """
 import audioop
-import math
 
 
 class ArmDetector:
-    """Edge-triggered onset detector over raw PCM chunks.
+    """Edge-triggered PEAK detector over raw PCM chunks.
+
+    The trigger is deliberately peak-based and unsmoothed — the physical
+    event we want is the needle set-down thump, a sharp transient that
+    peaks around -20…-5 dBFS on any record, however quiet the music that
+    follows. A smoothed-RMS trigger (like the auto-stop silence detector
+    uses) would average that transient away and could miss pianissimo
+    openings entirely; a per-chunk peak catches the thump itself within
+    one ~50 ms chunk. The default threshold (-20 dBFS, see
+    ARM_SIGNAL_THRESHOLD_DB in state.py) sits well ABOVE runout-groove
+    clicks (~-29 dBFS peaks once per revolution), so a side circling in
+    the runout after auto-stop cannot re-trigger — only the next set-down
+    (or music) can. The cost of an occasional false trigger (a bumped
+    turntable) is bounded: the duration cap ends the take and the
+    no-signal warning flags it within 30 s.
 
     Two-phase trigger:
 
-      1. *Quiet-confirm*: the smoothed RMS must stay below the threshold
+      1. *Quiet-confirm*: every chunk's peak must stay below the threshold
          for `quiet_seconds` of continuous audio before the detector is
          ready. This is what makes the trigger an EDGE: arming while music
-         is already playing (radio left on, mid-song) does NOT fire
-         instantly, and after a recording ends the next onset needs a
-         fresh silence→signal transition. After an auto-stop-on-silence
-         the line is already quiet, so the detector re-readies within
-         `quiet_seconds` — flip the record, drop the needle, side B
-         records itself.
-      2. *Onset*: once ready, the first chunk whose smoothed RMS reaches
-         the threshold fires (update() returns True) and the detector
-         resets to not-ready.
+         is already playing does NOT fire instantly, and after a recording
+         ends the next trigger needs a fresh quiet→signal transition.
+         Runout clicks sit below the threshold, so post-side runout counts
+         as quiet and the detector re-readies for the flip.
+      2. *Onset*: once ready, the first chunk whose peak reaches the
+         threshold fires (update() returns True) and the detector resets
+         to not-ready.
 
-    The RMS is smoothed in mean-square space with a single-pole EMA, same
-    math as the auto-stop silence detector (see routes/recordings.py
-    `_update_smoothed_ms`), but with a much shorter time constant: silence
-    detection smooths over ~2 s to average across runout-groove clicks,
-    while onset detection wants a fast attack — music reaches the smoothed
-    threshold within a couple hundred ms at tau=0.5 s, and the recording
-    pre-roll absorbs that latency entirely. The smoothing still rejects
-    one-off pops (a few-ms needle-drop click barely moves a 0.5 s mean).
     Time is accumulated from chunk byte-lengths, not the wall clock, so
     the detector is deterministic for tests.
     """
 
     def __init__(self, *, threshold_int: int, bytes_per_sample: int,
-                 bytes_per_second: float, quiet_seconds: float = 1.0,
-                 tau_seconds: float = 0.5):
+                 bytes_per_second: float, quiet_seconds: float = 1.0):
         self.threshold_int = max(1, int(threshold_int))
         self.bytes_per_sample = bytes_per_sample
         self.bytes_per_second = max(1.0, float(bytes_per_second))
         self.quiet_seconds = quiet_seconds
-        self.tau_seconds = tau_seconds
         self.ready = False
-        self._ms_smoothed = 0.0
         self._quiet_accum = 0.0
 
     def reset(self) -> None:
@@ -62,24 +61,14 @@ class ArmDetector:
         quiet-confirm, and after a failed fire so a hot signal can't retry
         in a tight loop."""
         self.ready = False
-        self._ms_smoothed = 0.0
         self._quiet_accum = 0.0
 
     def update(self, chunk: bytes) -> bool:
         """Feed one PCM chunk; returns True exactly when the onset fires."""
         if not chunk:
             return False
-        chunk_seconds = len(chunk) / self.bytes_per_second
-        rms = audioop.rms(chunk, self.bytes_per_sample)
-        chunk_ms = float(rms) * float(rms)
-        if self.tau_seconds <= 0:
-            self._ms_smoothed = chunk_ms
-        else:
-            alpha = 1.0 - math.exp(-chunk_seconds / self.tau_seconds)
-            self._ms_smoothed = (self._ms_smoothed * (1.0 - alpha)
-                                 + chunk_ms * alpha)
-        smoothed_rms = math.sqrt(self._ms_smoothed)
-        if smoothed_rms >= self.threshold_int:
+        peak = audioop.max(chunk, self.bytes_per_sample)
+        if peak >= self.threshold_int:
             if self.ready:
                 self.reset()
                 return True
@@ -88,7 +77,7 @@ class ArmDetector:
             self._quiet_accum = 0.0
             return False
         if not self.ready:
-            self._quiet_accum += chunk_seconds
+            self._quiet_accum += len(chunk) / self.bytes_per_second
             if self._quiet_accum >= self.quiet_seconds:
                 self.ready = True
         return False
