@@ -75,6 +75,7 @@ Key services:
 Routes:
 
 - `recordings.py` — `/api/record/{start,stop/{sid},pause/{sid},resume/{sid}}`,
+  `/api/record/{arm,disarm}` (armed auto-record standby),
   `/api/recordings` + rename/delete/bulk-delete, `/api/download/{file}`,
   `/api/stream-proxy` (browser playback), `/api/log/{sid}`,
   `/api/test-stream`.
@@ -168,6 +169,28 @@ The existing `connected` API is preserved as a backwards-compat alias for
    ordering across the seam.
 4. `POST /api/record/stop` unsubscribes and closes ffmpeg's stdin. The file
    ends at the click moment — pre-roll only prepends to the start.
+
+### Armed auto-record
+
+`POST /api/record/arm` puts the server in standby: it takes a lifecycle
+hold (keeping the upstream live) and registers an `arm` subscriber whose
+sink feeds every chunk to `services/arm.py:ArmDetector` — an
+edge-triggered PEAK detector against the same `SILENCE_THRESHOLD_DB`
+level the silence auto-stop uses (one knob, two measures: start is a
+per-chunk peak so the needle set-down transient registers however quiet
+the music; stop stays smoothed-RMS so runout clicks average away).
+Per-chunk peaks must stay below the level for 2.5 s of continuous audio
+— longer than a runout-groove revolution, so post-side runout clicks
+(~-29 dBFS peaks every ~1.8 s) keep resetting the clock and can never
+re-trigger — then the first chunk at or above it fires. On fire, the arm thread calls the same `_start_recording_impl`
+the route uses; pre-roll back-fills the detection latency so the lead-in
+groove is captured. The arm persists across the recordings it starts —
+combined with auto-stop-on-silence this is hands-free multi-side capture
+(side ends on runout silence; the next needle drop re-triggers). It
+self-disarms after `ARM_AUTO_DISARM_HOURS` (default 24 h) without a
+trigger, when the upstream tears down, or via `POST /api/record/disarm`.
+Armed state is broadcast as `record` events (`armed`/`disarmed`) and
+rides in the WS hello snapshot, so every tab shows the same toggle.
 
 ### Browser playback
 
@@ -308,6 +331,7 @@ Environment variables (read at startup, surfaced via `GET /api/config`):
 | `DEFAULT_SPLIT_TARGET_PEAK_DB` | `-1.0`         | target peak when normalising         |
 | `DEFAULT_SPLIT_BIT_DEPTH`    | source bit depth | force 16/24-bit on split output      |
 | `PRE_ROLL_SECONDS`           | `5`              | ring buffer size; `0` disables       |
+| `ARM_AUTO_DISARM_HOURS`      | `24`             | armed auto-record standby timeout    |
 | `DISCOGS_USERNAME`           | unset            | enables collection-aware tagging     |
 | `DISCOGS_TOKEN`              | unset            | optional; raises Discogs rate limits |
 | `MUSIC_OUTPUT_DIR`           | `/output/music`  | relocate Jellyfin tree (e.g. NAS)    |

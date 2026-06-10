@@ -113,6 +113,19 @@
            title="Auto-stop-on-silence countdown — fills as the smoothed RMS stays below the silence threshold. Recording finalises when it reaches 100%.">
         <div class="silence-prog-fill" id="silence-prog" style="width:0%"></div>
       </div>
+      <!-- Armed auto-record: server-side standby that starts a recording
+           on the first silence→signal transition (needle drop). Armed
+           state is shared across tabs over WS, like recording state.
+           Self-disarms after ARM_AUTO_DISARM_HOURS (default 24 h) so a
+           forgotten arm can't keep the Pi capturing forever. -->
+      <div class="arm-row">
+        <button class="arm-btn" id="armbtn" onclick="toggleArm()"
+                aria-pressed="false"
+                title="Auto-record: when armed, recording starts by itself as soon as signal is detected (pre-roll keeps the lead-in). Stays armed across sides — with silence auto-stop on, flipping the record is all it takes. Self-disarms after 24 h without a trigger.">
+          ◉ auto-record
+        </button>
+        <span class="arm-hint" id="arm-hint" hidden>armed — waiting for signal…</span>
+      </div>
     </div>
 
     <!-- Stop conditions: configuration that decides when an in-flight

@@ -17,7 +17,7 @@ import {
   wireGainSlider, toggleHeaderMenu, closeHeaderMenu, toggleHealthPanel,
   toggleSidebar, restoreSidebarState, renderStreamUrlRecent,
 } from './modules/upstream.js';
-import { toggleRec, togglePause, wireSilenceSel, wireDurationSel } from './modules/recording.js';
+import { toggleRec, togglePause, toggleArm, wireSilenceSel, wireDurationSel } from './modules/recording.js';
 import { wireLogCollapse } from './modules/log.js';
 import {
   refreshLib, refreshDiskFree,
@@ -80,6 +80,7 @@ window.clearClip = clearClip;
 // recording
 window.toggleRec = toggleRec;
 window.togglePause = togglePause;
+window.toggleArm = toggleArm;
 
 // library / albums
 window.refreshLib = refreshLib;

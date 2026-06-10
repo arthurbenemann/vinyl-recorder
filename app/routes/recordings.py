@@ -25,6 +25,7 @@ with warnings.catch_warnings():
                             message=r".*audioop.*")
     import audioop
 
+from services.arm import ArmDetector
 from services.eventbus import bus
 from services.ffmpeg import (
     LOW_SPACE_GB, disk_free_gb, disk_space_error, find_side, list_recordings,
@@ -41,10 +42,11 @@ from services.recording_process import (
     teardown_proxy as _teardown_proxy,
 )
 from state import (
-    BulkDelete, DEFAULT_AUTO_STOP_ON_SILENCE, DEFAULT_SILENCE_SECONDS,
-    DEFAULT_SILENCE_THRESHOLD_DB, DURATION_EDIT_MIN_SLACK_SECONDS,
-    DurationEditRequest, LOG_DIR, RAW_DIR, RecordRequest, RenameRequest,
-    SilenceEditRequest, TRASH_DIR, TRASH_TTL_SECONDS, sessions, upstream,
+    ARM_AUTO_DISARM_HOURS, BulkDelete, DEFAULT_AUTO_STOP_ON_SILENCE,
+    DEFAULT_SILENCE_SECONDS, DEFAULT_SILENCE_THRESHOLD_DB,
+    DURATION_EDIT_MIN_SLACK_SECONDS, DurationEditRequest, LOG_DIR, RAW_DIR,
+    RecordRequest, RenameRequest, SilenceEditRequest, TRASH_DIR,
+    TRASH_TTL_SECONDS, sessions, upstream,
 )
 
 
@@ -249,11 +251,27 @@ async def test_stream(body: dict):
 async def start_recording(req: RecordRequest):
     """Start a FLAC recording fed from the shared upstream session.
 
+    Thin async shim — the whole start sequence is sync I/O (lifecycle
+    acquire probes + spawns ffmpeg, then subprocess.Popen for the encoder),
+    so it runs on a worker thread to keep the event loop responsive. The
+    sync impl is shared with the armed auto-record trigger, which fires
+    from a plain thread with no event loop at all."""
+    return await asyncio.to_thread(_start_recording_impl, req)
+
+
+def _start_recording_impl(req: RecordRequest) -> dict:
+    """Start a FLAC recording fed from the shared upstream session.
+
     The recording's ffmpeg reads raw PCM from stdin (matching the upstream's
     sample_format / rate / channels) and encodes lossless FLAC. Recording
     only requires that something is connected — the `stream_url` field on
     the request is ignored if it disagrees with the active upstream, since
     that's the only stream we're actually pulling.
+
+    Sync + thread-safe: called via asyncio.to_thread from the route and
+    directly from the arm-fire thread. Raises HTTPException for the typed
+    failure cases; the arm path catches and logs them instead of having an
+    HTTP response to map onto.
     """
     err = disk_space_error(LOW_SPACE_GB, "recording")
     if err:
@@ -266,9 +284,7 @@ async def start_recording(req: RecordRequest):
     # whether or not any tab was visible), and guarantees the hold survives
     # the lifetime of this recording — closing the tab won't tear ffmpeg
     # down mid-FLAC. Released in `_finalize_session`.
-    # Offloaded to a worker thread (spawn does sync probe + subprocess
-    # startup); see stream-proxy comment above for the lockup details.
-    rec_hold = await asyncio.to_thread(upstream.acquire, f"record:{sid}")
+    rec_hold = upstream.acquire(f"record:{sid}")
     if not upstream.live:
         upstream.release(rec_hold)
         raise HTTPException(503, "upstream failed to start")
@@ -474,6 +490,207 @@ async def start_recording(req: RecordRequest):
                  "session_id": sid, "filename": fname,
                  "duration": req.duration})
     return {"session_id": sid, "filename": fname}
+
+
+# ── Armed auto-record ────────────────────────────────────────────────────
+# "Arm" = user-enabled standby: hold the upstream live, watch its per-chunk
+# peaks, and start a normal recording on the first quiet→signal transition
+# (see services/arm.py for the detector semantics). NOTE the asymmetry, by
+# design: START is a peak detector (catches the needle set-down transient,
+# works on pianissimo material); STOP keeps the smoothed-RMS silence
+# detector in the recording sink above. Both compare against the SAME
+# SILENCE_THRESHOLD_DB level — one knob, two measures. State is
+# server-side and broadcast over WS (`record` events `armed`/`disarmed` +
+# the hello snapshot) so every tab agrees, exactly like recording state.
+#
+# CPU cost of staying armed is one audioop.max per ~50 ms chunk — the
+# upstream already computes peaks at the same cadence for the VU meter.
+# The real cost is the lifecycle hold (arecord runs on the Pi while
+# armed), which is why an arm self-expires after ARM_AUTO_DISARM_HOURS:
+# never-triggered standby must not keep the Pi busy forever. The arm stays
+# active across recordings it starts — with auto-stop-on-silence enabled
+# this gives hands-free multi-side capture (side ends on runout silence,
+# flipping the record re-fires on the next needle drop).
+_arm_lock = threading.Lock()
+_arm: dict = {"armed": False, "hold": None, "detector": None, "req": None,
+              "deadline": 0.0, "firing": False}
+
+
+def arm_is_armed() -> bool:
+    """Read-only accessor for the WS hello snapshot."""
+    with _arm_lock:
+        return bool(_arm["armed"])
+
+
+@router.post("/api/record/arm")
+async def arm_record(req: RecordRequest):
+    # Sync work (lifecycle acquire spawns/probes ffmpeg) → worker thread,
+    # same rationale as start_recording.
+    return await asyncio.to_thread(_arm_impl, req)
+
+
+@router.post("/api/record/disarm")
+async def disarm_record():
+    return await asyncio.to_thread(_disarm_impl, "user")
+
+
+def _arm_impl(req: RecordRequest) -> dict:
+    err = disk_space_error(LOW_SPACE_GB, "recording")
+    if err:
+        raise HTTPException(507, err)
+    if not upstream.configured:
+        raise HTTPException(409, "stream not connected — connect first")
+    with _arm_lock:
+        if _arm["armed"]:
+            # Idempotent — a second tab arming is a no-op, mirroring how
+            # both tabs share one recording session.
+            return {"armed": True}
+    hold = upstream.acquire("arm")
+    if not upstream.live:
+        upstream.release(hold)
+        raise HTTPException(503, "upstream failed to start")
+    fmt = upstream.fmt
+    bytes_per_sample = 3 if upstream.sample_format == "s24le" else 2
+    bytes_per_second = max(1, (fmt.get("sample_rate", 0) or 0)
+                              * (fmt.get("channels", 0) or 0)
+                              * bytes_per_sample)
+    # Same dBFS knob as silence auto-stop (SILENCE_THRESHOLD_DB), but
+    # measured as a per-chunk PEAK rather than the smoothed RMS the stop
+    # detector uses: the start event is the needle set-down transient,
+    # which registers instantly as a peak on any record however quiet the
+    # music — an RMS measure would average it away. One level, two
+    # measures; `_silence_threshold_int` converts dBFS to the integer
+    # scale shared by audioop.rms and audioop.max. See services/arm.py
+    # for how the quiet-confirm window guards against runout clicks,
+    # which sit ABOVE this boundary as peaks.
+    detector = ArmDetector(
+        threshold_int=_silence_threshold_int(
+            DEFAULT_SILENCE_THRESHOLD_DB, bytes_per_sample),
+        bytes_per_sample=bytes_per_sample,
+        bytes_per_second=bytes_per_second,
+    )
+    with _arm_lock:
+        if _arm["armed"]:
+            # Lost an arm race with another tab — theirs is equivalent.
+            upstream.release(hold)
+            return {"armed": True}
+        _arm.update(armed=True, hold=hold, detector=detector, req=req,
+                    deadline=time.monotonic() + ARM_AUTO_DISARM_HOURS * 3600,
+                    firing=False)
+    try:
+        upstream.subscribe("arm", _arm_sink, on_close=_arm_on_upstream_close)
+    except RuntimeError:
+        # Upstream died between acquire and subscribe — roll back.
+        _disarm_impl("upstream")
+        raise HTTPException(409, "stream not connected")
+    bus.log(f"◉ Auto-record armed — starts on peak ≥ "
+            f"{DEFAULT_SILENCE_THRESHOLD_DB:g} dBFS "
+            f"(self-disarms after {ARM_AUTO_DISARM_HOURS:g} h)", "info")
+    bus.publish({"type": "record", "event": "armed"})
+    return {"armed": True}
+
+
+def _disarm_impl(reason: str = "user") -> dict:
+    """Tear down the armed state. Idempotent; safe from any thread.
+
+    Order matters: clear `armed` BEFORE unsubscribing, so the subscriber's
+    on_close (which fires inside unsubscribe) sees armed=False and doesn't
+    schedule a second, recursive disarm."""
+    with _arm_lock:
+        was_armed = _arm["armed"]
+        hold = _arm["hold"]
+        _arm.update(armed=False, hold=None, detector=None, req=None,
+                    firing=False)
+    if not was_armed:
+        return {"armed": False}
+    try:
+        upstream.unsubscribe("arm")
+    except Exception:
+        pass
+    if hold is not None:
+        try:
+            upstream.release(hold)
+        except Exception:
+            pass
+    msg = {
+        "user":     "○ Auto-record disarmed",
+        "timeout":  f"○ Auto-record disarmed — no signal for "
+                    f"{ARM_AUTO_DISARM_HOURS:g} h",
+        "upstream": "○ Auto-record disarmed — stream disconnected",
+    }.get(reason, "○ Auto-record disarmed")
+    bus.log(msg, "info")
+    bus.publish({"type": "record", "event": "disarmed", "reason": reason})
+    return {"armed": False}
+
+
+def _arm_sink(chunk: bytes) -> None:
+    """Upstream subscriber sink while armed. Runs on the subscriber's
+    worker thread at ~50 ms cadence; must stay cheap and must never call
+    back into upstream subscribe/unsubscribe inline (lock re-entrancy) —
+    state transitions are handed to fresh threads."""
+    with _arm_lock:
+        if not _arm["armed"] or _arm["firing"]:
+            return
+        detector = _arm["detector"]
+        deadline = _arm["deadline"]
+    if detector is None:
+        return
+    if time.monotonic() >= deadline:
+        threading.Thread(target=_disarm_impl, args=("timeout",),
+                         name="arm-timeout", daemon=True).start()
+        return
+    if sessions.values():
+        # A recording is in flight (ours or manual) — idle the detector so
+        # the next trigger needs a fresh quiet-confirm after it ends.
+        detector.reset()
+        return
+    if detector.update(chunk):
+        with _arm_lock:
+            if not _arm["armed"] or _arm["firing"]:
+                return
+            _arm["firing"] = True
+        threading.Thread(target=_arm_fire, name="arm-fire",
+                         daemon=True).start()
+
+
+def _arm_fire() -> None:
+    """Start a recording from the armed trigger. The arm stays active
+    afterwards (the sink idles while the session runs), so auto-stop +
+    re-trigger gives hands-free multi-side capture."""
+    with _arm_lock:
+        req = _arm["req"]
+        detector = _arm["detector"]
+    if req is None:
+        with _arm_lock:
+            _arm["firing"] = False
+        return
+    try:
+        bus.log("◉ Signal detected — auto-record starting", "info")
+        _start_recording_impl(req)
+    except HTTPException as e:
+        bus.log(f"✗ Auto-record failed to start: {e.detail}", "err")
+    except Exception as e:
+        bus.log(f"✗ Auto-record failed to start: {e}", "err")
+    finally:
+        # Reset BEFORE clearing `firing`: if the start failed with signal
+        # still hot, an un-reset detector would re-fire on the very next
+        # chunk and busy-loop the failure. A reset forces a fresh
+        # quiet-confirm first.
+        if detector is not None:
+            detector.reset()
+        with _arm_lock:
+            _arm["firing"] = False
+
+
+def _arm_on_upstream_close() -> None:
+    """Subscriber on_close: the upstream tore down underneath us (user
+    disconnect, Pi reboot, stream error — the read loop closes every
+    subscriber on unexpected EOF). Disarm so the UI reflects reality; the
+    user re-arms after reconnecting. Off-thread because on_close runs
+    inside upstream teardown paths that may hold the session lock."""
+    if arm_is_armed():
+        threading.Thread(target=_disarm_impl, args=("upstream",),
+                         name="arm-upstream-close", daemon=True).start()
 
 
 # Recently-finalized session payloads, keyed by session_id. The user-stop
