@@ -493,13 +493,17 @@ def _start_recording_impl(req: RecordRequest) -> dict:
 
 
 # ── Armed auto-record ────────────────────────────────────────────────────
-# "Arm" = user-enabled standby: hold the upstream live, watch its RMS, and
-# start a normal recording on the first silence→signal transition (see
-# services/arm.py for the detector semantics). State is server-side and
-# broadcast over WS (`record` events `armed`/`disarmed` + the hello
-# snapshot) so every tab agrees, exactly like recording state.
+# "Arm" = user-enabled standby: hold the upstream live, watch its per-chunk
+# peaks, and start a normal recording on the first quiet→signal transition
+# (see services/arm.py for the detector semantics). NOTE the asymmetry, by
+# design: START is a peak detector (catches the needle set-down transient,
+# works on pianissimo material); STOP keeps the smoothed-RMS silence
+# detector in the recording sink below (averages over runout clicks).
+# State is server-side and broadcast over WS (`record` events
+# `armed`/`disarmed` + the hello snapshot) so every tab agrees, exactly
+# like recording state.
 #
-# CPU cost of staying armed is one audioop.rms per ~50 ms chunk — the
+# CPU cost of staying armed is one audioop.max per ~50 ms chunk — the
 # upstream already computes peaks at the same cadence for the VU meter.
 # The real cost is the lifecycle hold (arecord runs on the Pi while
 # armed), which is why an arm self-expires after ARM_AUTO_DISARM_HOURS:
