@@ -26,6 +26,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from routes.recordings import arm_is_armed
 from services.eventbus import bus
 from state import sessions as session_mgr, upstream
 
@@ -50,7 +51,10 @@ def _record_snapshot() -> dict:
             "meta":     s.meta,
             "duration": s.duration,
         })
-    return {"recording": len(out) > 0, "sessions": out}
+    # `armed` rides in the same snapshot so a fresh tab shows the armed
+    # toggle correctly — arm state is server-side, exactly like recording.
+    return {"recording": len(out) > 0, "sessions": out,
+            "armed": arm_is_armed()}
 
 
 @router.websocket("/api/ws")

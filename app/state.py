@@ -110,6 +110,17 @@ try:
 except ValueError:
     DEFAULT_SILENCE_SECONDS = 10
 
+# Armed auto-record: how long an arm stays live with no trigger before it
+# disarms itself. Arming holds the upstream ffmpeg up (which keeps arecord
+# running on the Pi), so a forgotten arm would burn Pi CPU indefinitely —
+# a day is generous for "I'll get to the record player tonight" while
+# still guaranteeing the system eventually returns to idle on its own.
+try:
+    ARM_AUTO_DISARM_HOURS = max(0.1, float(
+        os.getenv("ARM_AUTO_DISARM_HOURS", "24").strip() or "24"))
+except ValueError:
+    ARM_AUTO_DISARM_HOURS = 24.0
+
 # Discogs collection-aware tagging. When set, the auto-tag candidate panel
 # surfaces matches from the user's Discogs collection in a separate section
 # above the MusicBrainz results. DISCOGS_TOKEN is optional but raises rate

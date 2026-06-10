@@ -14,6 +14,9 @@ export const state = {
   recording: false,
   sessionId: null,
   paused: false,
+  // Armed auto-record standby — server-side truth, mirrored from WS
+  // `record:armed/disarmed` events and the hello snapshot.
+  armed: false,
   upstreamConnected: false,
   // `upstreamConnected` mirrors the server's `configured` (URL set up).
   // `upstreamLive` mirrors `connected`/`live` (ffmpeg subprocess actually

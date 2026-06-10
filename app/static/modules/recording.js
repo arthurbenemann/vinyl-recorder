@@ -182,6 +182,57 @@ export async function togglePause() {
   } catch (e) { toast('✗ ' + e.message, 'err'); }
 }
 
+// ── Armed auto-record ────────────────────────────────────────────────────
+// Arm/disarm is server-side standby (see routes/recordings.py): while
+// armed the server watches the upstream RMS and starts a normal recording
+// on the first silence→signal transition. Like recording state, the
+// visible UI flip happens in applyArmState() driven by WS events, so all
+// tabs stay in lockstep and a refresh recovers the armed state from the
+// hello snapshot.
+export async function toggleArm() {
+  if (state.armed) {
+    try {
+      const r = await fetch('/api/record/disarm', { method: 'POST' });
+      if (!r.ok) throw new Error(await parseError(r));
+    } catch (e) { toast('✗ ' + e.message, 'err'); }
+    return;
+  }
+  if (!state.upstreamConnected) {
+    toast('✗ connect to a stream first', 'err');
+    return;
+  }
+  // The armed trigger starts recordings with whatever the dropdowns say
+  // at ARM time — the request is stashed server-side and reused for every
+  // side the arm captures.
+  const url = document.getElementById('stream-url').value;
+  const dur = parseInt(document.getElementById('dur-sel').value);
+  const silenceSec = readSilenceSel();
+  try {
+    const r = await fetch('/api/record/arm', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        stream_url: url, duration: dur,
+        auto_stop_on_silence: silenceSec > 0,
+        silence_seconds:      silenceSec,
+      }),
+    });
+    if (!r.ok) throw new Error(await parseError(r));
+    // UI flips via the WS `record:armed` event.
+  } catch (e) { toast('✗ ' + e.message, 'err'); }
+}
+
+export function applyArmState(armed) {
+  state.armed = !!armed;
+  const btn  = document.getElementById('armbtn');
+  const hint = document.getElementById('arm-hint');
+  if (btn) {
+    btn.classList.toggle('armed', state.armed);
+    btn.setAttribute('aria-pressed', String(state.armed));
+  }
+  if (hint) hint.hidden = !state.armed;
+}
+
 // `applyRecordState` is the single place that mutates the visible recording
 // UI — called by WS hellos (replay on connect) and live record events.
 export function applyRecordState({ active, paused: isPaused, sid, durationSec, elapsedSec }) {

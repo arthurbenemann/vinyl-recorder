@@ -299,6 +299,23 @@ select.dur { background: var(--surface); border: 0.5px solid var(--border2); bor
 .silence-prog-fill { height: 100%; background: var(--amber); border-radius: 2px; transition: width 0.5s linear; width: 0%; }
 .main[data-collapsed] .silence-prog-wrap { display: none; }
 
+/* Armed auto-record toggle. Idle it reads as a quiet secondary control;
+   armed it glows amber (standby — "live but not yet recording", distinct
+   from the recording red) with a slow pulse. */
+.arm-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.arm-btn {
+  background: transparent; border: 0.5px solid var(--border2); border-radius: 6px;
+  color: var(--muted); font-family: var(--mono); font-size: 11px;
+  padding: 4px 10px; cursor: pointer; letter-spacing: 0.03em;
+}
+.arm-btn:hover { color: var(--text); background: var(--surface2); border-color: var(--border-hover); }
+.arm-btn.armed { color: var(--amber); border-color: rgba(186,117,23,0.45); animation: arm-pulse 2.4s ease-in-out infinite; }
+@keyframes arm-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) { .arm-btn.armed { animation: none; } }
+.arm-hint { font-size: 10px; color: var(--amber); }
+.arm-hint[hidden] { display: none; }
+.main[data-collapsed] .arm-row { display: none; }
+
 /* Job progress bars (combine / split / measure / silence / waveform).
    Hidden by default; .running flips it visible while polling. */
 .job-bar { display: flex; flex-direction: column; gap: 4px; font-size: 10px; color: var(--muted); font-family: var(--mono); }

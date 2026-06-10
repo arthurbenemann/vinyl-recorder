@@ -6,7 +6,7 @@
 import { state } from './state.js';
 import { setClipBadge, updateMeter, decayMeters } from './meter.js';
 import { applyUpstreamState, applyHealthState, probeGain } from './upstream.js';
-import { applyRecordState, applyDurationChange, applySilenceProgress, applySilenceSecondsChange, getRecDurationSec, getRecStartTimeMs } from './recording.js';
+import { applyRecordState, applyArmState, applyDurationChange, applySilenceProgress, applySilenceSecondsChange, getRecDurationSec, getRecStartTimeMs } from './recording.js';
 import { renderLog, toast, toastAction, dismissActionToast } from './log.js';
 import { refreshLib, refreshDiskFree } from './library.js';
 import { refreshAlbums } from './albums.js';
@@ -161,6 +161,8 @@ function handleWsEvent(m) {
       } else {
         applyRecordState({ active: false });
       }
+      // Armed auto-record standby rides in the same record snapshot.
+      applyArmState(!!(m.record && m.record.armed));
       // Run gain probe if upstream is configured and we have a URL.
       // (gain queries hit the Pi /gain endpoint, not /stream — they
       // don't depend on whether ffmpeg is currently up.)
@@ -264,6 +266,10 @@ function handleWsEvent(m) {
         // event carries the live cap), so we just need to re-anchor
         // the dropdown across tabs so every tab shows the same value.
         applySilenceSecondsChange(m.silence_seconds);
+      } else if (m.event === 'armed') {
+        applyArmState(true);
+      } else if (m.event === 'disarmed') {
+        applyArmState(false);
       }
       break;
     case 'silence':
