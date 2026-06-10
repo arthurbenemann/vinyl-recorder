@@ -45,6 +45,7 @@ MB_BASE = "https://musicbrainz.org/ws/2"
 MB_UA = "VinylRecorder/0.1 ( https://github.com/arthurbenemann/vinyl-recorder )"
 CAA_BASE = "https://coverartarchive.org"
 DISCOGS_BASE = "https://api.discogs.com"
+ACOUSTID_BASE = "https://api.acoustid.org/v2"
 
 DEFAULT_STREAM_URL = os.getenv("DEFAULT_STREAM_URL", "https://ice1.somafm.com/groovesalad-256-mp3")
 AUTO_CONNECT = os.getenv("AUTO_CONNECT", "").strip().lower() in ("1", "true", "yes", "on")
@@ -116,6 +117,13 @@ except ValueError:
 # limits and is required if the collection is private.
 DISCOGS_USERNAME = os.getenv("DISCOGS_USERNAME", "").strip()
 DISCOGS_TOKEN    = os.getenv("DISCOGS_TOKEN",    "").strip()
+
+# AcoustID audio-fingerprint identification ("what record is this?"). When
+# set, the tag panel grows an "identify by audio" action that fingerprints
+# the recording with fpcalc (Chromaprint) and resolves it to MusicBrainz
+# release candidates via the AcoustID web service. Free application keys:
+# https://acoustid.org/new-application (non-commercial use).
+ACOUSTID_API_KEY = os.getenv("ACOUSTID_API_KEY", "").strip()
 
 # Jellyfin library-scan trigger. When both are set, every successful split
 # POSTs `/Library/Refresh` so the new album shows up in Jellyfin right away
@@ -376,6 +384,14 @@ class SearchRequest(BaseModel):
     # the full string. This is what the search bars send by default — the
     # user no longer needs to split their query into artist/album halves.
     q: str = ""
+
+
+class IdentifyRequest(BaseModel):
+    # Exactly one target: a raw side by filename, or an in-progress album
+    # by id (the server fingerprints its first side — one side is plenty
+    # for AcoustID to name the release).
+    filename: str = ""
+    album_id: str = ""
 
 
 class ApplyRequest(BaseModel):

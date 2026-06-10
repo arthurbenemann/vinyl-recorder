@@ -7,12 +7,14 @@ from typing import Optional
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
-from services import albums_fs, discogs
+from services import acoustid, albums_fs, discogs
+from services.ffmpeg import find_side
 from services.musicbrainz import (
     _http_bytes, caa_front, extract_discogs_id, release_full, search_releases,
 )
 from state import (
-    ApplyRequest, DISCOGS_TOKEN, DISCOGS_USERNAME, SearchRequest,
+    ApplyRequest, DISCOGS_TOKEN, DISCOGS_USERNAME, IdentifyRequest,
+    SearchRequest,
 )
 
 router = APIRouter()
@@ -142,6 +144,43 @@ async def search(req: SearchRequest):
         "candidates":            candidates,
         "collection_candidates": collection_candidates,
     }
+
+
+@router.post("/api/identify")
+async def identify(req: IdentifyRequest):
+    """Identify a recording by audio fingerprint (Chromaprint → AcoustID →
+    MusicBrainz release candidates). Targets a raw side by `filename` or an
+    in-progress album by `album_id` (first side — one side is plenty to
+    name the release). Returns `{candidates: [...]}` in the same shape as
+    `/api/search` so the UI funnels the picks through the existing
+    `/api/release/{mbid}` → apply flow."""
+    if not acoustid.enabled():
+        raise HTTPException(
+            503, "audio identification not configured — set ACOUSTID_API_KEY "
+                 "(free key: https://acoustid.org/new-application)")
+    path = None
+    if req.filename:
+        path = find_side(req.filename)
+    elif req.album_id:
+        try:
+            d = albums_fs.album_dir(req.album_id)
+            if d.is_dir():
+                manifest = albums_fs.reconcile_sides(req.album_id)
+                sides = manifest.get("sides") or []
+                if sides:
+                    path = d / sides[0]
+        except ValueError:
+            path = None
+    else:
+        raise HTTPException(400, "filename or album_id required")
+    if path is None or not path.exists():
+        raise HTTPException(404, "recording not found")
+    try:
+        duration, fp = await asyncio.to_thread(acoustid.fingerprint, path)
+        candidates = await asyncio.to_thread(acoustid.lookup, fp, duration)
+    except acoustid.AcoustidError as e:
+        raise HTTPException(502, str(e))
+    return {"candidates": candidates}
 
 
 @router.get("/api/collection")

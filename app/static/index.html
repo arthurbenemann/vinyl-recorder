@@ -588,6 +588,9 @@
              padding between the search bar and the candidates list. -->
         <div class="t-find-subtitle-row">
           <div class="t-find-subtitle" id="t-find-subtitle">fill Artist + Album on the left to search MusicBrainz, or type to filter your collection</div>
+          <!-- AcoustID fingerprint identification — only shown when the
+               server has ACOUSTID_API_KEY configured (see config.js). -->
+          <button class="btn-tiny" id="t-identify" hidden onclick="identifyAudio()" title="Identify this recording by its audio fingerprint (Chromaprint → AcoustID → MusicBrainz)">♪ identify</button>
           <button class="btn-tiny" id="t-collection-refresh" hidden onclick="refreshCollection()" title="Re-fetch your Discogs collection">↻ refresh</button>
         </div>
         <div class="search-status" id="t-search-status"></div>
