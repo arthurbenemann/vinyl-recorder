@@ -117,6 +117,13 @@ except ValueError:
 DISCOGS_USERNAME = os.getenv("DISCOGS_USERNAME", "").strip()
 DISCOGS_TOKEN    = os.getenv("DISCOGS_TOKEN",    "").strip()
 
+# Jellyfin library-scan trigger. When both are set, every successful split
+# POSTs `/Library/Refresh` so the new album shows up in Jellyfin right away
+# instead of waiting for its periodic scan. Both vars are required — the
+# refresh endpoint needs an authenticated request (Dashboard → API Keys).
+JELLYFIN_URL     = os.getenv("JELLYFIN_URL",     "").strip().rstrip("/")
+JELLYFIN_API_KEY = os.getenv("JELLYFIN_API_KEY", "").strip()
+
 DEFAULT_SPLIT_NORMALIZE = os.getenv("DEFAULT_SPLIT_NORMALIZE", "true").strip().lower() in ("1", "true", "yes", "on")
 DEFAULT_SPLIT_TARGET_PEAK_DB = float(os.getenv("DEFAULT_SPLIT_TARGET_PEAK_DB", "-1.0"))
 # ReplayGain 2.0 tagging on FLAC split output. When on, after the per-track

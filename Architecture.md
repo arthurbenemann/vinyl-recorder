@@ -307,10 +307,19 @@ Environment variables (read at startup, surfaced via `GET /api/config`):
 | `DISCOGS_USERNAME`           | unset            | enables collection-aware tagging     |
 | `DISCOGS_TOKEN`              | unset            | optional; raises Discogs rate limits |
 | `MUSIC_OUTPUT_DIR`           | `/output/music`  | relocate Jellyfin tree (e.g. NAS)    |
+| `JELLYFIN_URL`               | unset            | Jellyfin base URL for post-split scan|
+| `JELLYFIN_API_KEY`           | unset            | required with `JELLYFIN_URL`         |
 
 `DISCOGS_TOKEN` is never sent to the browser. `/api/config` reports
 `discogs_username` (boolean: configured?) so the UI can toggle the collection
-section.
+section. Likewise `JELLYFIN_API_KEY` stays server-side; `/api/config` only
+reports `jellyfin_notify_enabled`.
+
+When `JELLYFIN_URL` + `JELLYFIN_API_KEY` are both set, every successful
+split POSTs `/Library/Refresh` (`services/jellyfin.py`, fire-and-forget on
+a daemon thread) so the new album appears in Jellyfin immediately instead
+of waiting for its periodic scan. Best-effort — a down Jellyfin never
+fails a finished split; the outcome is logged to the UI either way.
 
 ## Deployment
 

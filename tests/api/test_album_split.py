@@ -1229,3 +1229,47 @@ def test_split_bg_split_error_marks_job_failed(monkeypatch):
         assert "ffmpeg crashed in bg" in job["error"]
     finally:
         _cleanup_album(aid)
+
+
+# ── Jellyfin scan trigger ────────────────────────────────────────────────
+
+def test_split_success_triggers_jellyfin_scan(monkeypatch):
+    """A successful split fires the (configured) Jellyfin library-scan
+    trigger exactly once, after the job has finished."""
+    from services import split_orchestrator as orch
+
+    _MockSplitEnv(monkeypatch)
+    aid = _make_album_with_side(tags={"artist": "A", "album": "B"})
+    calls: list[bool] = []
+    monkeypatch.setattr(orch.jellyfin, "trigger_library_scan_bg",
+                        lambda: calls.append(True))
+    try:
+        r = _split_sync({
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 300}],
+        })
+        assert r.status_code == 200, r.text
+        assert calls == [True]
+    finally:
+        _cleanup_album(aid)
+
+
+def test_split_failure_does_not_trigger_jellyfin_scan(monkeypatch):
+    """A failed split must not poke Jellyfin — there's nothing new in
+    music/ for it to scan."""
+    from services import split_orchestrator as orch
+
+    _MockSplitEnv(monkeypatch, ffmpeg_rc=1)
+    aid = _make_album_with_side()
+    calls: list[bool] = []
+    monkeypatch.setattr(orch.jellyfin, "trigger_library_scan_bg",
+                        lambda: calls.append(True))
+    try:
+        r = _split_sync({
+            "album_id": aid,
+            "tracks": [{"title": "T1", "duration_seconds": 300}],
+        })
+        assert r.status_code == 500
+        assert calls == []
+    finally:
+        _cleanup_album(aid)

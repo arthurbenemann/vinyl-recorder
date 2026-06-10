@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from routes import albums, pi_deploy, recordings, tagging, ws as ws_route
+from services import jellyfin
 from services.eventbus import bus
 from services.ffmpeg import LOW_SPACE_GB, disk_free_gb, recording_headroom_minutes
 from services.jobs import get_job
@@ -142,6 +143,8 @@ async def get_config():
         # Boolean flag only — never leak the actual username/token to the
         # frontend; the UI just needs to know whether to show the section.
         "discogs_collection_enabled":   bool(DISCOGS_USERNAME),
+        # Boolean only, same rationale — the URL/API key stay server-side.
+        "jellyfin_notify_enabled":      jellyfin.enabled(),
     }
 
 

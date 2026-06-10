@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from services import albums_fs
+from services import albums_fs, jellyfin
 from services.ffmpeg import (
     LOW_SPACE_GB, disk_space_error, flac_duration_seconds,
     run_ffmpeg_with_progress, safe_path_component,
@@ -867,4 +867,8 @@ async def split_album(req, manifest: dict) -> dict:
     _persist_split_plan(req, relpath)
     result = {"music_relpath": relpath, "tracks": created}
     finish_job(req.job_id, result=result)
+    # New tracks just landed in music/ — poke Jellyfin so the album shows
+    # up without waiting for its periodic scan. Best-effort, off-thread:
+    # the split already succeeded, so a down Jellyfin can't fail it.
+    jellyfin.trigger_library_scan_bg()
     return result
