@@ -121,22 +121,6 @@ try:
 except ValueError:
     ARM_AUTO_DISARM_HOURS = 24.0
 
-# Armed auto-record trigger threshold (dBFS, per-chunk PEAK — not the
-# smoothed RMS the silence detector uses). The trigger event is the needle
-# set-down thump, a sharp transient that peaks -20…-5 dBFS regardless of
-# how quiet the music is, so peak detection works for pianissimo material
-# that never crosses an RMS threshold. The -20 default sits well above
-# runout-groove clicks (~-29 dBFS peaks, once per revolution) so a side
-# circling in the runout after auto-stop can't re-trigger, and well below
-# any set-down thump or music. Rarely needs tuning; lower it (e.g. -28,
-# still above the runout clicks) only if a cueing lever sets the needle
-# down too gently to register.
-try:
-    ARM_SIGNAL_THRESHOLD_DB = float(
-        os.getenv("ARM_SIGNAL_THRESHOLD_DB", "-20").strip() or "-20")
-except ValueError:
-    ARM_SIGNAL_THRESHOLD_DB = -20.0
-
 # Discogs collection-aware tagging. When set, the auto-tag candidate panel
 # surfaces matches from the user's Discogs collection in a separate section
 # above the MusicBrainz results. DISCOGS_TOKEN is optional but raises rate

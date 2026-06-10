@@ -179,34 +179,3 @@ def test_upstream_close_disarms(monkeypatch):
         assert not recs_mod.arm_is_armed()
     finally:
         _disarm_quietly(recs_mod)
-
-
-def test_arm_threshold_env_override(monkeypatch):
-    """The arm trigger uses the ARM_SIGNAL_THRESHOLD_DB peak boundary
-    (default -20 dBFS), independent of the silence auto-stop threshold."""
-    fake = _FakeUpstream()
-    recs_mod = _install(monkeypatch, fake)
-    captured: list[int] = []
-    real_detector = recs_mod.ArmDetector
-
-    def spy_detector(*, threshold_int, **kw):
-        captured.append(threshold_int)
-        return real_detector(threshold_int=threshold_int, **kw)
-
-    monkeypatch.setattr(recs_mod, "ArmDetector", spy_detector)
-    client = _client()
-    try:
-        # Default: the -20 dBFS peak boundary.
-        monkeypatch.setattr(recs_mod, "ARM_SIGNAL_THRESHOLD_DB", -20.0)
-        assert client.post("/api/record/arm", json=ARM_BODY).status_code == 200
-        assert captured[-1] == recs_mod._silence_threshold_int(-20.0, 2)
-        recs_mod._disarm_impl("user")
-
-        # Override: a -28 dBFS env value yields a smaller (more sensitive)
-        # integer cutoff for soft cueing-lever set-downs.
-        monkeypatch.setattr(recs_mod, "ARM_SIGNAL_THRESHOLD_DB", -28.0)
-        assert client.post("/api/record/arm", json=ARM_BODY).status_code == 200
-        assert captured[-1] == recs_mod._silence_threshold_int(-28.0, 2)
-        assert captured[-1] < captured[0]
-    finally:
-        _disarm_quietly(recs_mod)

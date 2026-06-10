@@ -42,11 +42,11 @@ from services.recording_process import (
     teardown_proxy as _teardown_proxy,
 )
 from state import (
-    ARM_AUTO_DISARM_HOURS, ARM_SIGNAL_THRESHOLD_DB, BulkDelete,
-    DEFAULT_AUTO_STOP_ON_SILENCE, DEFAULT_SILENCE_SECONDS,
-    DEFAULT_SILENCE_THRESHOLD_DB, DURATION_EDIT_MIN_SLACK_SECONDS,
-    DurationEditRequest, LOG_DIR, RAW_DIR, RecordRequest, RenameRequest,
-    SilenceEditRequest, TRASH_DIR, TRASH_TTL_SECONDS, sessions, upstream,
+    ARM_AUTO_DISARM_HOURS, BulkDelete, DEFAULT_AUTO_STOP_ON_SILENCE,
+    DEFAULT_SILENCE_SECONDS, DEFAULT_SILENCE_THRESHOLD_DB,
+    DURATION_EDIT_MIN_SLACK_SECONDS, DurationEditRequest, LOG_DIR, RAW_DIR,
+    RecordRequest, RenameRequest, SilenceEditRequest, TRASH_DIR,
+    TRASH_TTL_SECONDS, sessions, upstream,
 )
 
 
@@ -493,17 +493,13 @@ def _start_recording_impl(req: RecordRequest) -> dict:
 
 
 # ── Armed auto-record ────────────────────────────────────────────────────
-# "Arm" = user-enabled standby: hold the upstream live, watch its per-chunk
-# peaks, and start a normal recording on the first quiet→signal transition
-# (see services/arm.py for the detector semantics). NOTE the asymmetry, by
-# design: START is a peak detector (catches the needle set-down transient,
-# works on pianissimo material); STOP keeps the smoothed-RMS silence
-# detector in the recording sink below (averages over runout clicks).
-# State is server-side and broadcast over WS (`record` events
-# `armed`/`disarmed` + the hello snapshot) so every tab agrees, exactly
-# like recording state.
+# "Arm" = user-enabled standby: hold the upstream live, watch its RMS, and
+# start a normal recording on the first silence→signal transition (see
+# services/arm.py for the detector semantics). State is server-side and
+# broadcast over WS (`record` events `armed`/`disarmed` + the hello
+# snapshot) so every tab agrees, exactly like recording state.
 #
-# CPU cost of staying armed is one audioop.max per ~50 ms chunk — the
+# CPU cost of staying armed is one audioop.rms per ~50 ms chunk — the
 # upstream already computes peaks at the same cadence for the VU meter.
 # The real cost is the lifecycle hold (arecord runs on the Pi while
 # armed), which is why an arm self-expires after ARM_AUTO_DISARM_HOURS:
@@ -554,15 +550,13 @@ def _arm_impl(req: RecordRequest) -> dict:
     bytes_per_second = max(1, (fmt.get("sample_rate", 0) or 0)
                               * (fmt.get("channels", 0) or 0)
                               * bytes_per_sample)
-    # Trigger threshold: a per-chunk PEAK boundary (default -20 dBFS),
-    # independent of the silence auto-stop knob. The detector fires on the
-    # needle set-down transient itself — see services/arm.py for why peak
-    # beats smoothed RMS here (quiet albums) and how the default rejects
-    # runout-groove clicks. `_silence_threshold_int` converts dBFS to the
-    # integer scale shared by audioop.rms and audioop.max.
-    threshold_db = ARM_SIGNAL_THRESHOLD_DB
+    # Same dBFS knob as silence auto-stop: "signal" and "silence" are one
+    # boundary, ops-calibrated via SILENCE_THRESHOLD_DB to sit between the
+    # source's noise floor and music. One knob keeps arm + auto-stop
+    # consistent — what stops a side is exactly what won't re-trigger one.
     detector = ArmDetector(
-        threshold_int=_silence_threshold_int(threshold_db, bytes_per_sample),
+        threshold_int=_silence_threshold_int(
+            DEFAULT_SILENCE_THRESHOLD_DB, bytes_per_sample),
         bytes_per_sample=bytes_per_sample,
         bytes_per_second=bytes_per_second,
     )
@@ -580,7 +574,7 @@ def _arm_impl(req: RecordRequest) -> dict:
         # Upstream died between acquire and subscribe — roll back.
         _disarm_impl("upstream")
         raise HTTPException(409, "stream not connected")
-    bus.log(f"◉ Auto-record armed — starts on peak ≥ {threshold_db:g} dBFS "
+    bus.log(f"◉ Auto-record armed — starts on signal "
             f"(self-disarms after {ARM_AUTO_DISARM_HOURS:g} h)", "info")
     bus.publish({"type": "record", "event": "armed"})
     return {"armed": True}
