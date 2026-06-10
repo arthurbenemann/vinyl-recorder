@@ -493,13 +493,17 @@ def _start_recording_impl(req: RecordRequest) -> dict:
 
 
 # ── Armed auto-record ────────────────────────────────────────────────────
-# "Arm" = user-enabled standby: hold the upstream live, watch its RMS, and
-# start a normal recording on the first silence→signal transition (see
-# services/arm.py for the detector semantics). State is server-side and
-# broadcast over WS (`record` events `armed`/`disarmed` + the hello
-# snapshot) so every tab agrees, exactly like recording state.
+# "Arm" = user-enabled standby: hold the upstream live, watch its per-chunk
+# peaks, and start a normal recording on the first quiet→signal transition
+# (see services/arm.py for the detector semantics). NOTE the asymmetry, by
+# design: START is a peak detector (catches the needle set-down transient,
+# works on pianissimo material); STOP keeps the smoothed-RMS silence
+# detector in the recording sink above. Both compare against the SAME
+# SILENCE_THRESHOLD_DB level — one knob, two measures. State is
+# server-side and broadcast over WS (`record` events `armed`/`disarmed` +
+# the hello snapshot) so every tab agrees, exactly like recording state.
 #
-# CPU cost of staying armed is one audioop.rms per ~50 ms chunk — the
+# CPU cost of staying armed is one audioop.max per ~50 ms chunk — the
 # upstream already computes peaks at the same cadence for the VU meter.
 # The real cost is the lifecycle hold (arecord runs on the Pi while
 # armed), which is why an arm self-expires after ARM_AUTO_DISARM_HOURS:
@@ -550,10 +554,15 @@ def _arm_impl(req: RecordRequest) -> dict:
     bytes_per_second = max(1, (fmt.get("sample_rate", 0) or 0)
                               * (fmt.get("channels", 0) or 0)
                               * bytes_per_sample)
-    # Same dBFS knob as silence auto-stop: "signal" and "silence" are one
-    # boundary, ops-calibrated via SILENCE_THRESHOLD_DB to sit between the
-    # source's noise floor and music. One knob keeps arm + auto-stop
-    # consistent — what stops a side is exactly what won't re-trigger one.
+    # Same dBFS knob as silence auto-stop (SILENCE_THRESHOLD_DB), but
+    # measured as a per-chunk PEAK rather than the smoothed RMS the stop
+    # detector uses: the start event is the needle set-down transient,
+    # which registers instantly as a peak on any record however quiet the
+    # music — an RMS measure would average it away. One level, two
+    # measures; `_silence_threshold_int` converts dBFS to the integer
+    # scale shared by audioop.rms and audioop.max. See services/arm.py
+    # for how the quiet-confirm window guards against runout clicks,
+    # which sit ABOVE this boundary as peaks.
     detector = ArmDetector(
         threshold_int=_silence_threshold_int(
             DEFAULT_SILENCE_THRESHOLD_DB, bytes_per_sample),
@@ -574,7 +583,8 @@ def _arm_impl(req: RecordRequest) -> dict:
         # Upstream died between acquire and subscribe — roll back.
         _disarm_impl("upstream")
         raise HTTPException(409, "stream not connected")
-    bus.log(f"◉ Auto-record armed — starts on signal "
+    bus.log(f"◉ Auto-record armed — starts on peak ≥ "
+            f"{DEFAULT_SILENCE_THRESHOLD_DB:g} dBFS "
             f"(self-disarms after {ARM_AUTO_DISARM_HOURS:g} h)", "info")
     bus.publish({"type": "record", "event": "armed"})
     return {"armed": True}

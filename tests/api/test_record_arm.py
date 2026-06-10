@@ -128,8 +128,9 @@ def test_arm_fires_start_after_silence_then_signal(monkeypatch):
     client = _client()
     try:
         assert client.post("/api/record/arm", json=ARM_BODY).status_code == 200
-        # Quiet-confirm: 2 s of silence in 100 ms chunks…
-        for _ in range(20):
+        # Quiet-confirm: 3 s of silence in 100 ms chunks (the detector's
+        # default window is 2.5 s — see services/arm.py)…
+        for _ in range(30):
             fake.sink(_chunk(0, 0.1))
         # …then sustained signal. The fire happens on a spawned thread;
         # poll for it.
