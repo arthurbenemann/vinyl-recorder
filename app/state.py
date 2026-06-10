@@ -121,6 +121,21 @@ try:
 except ValueError:
     ARM_AUTO_DISARM_HOURS = 24.0
 
+# Armed auto-record signal threshold (dBFS, smoothed RMS). Unset → reuse
+# SILENCE_THRESHOLD_DB, keeping "what stops a side" and "what starts one"
+# on the same calibrated boundary. Set it LOWER (e.g. -50) when quiet
+# material — pianissimo classical openings, conservatively-geared rigs —
+# doesn't reliably cross the silence threshold. It must stay above the
+# rig's noise floor: the detector requires 1 s of confirmed quiet before
+# it can fire, so a threshold below the noise floor never sees "quiet"
+# and the arm never triggers at all (fail-safe, but useless).
+_arm_db_env = os.getenv("ARM_SIGNAL_THRESHOLD_DB", "")
+try:
+    ARM_SIGNAL_THRESHOLD_DB: Optional[float] = (
+        float(_arm_db_env.strip()) if _arm_db_env.strip() else None)
+except ValueError:
+    ARM_SIGNAL_THRESHOLD_DB = None
+
 # Discogs collection-aware tagging. When set, the auto-tag candidate panel
 # surfaces matches from the user's Discogs collection in a separate section
 # above the MusicBrainz results. DISCOGS_TOKEN is optional but raises rate

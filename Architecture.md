@@ -171,9 +171,11 @@ The existing `connected` API is preserved as a backwards-compat alias for
 `POST /api/record/arm` puts the server in standby: it takes a lifecycle
 hold (keeping the upstream live) and registers an `arm` subscriber whose
 sink feeds every chunk to `services/arm.py:ArmDetector` — an
-edge-triggered onset detector (smoothed RMS must stay below the
-SILENCE_THRESHOLD_DB boundary for ~1 s, then the first chunk at or above
-it fires). On fire, the arm thread calls the same `_start_recording_impl`
+edge-triggered onset detector (smoothed RMS must stay below the trigger
+threshold for ~1 s, then the first chunk at or above it fires). The
+threshold is `ARM_SIGNAL_THRESHOLD_DB` when set, else
+`SILENCE_THRESHOLD_DB` — a separate, more sensitive trigger for quiet
+material without making auto-stop hair-triggered. On fire, the arm thread calls the same `_start_recording_impl`
 the route uses; pre-roll back-fills the detection latency so the lead-in
 groove is captured. The arm persists across the recordings it starts —
 combined with auto-stop-on-silence this is hands-free multi-side capture
@@ -322,6 +324,8 @@ Environment variables (read at startup, surfaced via `GET /api/config`):
 | `DEFAULT_SPLIT_TARGET_PEAK_DB` | `-1.0`         | target peak when normalising         |
 | `DEFAULT_SPLIT_BIT_DEPTH`    | source bit depth | force 16/24-bit on split output      |
 | `PRE_ROLL_SECONDS`           | `5`              | ring buffer size; `0` disables       |
+| `ARM_AUTO_DISARM_HOURS`      | `24`             | armed auto-record standby timeout    |
+| `ARM_SIGNAL_THRESHOLD_DB`    | silence threshold| arm trigger sensitivity override     |
 | `DISCOGS_USERNAME`           | unset            | enables collection-aware tagging     |
 | `DISCOGS_TOKEN`              | unset            | optional; raises Discogs rate limits |
 | `MUSIC_OUTPUT_DIR`           | `/output/music`  | relocate Jellyfin tree (e.g. NAS)    |
