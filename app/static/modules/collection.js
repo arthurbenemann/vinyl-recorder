@@ -123,7 +123,6 @@ function _rowHtml(r) {
     <td data-col="artist" style="color:var(--muted)">${htmlEscape(r.artist || '—')}</td>
     <td data-col="year" style="color:var(--muted)">${htmlEscape(r.year || '—')}</td>
     <td data-col="label" style="color:var(--muted);white-space:nowrap" title="${htmlEscape([r.label, r.catno].filter(Boolean).join(' · '))}">${htmlEscape([r.label, r.catno].filter(Boolean).join(' · ') || '—')}</td>
-    <td data-col="fmt" style="color:var(--muted);white-space:nowrap" title="${htmlEscape(r.format || '')}">${htmlEscape(r.format || '—')}</td>
     <td data-col="status">${check}</td>
     <td data-col="actions" style="white-space:nowrap;text-align:right">${link}</td>
   </tr>`;
