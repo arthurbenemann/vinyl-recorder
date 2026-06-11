@@ -1,3 +1,10 @@
+## v1.9.0 — 2026-06-11
+
+### Features
+- Trigger Jellyfin library scan after successful split (#85)
+- Identify records by audio fingerprint (Chromaprint + AcoustID) (#87)
+- Armed auto-record — start recording on signal (self-disarms after 24 h) (#86)
+
 ## v1.8.0 — 2026-06-03
 
 ### Features
