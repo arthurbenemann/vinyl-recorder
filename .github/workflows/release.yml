@@ -1,0 +1,140 @@
+# The GitHub-hosted equivalent of `make release {major|minor|patch}`
+# (Makefile `release` target): git-cliff prepends the new section to
+# CHANGELOG.md, the commit is tagged vX.Y.Z, both are pushed, and a GitHub
+# Release is published with the section as its notes.
+#
+# Trigger it from the Actions tab (Run workflow → pick the bump) or:
+#   gh workflow run release.yml -f bump=minor
+#
+# IMPORTANT — why this workflow dispatches ci.yml and publish.yml at the
+# end: pushes made with the default GITHUB_TOKEN do not trigger other
+# workflows (GitHub's recursion guard), so the tag push alone would NOT
+# fire publish.yml and the release commit would NOT get a ci.yml run —
+# leaving publish's ci-gate waiting on a run that never starts, and no
+# image on GHCR. workflow_dispatch events are exempt from that guard, so
+# we chain them explicitly. Do not "simplify" those steps away.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump (from the latest tag)"
+        type: choice
+        default: minor
+        options: [minor, patch, major]
+      version:
+        description: "Explicit version (vX.Y.Z) — overrides bump"
+        type: string
+        required: false
+      dry_run:
+        description: "Compute version + changelog only; push nothing"
+        type: boolean
+        default: false
+
+# Serialise releases — two concurrent runs would race the tag/CHANGELOG.
+concurrency:
+  group: release
+
+permissions:
+  contents: write   # push the release commit + tag, create the Release
+  actions: write    # dispatch ci.yml / publish.yml (see header comment)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to release from anything but main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "releases are cut from main (got ${{ github.ref }})"
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          # git-cliff and the bump math both need full history + tags.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install git-cliff
+        run: pip install "git-cliff~=2.0"
+
+      - name: Resolve version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+          EXPLICIT: ${{ inputs.version }}
+        run: |
+          set -eo pipefail
+          if [ -n "$EXPLICIT" ]; then
+            new="$EXPLICIT"
+            echo "$new" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              || { echo "version must look like vX.Y.Z (got '$new')"; exit 1; }
+          else
+            # Same arithmetic as the Makefile release target.
+            last=$(git describe --tags --abbrev=0 2>/dev/null) \
+              || { echo "no previous tag; pass an explicit version"; exit 1; }
+            s=${last#v}
+            M=${s%%.*}; r=${s#*.}; m=${r%%.*}; p=${r#*.}
+            case "$BUMP" in
+              major) new="v$((M+1)).0.0" ;;
+              minor) new="v$M.$((m+1)).0" ;;
+              patch) new="v$M.$m.$((p+1))" ;;
+              *) echo "unknown bump '$BUMP'"; exit 1 ;;
+            esac
+            echo "last tag: $last → $new ($BUMP)"
+          fi
+          git rev-parse "$new" >/dev/null 2>&1 \
+            && { echo "tag $new already exists"; exit 1; }
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog section
+        env:
+          NEW: ${{ steps.version.outputs.new }}
+        run: |
+          set -eo pipefail
+          git cliff --tag "$NEW" --unreleased --prepend CHANGELOG.md
+          {
+            echo "## Release $NEW${{ inputs.dry_run && ' (dry run — nothing pushed)' || '' }}"
+            echo
+            git cliff --tag "$NEW" --unreleased
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit, tag, push
+        if: ${{ !inputs.dry_run }}
+        env:
+          NEW: ${{ steps.version.outputs.new }}
+        run: |
+          set -eo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "Release $NEW"
+          git tag -a "$NEW" -m "Release $NEW"
+          git push origin main --follow-tags
+
+      - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW: ${{ steps.version.outputs.new }}
+        run: gh release create "$NEW" --notes "$(git cliff --latest)"
+
+      - name: Kick CI + image publish (GITHUB_TOKEN pushes don't trigger them)
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW: ${{ steps.version.outputs.new }}
+        run: |
+          set -eo pipefail
+          # CI on the release commit — publish's ci-gate polls for this run
+          # by commit SHA (main's tip IS the release commit we just pushed).
+          gh workflow run ci.yml --ref main
+          # Publish, dispatched ON THE TAG REF so github.sha is the tagged
+          # commit and docker/metadata-action derives the semver image tags
+          # exactly as it would for a human tag push.
+          gh workflow run publish.yml --ref "$NEW"
+          echo "dispatched ci.yml (main) and publish.yml ($NEW)"

@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Dispatched by release.yml: the release commit is pushed with the
+  # default GITHUB_TOKEN, whose pushes don't trigger `on: push` — without
+  # this manual kick the publish ci-gate would wait on a CI run that
+  # never starts.
+  workflow_dispatch:
 
 # Cancel an in-flight run when a newer push lands on the same ref. Saves a
 # couple of minutes on the typical PR-update flow without losing main's
