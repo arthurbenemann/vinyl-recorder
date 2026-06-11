@@ -406,7 +406,7 @@ function _wireSectionCollapse(id) {
 }
 
 export function wireSectionCollapse() {
-  ['raw-section', 'in-progress-section', 'music-section'].forEach(_wireSectionCollapse);
+  ['raw-section', 'in-progress-section', 'music-section', 'collection-section'].forEach(_wireSectionCollapse);
 }
 
 // Periodic disk-free refresh — server pushes nothing for this since it

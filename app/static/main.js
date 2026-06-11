@@ -55,6 +55,7 @@ import {
 } from './modules/onboarding.js';
 import { wsConnect, sendVisibility } from './modules/ws.js';
 import { applyConfig } from './modules/config.js';
+import { refreshCollectionStatus, refreshCollectionFromDiscogs } from './modules/collection.js';
 import { parseError, withJobProgress, pollJobProgress, showBar, hideBar } from './modules/api.js';
 import { toast } from './modules/log.js';
 import {
@@ -89,7 +90,10 @@ window.scanAndRefreshAlbums = scanAndRefreshAlbums;
 // The "↻ refresh" action runs the music/ orphan scan + reloads both
 // sections. The 15 s poll deliberately skips the scan (it's a user-driven
 // concern, not something that needs to happen on every tick).
-window.refreshAll = () => { scanAndRefreshAlbums(); refreshLib(); };
+window.refreshAll = () => { scanAndRefreshAlbums(); refreshLib(); refreshCollectionStatus(); };
+// Per-section ↻ in the Collection summary — hot-refreshes the server-side
+// Discogs cache, unlike refreshAll which just re-reads the cached status.
+window.refreshCollectionFromDiscogs = refreshCollectionFromDiscogs;
 window.togglePreview = togglePreview;
 window.togglePreviewTrack = togglePreviewTrack;
 window.deleteFile = deleteFile;

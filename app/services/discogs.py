@@ -167,6 +167,37 @@ def collection_releases(username: str, token: Optional[str] = None,
     return out
 
 
+def annotate_recorded(releases: list[dict], albums: list[dict]) -> list[dict]:
+    """Mark each collection release with whether it has been recorded.
+
+    A release counts as recorded iff its discogs_release_id appears in an
+    album manifest's tags — exact ID match only, by design: tagging via the
+    collection picker (or an MB release with a linked Discogs id) stores the
+    id, and anything looser would tick off records the user hasn't actually
+    captured. Manifests may hold the id as a string, so both sides are
+    coerced through int().
+
+    Returns copies of `releases` with `recorded: bool` and `album_id`
+    (the matching album's slug, or None) appended."""
+    recorded_by_id: dict[int, str] = {}
+    for a in albums:
+        try:
+            rid = int(a.get("discogs_release_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if rid > 0:
+            recorded_by_id.setdefault(rid, a.get("album_id") or "")
+    out = []
+    for rel in releases:
+        try:
+            rid = int(rel.get("discogs_release_id") or 0)
+        except (TypeError, ValueError):
+            rid = 0
+        album_id = recorded_by_id.get(rid)
+        out.append({**rel, "recorded": album_id is not None, "album_id": album_id})
+    return out
+
+
 def collection_count(username: str) -> int:
     """Cached size, or 0 if uncached."""
     with _collection_lock:

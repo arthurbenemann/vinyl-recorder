@@ -704,6 +704,16 @@ button.search-icon:focus-visible { outline: 2px solid var(--blue); outline-offse
   white-space: nowrap;
   cursor: help;
 }
+/* Collection checklist — not-yet-recorded releases are dimmed (same
+   opacity convention as skipped wave-editor tracks); the ↗ link cell stays
+   at full strength so the one affordance on the row reads as clickable. */
+.collection-row.unrecorded td { opacity: 0.55; }
+.collection-row.unrecorded td:last-child { opacity: 1; }
+.rec-check { color: var(--green); font-weight: 500; }
+/* The ↻ button lives inside the <summary>; keep it from inheriting the
+   label's uppercase/letter-spacing styling. */
+#collection-section summary .btn-small { margin-left: 8px; letter-spacing: 0; text-transform: none; }
+
 .tracks-sub { background: var(--surface); }
 .tracks-sub td { padding: 6px 12px 8px 28px; font-size: 11px; color: var(--muted); border-bottom: 0.5px solid var(--border); }
 .tracks-sub .track-row { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 4px; }
@@ -1130,6 +1140,7 @@ kbd { display: inline-block; font: inherit; font-size: 10px; line-height: 1; pad
   .lib-table td[data-col="recorded"],
   .lib-table td[data-col="length"],
   .lib-table td[data-col="size"],
+  .lib-table td[data-col="label"],
   .lib-table td[data-col="fmt"] {
     order: 3;
     flex: 0 0 auto;
@@ -1182,6 +1193,7 @@ kbd { display: inline-block; font: inherit; font-size: 10px; line-height: 1; pad
   .lib-table td[data-col="recorded"]::before { content: "rec ";  opacity: 0.65; }
   .lib-table td[data-col="length"]::before   { content: "len ";  opacity: 0.65; }
   .lib-table td[data-col="size"]::before     { content: "size "; opacity: 0.65; }
+  .lib-table td[data-col="label"]::before    { content: "label "; opacity: 0.65; }
   .lib-table td[data-col="fmt"]::before      { content: "fmt ";  opacity: 0.65; }
 
   /* Row accent for untagged rows — was a left inset on the first <td>;
