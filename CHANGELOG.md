@@ -1,3 +1,8 @@
+## v1.10.0 — 2026-06-11
+
+### Features
+- Collection checklist — see which Discogs records still need recording (#89)
+
 ## v1.9.0 — 2026-06-11
 
 ### Features
