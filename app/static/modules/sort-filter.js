@@ -6,6 +6,7 @@
 import { state } from './state.js';
 import { refreshLib, refreshLibRender } from './library.js';
 import { refreshAlbumsRender } from './albums.js';
+import { renderCollectionSection, collectionVisibleCount } from './collection.js';
 
 const SORT_KEYS = {
   album:  f => (f.album  || f.filename).toLowerCase(),
@@ -42,6 +43,7 @@ export function onLibSearchInput(v) {
   localStorage.setItem('lib.filterText', v);
   refreshLibRender();
   refreshAlbumsRender();
+  renderCollectionSection();
   _announceLibCount();
 }
 
@@ -50,6 +52,7 @@ export function clearLibFilter() {
   localStorage.removeItem('lib.filterText');
   refreshLibRender();
   refreshAlbumsRender();
+  renderCollectionSection();
   _announceLibCount();
 }
 
@@ -67,6 +70,7 @@ function _announceLibCount() {
   let n = 0;
   for (const f of Object.values(state.filesByName)) if (rowMatches(f)) n += 1;
   for (const a of Object.values(state.albumsByName)) if (rowMatches(a)) n += 1;
+  n += collectionVisibleCount();
   el.textContent = `${n} ${n === 1 ? 'result' : 'results'} for "${q}"`;
 }
 

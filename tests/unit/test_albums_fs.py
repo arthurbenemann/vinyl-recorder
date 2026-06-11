@@ -677,3 +677,29 @@ def test_summary_attaches_per_side_format(tmp_path, monkeypatch):
         {"filename": "b.flac", "duration_seconds": 1.0,
          "bit_depth": 16, "sample_rate_khz": 44.1},
     ]
+
+
+# ── list_album_tag_summaries ─────────────────────────────────────────────
+def test_list_album_tag_summaries_reads_tags_only(tmp_path, monkeypatch):
+    """Cheap manifest-only listing backing /api/collection/status: every
+    album dir yields a row (untagged ones with empty fields), and only the
+    four cross-reference fields come back — no ffprobe-derived data."""
+    import json
+    monkeypatch.setattr(albums_fs, "IN_PROGRESS_DIR", tmp_path)
+    a1 = tmp_path / "aaaa1111"
+    a1.mkdir()
+    (a1 / "album.json").write_text(json.dumps({
+        "schema_version": 2,
+        "tags": {"artist": "Miles Davis", "album": "Kind of Blue",
+                 "discogs_release_id": 123},
+        "sides": ["side_a.flac"],
+    }))
+    (tmp_path / "bbbb2222").mkdir()  # untagged drop-in dir
+    out = sorted(albums_fs.list_album_tag_summaries(),
+                 key=lambda r: r["album_id"])
+    assert out == [
+        {"album_id": "aaaa1111", "artist": "Miles Davis",
+         "album": "Kind of Blue", "discogs_release_id": 123},
+        {"album_id": "bbbb2222", "artist": "", "album": "",
+         "discogs_release_id": None},
+    ]

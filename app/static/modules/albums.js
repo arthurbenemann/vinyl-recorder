@@ -9,6 +9,7 @@ import { state } from './state.js';
 import { actionBtn, setTbodyIfChanged } from './dom-helpers.js';
 import { sortFiles, rowMatches } from './sort-filter.js';
 import { refreshLib } from './library.js';
+import { maybeRefreshOnAlbumsChange } from './collection.js';
 
 function _albumsBySplit(split) {
   return Object.values(state.albumsByName).filter(a => !!a.split === !!split);
@@ -181,6 +182,9 @@ export async function refreshAlbums() {
       if (!state.albumsByName[id]) albumErrors.delete(id);
     });
     refreshAlbumsRender();
+    // Recompute the Collection section's recorded ✓s when the album set
+    // changed (tag applied, album deleted, …). No-op otherwise.
+    maybeRefreshOnAlbumsChange();
   } catch (e) { console.error(e); }
 }
 

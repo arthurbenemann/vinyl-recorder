@@ -280,3 +280,46 @@ def test_release_caches_failure_as_none(monkeypatch):
     assert discogs.release(99) is None
     assert discogs.release(99) is None
     assert calls["n"] == 1
+
+
+# ── annotate_recorded (Collection checklist) ─────────────────────────────
+def _rel(rid, artist="A", title="T"):
+    return {"discogs_release_id": rid, "artist": artist, "title": title}
+
+
+def test_annotate_recorded_exact_id_match():
+    releases = [_rel(1), _rel(2)]
+    albums = [{"album_id": "aa11", "artist": "A", "album": "T",
+               "discogs_release_id": 2}]
+    out = discogs.annotate_recorded(releases, albums)
+    assert [r["recorded"] for r in out] == [False, True]
+    assert out[1]["album_id"] == "aa11"
+    assert out[0]["album_id"] is None
+    # Inputs are not mutated — copies come back.
+    assert "recorded" not in releases[0]
+
+
+def test_annotate_recorded_coerces_string_ids():
+    """Manifests may store the id as a string; the release side is int —
+    both sides go through int() so '123' still matches 123."""
+    out = discogs.annotate_recorded(
+        [_rel(123)], [{"album_id": "bb22", "discogs_release_id": "123"}])
+    assert out[0]["recorded"] is True
+    assert out[0]["album_id"] == "bb22"
+
+
+def test_annotate_recorded_no_fuzzy_fallback():
+    """Exact ID only by design: identical artist/title but no Discogs id on
+    the album must NOT tick the release off the checklist."""
+    releases = [_rel(5, artist="Miles Davis", title="Kind of Blue")]
+    albums = [{"album_id": "cc33", "artist": "Miles Davis",
+               "album": "Kind of Blue", "discogs_release_id": None}]
+    out = discogs.annotate_recorded(releases, albums)
+    assert out[0]["recorded"] is False
+
+
+def test_annotate_recorded_ignores_garbage_ids():
+    albums = [{"album_id": "dd44", "discogs_release_id": "not-a-number"},
+              {"album_id": "ee55", "discogs_release_id": 0}]
+    out = discogs.annotate_recorded([_rel(7)], albums)
+    assert out[0]["recorded"] is False

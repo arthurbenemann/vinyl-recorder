@@ -201,6 +201,33 @@ async def collection_list():
     return {"releases": owned}
 
 
+@router.get("/api/collection/status")
+async def collection_status():
+    """Collection checklist backing the library's Collection section: every
+    owned Discogs release annotated with whether it has been recorded
+    (exact discogs_release_id match against the album manifests — see
+    discogs.annotate_recorded). Served from the same in-process collection
+    cache as /api/collection; a fetch failure with a cold cache degrades to
+    an empty list (the UI shows its "unavailable" row) rather than erroring,
+    matching the non-fatal posture of the other collection endpoints."""
+    if not DISCOGS_USERNAME:
+        return {"enabled": False, "total": 0, "recorded": 0, "releases": []}
+    try:
+        owned = await asyncio.to_thread(
+            discogs.collection_releases, DISCOGS_USERNAME, DISCOGS_TOKEN or None,
+        )
+    except Exception:
+        owned = []
+    albums = await asyncio.to_thread(albums_fs.list_album_tag_summaries)
+    releases = discogs.annotate_recorded(owned, albums)
+    return {
+        "enabled":  True,
+        "total":    len(releases),
+        "recorded": sum(1 for r in releases if r["recorded"]),
+        "releases": releases,
+    }
+
+
 @router.post("/api/collection/refresh")
 async def collection_refresh():
     """Rebuild the in-process Discogs collection cache. The cache TTL is

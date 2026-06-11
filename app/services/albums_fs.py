@@ -163,6 +163,24 @@ def list_album_ids() -> list[str]:
     return out
 
 
+def list_album_tag_summaries() -> list[dict]:
+    """Tag-only listing for cross-referencing albums against the Discogs
+    collection. Manifest reads only — no ffprobe, no side reconciliation —
+    so the /api/collection/status path stays cheap even with hundreds of
+    albums. Every manifest counts (in-progress, split, external): once an
+    album is tagged, the record has been captured."""
+    out = []
+    for album_id in list_album_ids():
+        tags = read_manifest(album_id).get("tags") or {}
+        out.append({
+            "album_id":           album_id,
+            "artist":             tags.get("artist") or "",
+            "album":              tags.get("album") or "",
+            "discogs_release_id": tags.get("discogs_release_id"),
+        })
+    return out
+
+
 def reconcile_sides(album_id: str) -> dict:
     """Walk the album dir and reconcile `sides[]` against the FLACs actually
     on disk:

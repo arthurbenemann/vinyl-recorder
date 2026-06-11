@@ -203,3 +203,71 @@ def test_release_discogs_upstream_failure_returns_502(monkeypatch):
     monkeypatch.setattr(ds_mod, "release", lambda rid: None)
     r = _client().get("/api/release/discogs/12345")
     assert r.status_code == 502
+
+
+# ── /api/collection/status (Collection checklist section) ───────────────
+def test_collection_status_without_username_disabled_shape():
+    """No DISCOGS_USERNAME → enabled:false with the full (empty) shape, as
+    a 200 — the frontend uses `enabled` to keep the section hidden."""
+    r = _client().get("/api/collection/status")
+    assert r.status_code == 200
+    assert r.json() == {"enabled": False, "total": 0, "recorded": 0,
+                        "releases": []}
+
+
+def test_collection_status_annotates_recorded(monkeypatch):
+    """Exact discogs_release_id matches (including string-typed manifest
+    ids) come back recorded:true with the album slug; everything else is
+    recorded:false."""
+    # DISCOGS_USERNAME is imported by name into the route module — patch
+    # the route-module binding (same trap as test_search_accepts_generic_q).
+    import routes.tagging as tagging_mod
+    from services import albums_fs as afs_mod
+    from services import discogs as ds_mod
+
+    monkeypatch.setattr(tagging_mod, "DISCOGS_USERNAME", "testuser")
+    owned = [
+        {"discogs_release_id": 111, "title": "Kind of Blue",
+         "artist": "Miles Davis", "year": "1959", "label": "Columbia",
+         "catno": "CL 1355", "format": "Vinyl, LP", "cover_url": ""},
+        {"discogs_release_id": 222, "title": "Aja", "artist": "Steely Dan",
+         "year": "1977", "label": "ABC", "catno": "AB-1006",
+         "format": "Vinyl, LP", "cover_url": ""},
+    ]
+    monkeypatch.setattr(ds_mod, "collection_releases", lambda *a, **k: owned)
+    monkeypatch.setattr(afs_mod, "list_album_tag_summaries", lambda: [
+        {"album_id": "aa11", "artist": "Miles Davis", "album": "Kind of Blue",
+         "discogs_release_id": "111"},  # string id — must still match
+        {"album_id": "zz99", "artist": "Neil Young", "album": "Harvest",
+         "discogs_release_id": None},   # tagged without a Discogs id
+    ])
+
+    r = _client().get("/api/collection/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is True
+    assert body["total"] == 2 and body["recorded"] == 1
+    by_id = {x["discogs_release_id"]: x for x in body["releases"]}
+    assert by_id[111]["recorded"] is True and by_id[111]["album_id"] == "aa11"
+    assert by_id[222]["recorded"] is False and by_id[222]["album_id"] is None
+
+
+def test_collection_status_fetch_failure_degrades_to_empty(monkeypatch):
+    """A Discogs failure with a cold cache yields enabled:true + empty
+    releases (the UI shows its inline 'unavailable' row) rather than a 5xx
+    — same non-fatal posture as /api/collection."""
+    import routes.tagging as tagging_mod
+    from services import discogs as ds_mod
+
+    monkeypatch.setattr(tagging_mod, "DISCOGS_USERNAME", "testuser")
+
+    def boom(*a, **k):
+        raise RuntimeError("discogs down")
+
+    monkeypatch.setattr(ds_mod, "collection_releases", boom)
+    r = _client().get("/api/collection/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is True
+    assert body["total"] == 0 and body["recorded"] == 0
+    assert body["releases"] == []

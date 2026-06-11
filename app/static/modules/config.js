@@ -14,6 +14,7 @@
 import { state } from './state.js';
 import { renderVersion } from './library.js';
 import { lastStreamUrl } from './upstream.js';
+import { refreshCollectionStatus } from './collection.js';
 
 export async function applyConfig() {
   try {
@@ -50,12 +51,12 @@ export async function applyConfig() {
       if ([...sel.options].some(o => o.value === v)) sel.value = v;
     }
     // Surface the "↻ collection" refresh button only when the server has
-    // a Discogs username configured. The collection section itself is
-    // server-driven (empty array → no header rendered) so no UI flag is
-    // needed for that.
+    // a Discogs username configured, and kick off the library's Collection
+    // checklist section (which unhides itself from the status response).
     if (c.discogs_collection_enabled) {
       const btn = document.getElementById('t-collection-refresh');
       if (btn) btn.hidden = false;
+      refreshCollectionStatus();
     }
     // AcoustID "identify by audio" — same server-driven gating: the
     // button only appears when ACOUSTID_API_KEY is configured server-side.

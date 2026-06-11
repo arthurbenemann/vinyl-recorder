@@ -156,3 +156,12 @@ def test_paused_recording_keeps_a_live_dot_not_gray(stack, page):
     expect(page.locator("#stext")).to_have_text("recording", timeout=5_000)
     page.locator("#recbtn").click()
     expect(page.locator("#stext")).not_to_have_text("recording", timeout=10_000)
+
+
+def test_collection_section_hidden_without_discogs(stack, page):
+    """The Discogs Collection checklist section is server-gated: the test
+    stack runs without DISCOGS_USERNAME, so the <details> must stay hidden
+    (no empty fourth section confusing the library view)."""
+    page.goto(RECORDER_URL)
+    page.wait_for_load_state("networkidle")
+    expect(page.locator("#collection-section")).to_be_hidden()
