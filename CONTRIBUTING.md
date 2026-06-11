@@ -140,7 +140,27 @@ curl -X POST -H 'Content-Type: application/json' \
 
 ## Releasing
 
-From a clean `main`, either bump the last tag:
+The easiest path needs no local tooling: **Actions → Release → Run
+workflow**, pick the bump (minor/patch/major) or type an explicit
+`vX.Y.Z`, and run. Same thing from a terminal:
+
+```bash
+gh workflow run release.yml -f bump=minor
+gh workflow run release.yml -f version=v2.0.0
+gh workflow run release.yml -f bump=minor -f dry_run=true   # preview only
+```
+
+`dry_run` computes the version and renders the changelog section into
+the run summary without pushing anything — use it to sanity-check what
+a release would contain. The workflow then chains CI and the image
+publish via explicit `workflow_dispatch` kicks; that's deliberate, not
+redundant — pushes made with the default `GITHUB_TOKEN` never trigger
+`on: push`/`on: tag` workflows, so without the kicks no image would
+ship (see the header comment in
+[`release.yml`](.github/workflows/release.yml)).
+
+The same flow also works locally from a clean `main` (requires
+[git-cliff](https://git-cliff.org) and [`gh`](https://cli.github.com)):
 
 ```bash
 make release patch    # v0.1.0 → v0.1.1
@@ -150,12 +170,11 @@ make release major    # v0.1.0 → v1.0.0
 
 …or pin an explicit version: `make release VERSION=v0.2.0`.
 
-This renders every merge commit since the previous tag into a new
-section at the top of [CHANGELOG.md](CHANGELOG.md) (via
-[git-cliff](https://git-cliff.org) and [`cliff.toml`](./cliff.toml)),
-commits it, creates an annotated tag on that commit, pushes both, and
-publishes a GitHub Release with the same notes (via
-[`gh`](https://cli.github.com)).
+Either way the release renders every merge commit since the previous
+tag into a new section at the top of [CHANGELOG.md](CHANGELOG.md) (via
+git-cliff and [`cliff.toml`](./cliff.toml)), commits it, creates an
+annotated tag on that commit, pushes both, and publishes a GitHub
+Release with the same notes.
 
 If you want a new changelog section or to change how a prefix is
 grouped, edit [`cliff.toml`](./cliff.toml) and include a sample of the
