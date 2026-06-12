@@ -58,12 +58,6 @@ export async function applyConfig() {
       if (btn) btn.hidden = false;
       refreshCollectionStatus();
     }
-    // AcoustID "identify by audio" — same server-driven gating: the
-    // button only appears when ACOUSTID_API_KEY is configured server-side.
-    if (c.acoustid_enabled) {
-      const ib = document.getElementById('t-identify');
-      if (ib) ib.hidden = false;
-    }
     // Auto-stop-on-silence default. Only fill the dropdown if the user
     // hasn't already saved their preference via localStorage — ops-set
     // env defaults shouldn't clobber a per-user override. The detection

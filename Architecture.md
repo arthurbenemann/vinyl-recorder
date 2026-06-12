@@ -56,10 +56,6 @@ Key services:
 - **`musicbrainz` / `discogs`** (`services/{musicbrainz,discogs}.py`) — public
   API clients via stdlib `urllib`. Discogs accepts an optional token; MB needs
   only a User-Agent.
-- **`acoustid`** (`services/acoustid.py`) — audio-fingerprint identification:
-  `fpcalc` (Chromaprint, in the image) fingerprints a side locally, one POST
-  to AcoustID resolves it to MB release candidates in the same shape as
-  `/api/search`. Gated on `ACOUSTID_API_KEY` (free key from acoustid.org).
 - **`albums_fs`** (`services/albums_fs.py`) — `in-progress/{album_id}/`
   workspace layer: reads/writes `album.json` manifests, manages side files,
   enforces the no-mutate-source-audio invariant.
@@ -79,7 +75,7 @@ Routes:
   `/api/recordings` + rename/delete/bulk-delete, `/api/download/{file}`,
   `/api/stream-proxy` (browser playback), `/api/log/{sid}`,
   `/api/test-stream`.
-- `tagging.py` — `/api/search`, `/api/identify`, `/api/release/{mbid}`,
+- `tagging.py` — `/api/search`, `/api/release/{mbid}`,
   `/api/release/discogs/{id}`, `/api/apply`, `/api/collection/refresh`,
   `/api/cover/{mbid}`, `/api/file-cover/{album_id}`.
 - `albums.py` — `/api/albums`, `/api/combine`, `/api/promote`,
@@ -337,7 +333,6 @@ Environment variables (read at startup, surfaced via `GET /api/config`):
 | `MUSIC_OUTPUT_DIR`           | `/output/music`  | relocate Jellyfin tree (e.g. NAS)    |
 | `JELLYFIN_URL`               | unset            | Jellyfin base URL for post-split scan|
 | `JELLYFIN_API_KEY`           | unset            | required with `JELLYFIN_URL`         |
-| `ACOUSTID_API_KEY`           | unset            | enables identify-by-audio tagging    |
 
 `DISCOGS_TOKEN` is never sent to the browser. `/api/config` reports
 `discogs_username` (boolean: configured?) so the UI can toggle the collection

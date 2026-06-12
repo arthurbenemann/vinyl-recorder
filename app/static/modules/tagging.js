@@ -483,53 +483,6 @@ export async function runSearch() {
   }
 }
 
-// ── Identify by audio (AcoustID) ──────────────────────────────────────────
-// Fingerprints the panel's recording server-side (fpcalc → AcoustID) and
-// renders the resolved MusicBrainz releases through the SAME candidate
-// cards as a text search — picking one funnels into the existing
-// /api/release/{mbid} → apply flow, no parallel code path. Button is
-// hidden unless the server reports acoustid_enabled (see config.js).
-export async function identifyAudio() {
-  const btn    = document.getElementById('t-identify');
-  const status = document.getElementById('t-search-status');
-  const list   = document.getElementById('t-candidates');
-  // Resolve the audio target from the panel mode: single raw side, album
-  // (server fingerprints its first side), or combine (first picked side —
-  // any one side identifies the release).
-  const t = tagPanelTarget || {};
-  const body = {};
-  if (t.album_id) body.album_id = t.album_id;
-  else if (t.filename) body.filename = t.filename;
-  else if (t.filenames && t.filenames.length) body.filename = t.filenames[0];
-  else { toast('✗ nothing to identify', 'err'); return; }
-  if (btn) btn.disabled = true;
-  status.textContent = 'identifying — fingerprinting audio, querying AcoustID…';
-  list.innerHTML = '';
-  try {
-    const r = await fetch('/api/identify', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(body),
-    });
-    if (!r.ok) throw new Error(await parseError(r));
-    const d = await r.json();
-    tagPanelCandidates = d.candidates || [];
-    status.textContent = '';
-    if (!tagPanelCandidates.length) {
-      list.innerHTML = '<div class="empty-results">No acoustic matches — vinyl rips of obscure pressings sometimes miss; try the text search instead.</div>';
-      return;
-    }
-    const n = tagPanelCandidates.length;
-    list.innerHTML =
-      `<div class="cand-section-header">Identified by audio · ${n} match${n === 1 ? '' : 'es'} · click to load</div>` +
-      tagPanelCandidates.map((c, i) => _renderMbCard(c, i)).join('');
-  } catch (e) {
-    status.textContent = '';
-    list.innerHTML = `<div class="empty-results err">identify failed: ${htmlEscape(e.message)}</div>`;
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-}
-
 // ── Unified find-a-release bar ────────────────────────────────────────────
 // The right-column "Find a release" input has three behaviours, picked on
 // every keystroke from the value + the left-column Artist/Album fields:

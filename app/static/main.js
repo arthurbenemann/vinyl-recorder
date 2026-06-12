@@ -39,7 +39,7 @@ import {
 } from './modules/sort-filter.js';
 import {
   openTag, openTagAlbum, closeTag,
-  runSearch, identifyAudio, pickCandidate, pickCollectionCandidate, refreshCollection,
+  runSearch, pickCandidate, pickCollectionCandidate, refreshCollection,
   onFindInput, onFindEnter, wireFindSubtitleLive,
   applyTagPanel, wireTagDirtyTracking, onCoverFileSelected,
 } from './modules/tagging.js';
@@ -133,7 +133,6 @@ window.openTag = openTag;
 window.openTagAlbum = openTagAlbum;
 window.closeTag = closeTag;
 window.runSearch = runSearch;
-window.identifyAudio = identifyAudio;
 window.pickCandidate = pickCandidate;
 window.pickCollectionCandidate = pickCollectionCandidate;
 window.refreshCollection = refreshCollection;
