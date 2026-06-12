@@ -9,14 +9,16 @@ import { refreshAlbumsRender } from './albums.js';
 import { renderCollectionSection, collectionVisibleCount } from './collection.js';
 
 const SORT_KEYS = {
-  album:  f => (f.album  || f.filename).toLowerCase(),
-  artist: f => (f.artist || '').toLowerCase(),
-  year:   f => parseInt(f.year, 10) || 0,
-  length: f => f.duration_seconds || 0,
-  size:   f => f.size_mb || 0,
+  album:    f => (f.album  || f.filename).toLowerCase(),
+  artist:   f => (f.artist || '').toLowerCase(),
+  year:     f => parseInt(f.year, 10) || 0,
+  length:   f => f.duration_seconds || 0,
+  size:     f => f.size_mb || 0,
   // Sort by total information rate (bps × Hz) so 24/96 ranks above 16/44.1.
-  fmt:    f => (f.bit_depth || 0) * (f.sample_rate_khz || 0),
-  date:   f => f.mtime || 0,
+  fmt:      f => (f.bit_depth || 0) * (f.sample_rate_khz || 0),
+  date:     f => f.mtime || 0,
+  label:    f => (f.label || '').toLowerCase(),
+  recorded: f => f.recorded ? 1 : 0,
 };
 
 export function rowMatches(f) {
@@ -80,12 +82,13 @@ export function setSort(col) {
   } else {
     state.sortBy = col;
     // Sensible default direction per column: text → asc, numeric/date → desc.
-    state.sortDir = (col === 'album' || col === 'artist') ? 'asc' : 'desc';
+    state.sortDir = (col === 'album' || col === 'artist' || col === 'label') ? 'asc' : 'desc';
   }
   localStorage.setItem('lib.sortBy',  state.sortBy);
   localStorage.setItem('lib.sortDir', state.sortDir);
   refreshLib();
   refreshAlbumsRender();
+  renderCollectionSection();
 }
 
 export function sortFiles(files) {
