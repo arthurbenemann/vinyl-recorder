@@ -53,6 +53,7 @@ import {
 import {
   openOnboarding, closeOnboarding, initOnboarding,
 } from './modules/onboarding.js';
+import { openChangelog, closeChangelog } from './modules/changelog.js';
 import { wsConnect, sendVisibility } from './modules/ws.js';
 import { applyConfig } from './modules/config.js';
 import { refreshCollectionStatus, refreshCollectionFromDiscogs } from './modules/collection.js';
@@ -156,6 +157,10 @@ window.runPiDeploy = runPiDeploy;
 // onboarding overlay
 window.openOnboarding = openOnboarding;
 window.closeOnboarding = closeOnboarding;
+
+// changelog modal
+window.openChangelog = openChangelog;
+window.closeChangelog = closeChangelog;
 
 // Globals consumed by wave-editor.js (a classic script that used to share
 // script-scope with the old monolithic main.js). The name on `window` is

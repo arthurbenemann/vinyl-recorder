@@ -33,7 +33,7 @@ export async function applyConfig() {
       state.pendingDefaultGainDb = c.default_gain_db;
     }
     if (typeof c.low_space_gb === 'number') state.lowSpaceGb = c.low_space_gb;
-    renderVersion(c.version);
+    renderVersion(c.version, c.update_available, c.latest_version);
     // Wave-editor split defaults — applied to the modal whenever it's reopened.
     if (typeof c.default_split_normalize === 'boolean') {
       document.getElementById('we-normalize').checked = c.default_split_normalize;
