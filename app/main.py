@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from routes import albums, pi_deploy, recordings, tagging, ws as ws_route
-from services import acoustid, jellyfin
+from services import jellyfin
 from services.eventbus import bus
 from services.ffmpeg import LOW_SPACE_GB, disk_free_gb, recording_headroom_minutes
 from services.jobs import get_job
@@ -204,8 +204,6 @@ async def get_config():
         "discogs_collection_enabled":   bool(DISCOGS_USERNAME),
         # Boolean only, same rationale — the URL/API key stay server-side.
         "jellyfin_notify_enabled":      jellyfin.enabled(),
-        # Boolean only — gates the tag panel's "identify by audio" button.
-        "acoustid_enabled":             acoustid.enabled(),
         "latest_version":               _LATEST_CHANGELOG_VERSION,
         "update_available":             _is_update_available(VERSION, _LATEST_CHANGELOG_VERSION),
     }

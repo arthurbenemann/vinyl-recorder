@@ -41,13 +41,12 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Alpine's ffmpeg is built with --enable-libmp3lame and ships every filter
 # the app uses (silencedetect, astats, aformat, volume, atrim, asetpts,
-# concat). flac provides metaflac. chromaprint provides fpcalc for the
-# AcoustID "identify by audio" flow (services/acoustid.py). The runtime
-# libs match the dynamically-linked deps of the audiowaveform binary
-# copied from the builder stage — omitting any of them would surface as a
-# "library not found" at first invocation rather than at image build.
+# concat). flac provides metaflac. The runtime libs match the
+# dynamically-linked deps of the audiowaveform binary copied from the
+# builder stage — omitting any of them would surface as a "library not
+# found" at first invocation rather than at image build.
 RUN apk add --no-cache \
-        ffmpeg flac chromaprint \
+        ffmpeg flac \
         libstdc++ \
         boost-program_options boost-filesystem boost-regex \
         libsndfile gd libid3tag libmad \
@@ -55,9 +54,6 @@ RUN apk add --no-cache \
 
 COPY --from=aw-builder /build/audiowaveform/audiowaveform /usr/local/bin/audiowaveform
 RUN audiowaveform --version
-# Assert fpcalc landed with the chromaprint package — fail the build, not
-# the first /api/identify call, if the package ever stops shipping it.
-RUN fpcalc -version
 
 # Install the `runtime` dependency group from pyproject.toml. Centralising
 # the pin list in pyproject keeps Docker + CI on the same versions — bump
