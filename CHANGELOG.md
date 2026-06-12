@@ -1,3 +1,14 @@
+## v1.11.0 — 2026-06-12
+
+### Features
+- Clickable version pill opens changelog with update indicator (#90)
+- Sortable column headers in the Collection section (#91)
+
+## v1.10.0 — 2026-06-11
+
+### Features
+- Collection checklist — see which Discogs records still need recording (#89)
+
 ## v1.10.0 — 2026-06-11
 
 ### Features
