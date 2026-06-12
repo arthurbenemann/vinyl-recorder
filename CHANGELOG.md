@@ -1,3 +1,8 @@
+## v1.11.1 — 2026-06-12
+
+### Bug Fixes
+- **release:** Stale GitHub Release notes and duplicate changelog sections from topo_order (#92)
+
 ## v1.11.0 — 2026-06-12
 
 ### Features
