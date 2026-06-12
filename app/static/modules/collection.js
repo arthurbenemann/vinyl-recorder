@@ -15,7 +15,7 @@ import { htmlEscape } from './util.js';
 import { toast } from './log.js';
 import { state } from './state.js';
 import { setTbodyIfChanged } from './dom-helpers.js';
-import { rowMatches } from './sort-filter.js';
+import { rowMatches, sortFiles } from './sort-filter.js';
 
 // Adapted /api/collection/status releases. Each row carries the original
 // fields plus `album`/`catalog_number` aliases so the shared rowMatches()
@@ -87,17 +87,6 @@ export function collectionVisibleCount() {
   return _rows.filter(rowMatches).length;
 }
 
-// Fixed artist→title sort (the section has no sortable headers in v1).
-// Deliberately NOT "unrecorded first": the dimming already separates the
-// states, and a stable alphabetical order preserves spatial memory as
-// items flip to recorded instead of reshuffling under the user.
-function _cmpRows(a, b) {
-  const aa = (a.artist || '').toLowerCase(), ba = (b.artist || '').toLowerCase();
-  if (aa !== ba) return aa < ba ? -1 : 1;
-  const at = (a.title || '').toLowerCase(), bt = (b.title || '').toLowerCase();
-  return at < bt ? -1 : at > bt ? 1 : 0;
-}
-
 function _rowHtml(r) {
   const title = r.title || '(untitled)';
   const ctx = r.artist ? `${title} — ${r.artist}` : title;
@@ -134,7 +123,7 @@ export function renderCollectionSection() {
   if (!tbody || !countEl) return;
   const total = _rows.length;
   const recorded = _rows.filter(r => r.recorded).length;
-  const filtered = _rows.filter(rowMatches).sort(_cmpRows);
+  const filtered = sortFiles(_rows.filter(rowMatches));
   const filterActive = !!state.libFilterText.trim();
   countEl.textContent = filterActive
     ? `${recorded} / ${total} recorded · ${filtered.length} shown`
