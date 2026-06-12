@@ -121,7 +121,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEW: ${{ steps.version.outputs.new }}
-        run: gh release create "$NEW" --notes "$(git cliff --latest)"
+        # --current (the tag pointing at HEAD, i.e. the one we just created)
+        # rather than --latest: --latest re-resolves "the newest tag" from the
+        # full history and has picked an older tag before, publishing stale
+        # release notes.
+        run: gh release create "$NEW" --notes "$(git cliff --current)"
 
       - name: Kick CI + image publish (GITHUB_TOKEN pushes don't trigger them)
         if: ${{ !inputs.dry_run }}

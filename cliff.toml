@@ -9,7 +9,12 @@ filter_unconventional = false
 # Drop unmatched commits → keeps only the merge commits we transform below
 # (effectively `git log --first-parent main`).
 filter_commits = true
-topo_order = true
+# Keep the default date order. topo_order = true makes git-cliff walk the
+# merge topology when assigning commits to releases, which mis-resolved
+# `--latest` to an older tag (stale GitHub Release notes) and made
+# `--unreleased` re-emit an already-released section (duplicate v1.10.0
+# in CHANGELOG.md).
+topo_order = false
 
 commit_preprocessors = [
   { pattern = '\s*https://claude\.ai/code/\S+', replace = "" },

@@ -73,4 +73,4 @@ release:
 	git commit -m "Release $$new"
 	git tag -a "$$new" -m "Release $$new"
 	git push origin main --follow-tags
-	gh release create "$$new" --notes "$$(git cliff --latest)"
+	gh release create "$$new" --notes "$$(git cliff --current)"
