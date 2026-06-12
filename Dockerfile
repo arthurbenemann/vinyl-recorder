@@ -73,6 +73,7 @@ COPY app/ /app/
 # so the same files keep their canonical location both in the repo and
 # inside the runtime image.
 COPY pi/ /pi/
+COPY CHANGELOG.md /app/CHANGELOG.md
 COPY --from=version /VERSION /app/VERSION
 
 RUN mkdir -p /output

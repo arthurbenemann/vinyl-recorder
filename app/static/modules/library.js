@@ -379,7 +379,7 @@ function _fmtHeadroom(min) {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 
-export function renderVersion(v) {
+export function renderVersion(v, updateAvailable, latestVersion) {
   const el = document.getElementById('version-tag');
   if (!v) return;
   el.textContent = v;
@@ -387,7 +387,12 @@ export function renderVersion(v) {
   // build. A bare 7-char sha (no leading "v") is also a dev build.
   const isDev = /-g[0-9a-f]{7,}|-dirty|^[0-9a-f]{7,}$/i.test(v) || v === 'dev';
   el.classList.toggle('dev', isDev);
-  el.title = isDev ? 'dev build' : 'release';
+  el.classList.toggle('has-update', !!updateAvailable);
+  if (updateAvailable && latestVersion) {
+    el.title = `${latestVersion} available — click to view changelog`;
+  } else {
+    el.title = isDev ? 'dev build — click to view changelog' : 'click to view changelog';
+  }
   el.hidden = false;
 }
 

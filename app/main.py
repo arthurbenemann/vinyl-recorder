@@ -3,6 +3,7 @@ registration, static files. Business logic lives in routes/ and services/."""
 import asyncio
 import logging
 import os
+import re
 import time
 from pathlib import Path
 
@@ -28,6 +29,64 @@ from state import (
     PRE_ROLL_SECONDS, sessions, upstream,
 )
 from version import VERSION
+
+
+def _parse_changelog() -> list[dict]:
+    """Parse CHANGELOG.md into a list of release dicts (version, date, sections)."""
+    for p in [Path(__file__).parent / "CHANGELOG.md",
+              Path(__file__).parent.parent / "CHANGELOG.md"]:
+        if p.exists():
+            break
+    else:
+        return []
+    try:
+        text = p.read_text(encoding="utf-8")
+    except Exception:
+        return []
+
+    releases: list[dict] = []
+    current: dict | None = None
+    current_section: dict | None = None
+    for line in text.splitlines():
+        m = re.match(r'^## (v[\d.]+\S*)\s*[—–-]\s*(\S+)', line)
+        if m:
+            if current is not None and current_section is not None:
+                current['sections'].append(current_section)
+                current_section = None
+            current = {'version': m.group(1), 'date': m.group(2), 'sections': []}
+            releases.append(current)
+            continue
+        if current is None:
+            continue
+        m = re.match(r'^### (.+)', line)
+        if m:
+            if current_section is not None:
+                current['sections'].append(current_section)
+            current_section = {'title': m.group(1), 'items': []}
+            continue
+        m = re.match(r'^- (.+)', line)
+        if m and current_section is not None:
+            current_section['items'].append(m.group(1))
+    if current is not None and current_section is not None:
+        current['sections'].append(current_section)
+    return releases
+
+
+def _is_update_available(running: str, latest: str | None) -> bool:
+    if not running or not latest:
+        return False
+    if not re.match(r'^v?\d+\.\d+\.\d+$', running):
+        return False  # dev / dirty builds don't get an update notice
+    def _semver(v: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in v.lstrip('v').split('.'))
+    try:
+        return _semver(latest) > _semver(running)
+    except Exception:
+        return False
+
+
+_CHANGELOG = _parse_changelog()
+_LATEST_CHANGELOG_VERSION: str | None = _CHANGELOG[0]['version'] if _CHANGELOG else None
 
 
 # Structured logging — JSON lines on stdout when LOG_FORMAT=json, plain
@@ -147,7 +206,14 @@ async def get_config():
         "jellyfin_notify_enabled":      jellyfin.enabled(),
         # Boolean only — gates the tag panel's "identify by audio" button.
         "acoustid_enabled":             acoustid.enabled(),
+        "latest_version":               _LATEST_CHANGELOG_VERSION,
+        "update_available":             _is_update_available(VERSION, _LATEST_CHANGELOG_VERSION),
     }
+
+
+@app.get("/api/changelog")
+async def get_changelog():
+    return _CHANGELOG
 
 
 @app.get("/api/status")

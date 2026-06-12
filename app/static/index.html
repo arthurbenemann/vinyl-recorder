@@ -18,7 +18,7 @@
   </div>
   <div class="header-right">
     <span id="disk-free">— GB free</span>
-    <span class="version-tag" id="version-tag" hidden></span>
+    <button type="button" class="version-tag" id="version-tag" hidden onclick="openChangelog()"></button>
     <button type="button" class="status-indicator" id="status-indicator" onclick="toggleHealthPanel()" title="Stream health" aria-expanded="false" aria-controls="health-panel">
       <div class="dot" id="sdot"></div>
       <span id="stext">disconnected</span>
@@ -723,6 +723,20 @@
 
     <div class="action-row" style="margin-top:18px">
       <button class="btn primary" id="onboarding-got-it" onclick="closeOnboarding()">Got it</button>
+    </div>
+  </div>
+</div>
+
+<!-- Changelog modal — opened by clicking the version pill in the header.
+     Content is lazy-fetched from /api/changelog on first open. -->
+<div class="modal-backdrop" id="changelog-modal" hidden role="dialog" aria-modal="true" aria-labelledby="changelog-title" onclick="if(event.target===this)closeChangelog()">
+  <div class="modal changelog-card">
+    <div class="modal-header">
+      <div class="modal-title" id="changelog-title">What's new</div>
+      <button class="btn-small" onclick="closeChangelog()" aria-label="Close">✕</button>
+    </div>
+    <div class="changelog-body" id="changelog-body">
+      <div class="cl-loading">Loading…</div>
     </div>
   </div>
 </div>
