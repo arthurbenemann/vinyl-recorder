@@ -998,6 +998,14 @@ kbd { display: inline-block; font: inherit; font-size: 10px; line-height: 1; pad
      budget reserved for it (the old -640px) shrinks. */
   .wave-tracks { max-height: clamp(200px, calc(100vh - 470px), 820px); }
   .wave-img { height: 180px; }
+  /* In the narrow right column the stats row's label + flex:1 readout +
+     loudness toggles + measure button can't share one line, so the readout
+     collapses to one word per row. Break the label and readout onto their
+     own full-width lines and let the toggles + measure flow on the line
+     below. */
+  .we-lower-side .we-process-stats { gap: 8px 14px; }
+  .we-lower-side .we-stats-label { flex: 0 0 100%; }
+  .we-lower-side .we-stats-text { flex: 0 0 100%; }
 }
 
 /* Combine modal — side reorder rows */
