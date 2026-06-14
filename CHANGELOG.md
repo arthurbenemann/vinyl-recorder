@@ -1,3 +1,8 @@
+## v1.12.0 — 2026-06-14
+
+### Features
+- **wave-editor:** Use wide screens effectively in the split modal (#94)
+
 ## v1.11.2 — 2026-06-12
 
 ### Refactoring
