@@ -978,6 +978,36 @@ kbd { display: inline-block; font: inherit; font-size: 10px; line-height: 1; pad
 .we-process-bits { display: flex; align-items: center; gap: 5px; color: var(--text); }
 .we-process-bits select { background: var(--surface2); border: 0.5px solid var(--border2); border-radius: 4px; color: var(--text); font-family: var(--mono); font-size: 11px; padding: 3px 6px; outline: none; cursor: pointer; }
 
+/* Wave editor — wide-viewport layout. The modal width tracks the viewport
+   (capped) instead of the old fixed 1100px, so ultrawide (21:9) screens get
+   a longer waveform — more pixels per second of audio — rather than empty
+   backdrop. drawPeaks sizes the canvas bitmap from its CSS width at draw
+   time; wave-editor.js redraws on window resize to keep it sharp. */
+.modal.we-modal-card { width: min(96vw, 2600px); }
+.we-lower { margin-top: 14px; }
+.we-actions { margin-top: 14px; }
+#we-split-bar { margin-top: 10px; }
+/* ≥1700px: the lower pane becomes tracks (left) + processing/actions
+   (right). The freed vertical space goes to the track list and a taller
+   main waveform. */
+@media (min-width: 1700px) {
+  .we-lower { display: grid; grid-template-columns: minmax(0, 1fr) 440px; column-gap: 24px; align-items: start; }
+  /* Top-align the process panel with the "Tracks" column label. */
+  .we-lower-side .we-process { margin-top: 0; }
+  /* The process panel no longer stacks below the list, so the vertical
+     budget reserved for it (the old -640px) shrinks. */
+  .wave-tracks { max-height: clamp(200px, calc(100vh - 470px), 820px); }
+  .wave-img { height: 180px; }
+  /* In the narrow right column the stats row's label + flex:1 readout +
+     loudness toggles + measure button can't share one line, so the readout
+     collapses to one word per row. Break the label and readout onto their
+     own full-width lines and let the toggles + measure flow on the line
+     below. */
+  .we-lower-side .we-process-stats { gap: 8px 14px; }
+  .we-lower-side .we-stats-label { flex: 0 0 100%; }
+  .we-lower-side .we-stats-text { flex: 0 0 100%; }
+}
+
 /* Combine modal — side reorder rows */
 .side-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--surface); border: 0.5px solid var(--border); border-radius: 6px; transition: opacity 0.12s, transform 0.12s, border-color 0.12s; }
 .side-row.dragging { opacity: 0.4; }

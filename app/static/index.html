@@ -335,7 +335,7 @@
 
 <!-- Wave-editor split modal -->
 <div class="modal-backdrop" id="we-modal" hidden role="dialog" aria-modal="true" aria-labelledby="we-modal-title" onclick="if(event.target===this)closeWaveEditor()">
-  <div class="modal" style="width:1100px">
+  <div class="modal we-modal-card">
     <div class="modal-header">
       <div class="we-modal-left">
         <span class="modal-title" id="we-modal-title">Split into tracks</span>
@@ -473,79 +473,89 @@
     </div>
     <div class="wave-axis"><span id="we-t0">0:00</span><span id="we-t1">—</span></div>
 
-    <div class="col-label" style="margin-top:14px">Tracks</div>
-    <div class="wave-tracks" id="we-tracks"></div>
+    <!-- Lower pane: track list + processing/output/actions. Stacked on
+         laptop-class widths; on wide viewports (≥1700px) .we-lower becomes a
+         two-column grid with the process panel beside the track list, so an
+         ultrawide (21:9) screen gets a shallow modal instead of a tall one. -->
+    <div class="we-lower">
+      <div class="we-lower-tracks">
+        <div class="col-label">Tracks</div>
+        <div class="wave-tracks" id="we-tracks"></div>
+      </div>
 
-    <div class="we-process">
-      <div class="we-process-stats" id="we-stats" title="Peak = loudest sample · Noise floor = lowest sustained RMS · DR = peak − noise floor · effective bits = DR / 6.02">
-        <span class="we-stats-label">album stats</span>
-        <span id="we-stats-text" class="we-stats-text">click measure or set cuts</span>
-        <div class="job-bar inline" id="we-measure-bar" hidden style="flex:1;max-width:260px;margin:0 8px">
-          <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
-          <div class="job-bar-text"><span class="job-bar-pct">0%</span></div>
+      <div class="we-lower-side">
+        <div class="we-process">
+          <div class="we-process-stats" id="we-stats" title="Peak = loudest sample · Noise floor = lowest sustained RMS · DR = peak − noise floor · effective bits = DR / 6.02">
+            <span class="we-stats-label">album stats</span>
+            <span id="we-stats-text" class="we-stats-text">click measure or set cuts</span>
+            <div class="job-bar inline" id="we-measure-bar" hidden style="flex:1;max-width:260px;margin:0 8px">
+              <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
+              <div class="job-bar-text"><span class="job-bar-pct">0%</span></div>
+            </div>
+            <label class="we-process-toggle">
+              <input type="checkbox" id="we-normalize"> normalize
+            </label>
+            <label class="we-process-toggle"
+                   title="Write ReplayGain track + album loudness tags (FLAC only). Players normalise volume on playback; the audio itself is untouched.">
+              <input type="checkbox" id="we-replaygain"> ReplayGain
+            </label>
+            <button class="btn-small" id="we-measure-btn" onclick="weMeasure()" title="Scan the album audio to compute peak, noise floor, dynamic range, and effective bits.">measure</button>
+          </div>
+          <div class="we-process-row">
+            <span class="we-process-group">output</span>
+            <label class="we-process-bits">
+              format
+              <select id="we-format" onchange="weOnFormatChange()">
+                <option value="flac" selected>FLAC (lossless, default)</option>
+                <option value="wav">WAV (PCM, lossless)</option>
+                <option value="mp3">MP3 (lossy, V0 ~245 kbps)</option>
+                <option value="ogg">Ogg Vorbis (lossy, q8 ~256 kbps)</option>
+                <option value="m4a-aac">AAC / m4a (lossy, 256 kbps)</option>
+                <option value="m4a-alac">ALAC / m4a (Apple Lossless)</option>
+              </select>
+            </label>
+            <label class="we-process-bits">
+              bit depth
+              <select id="we-bitdepth">
+                <option value="0">keep source</option>
+                <option value="16">16-bit</option>
+                <option value="24">24-bit</option>
+              </select>
+            </label>
+            <label class="we-process-bits"
+                   title="Stereo keeps the capture as-is. Mono (L+R) suits genuine mono pressings — it cancels out-of-phase groove noise. Left / Right rescue a single good channel from a damaged or miswired side.">
+              channels
+              <select id="we-channels">
+                <option value="stereo" selected>stereo (keep)</option>
+                <option value="mono">mono (L+R sum)</option>
+                <option value="left">left only</option>
+                <option value="right">right only</option>
+              </select>
+            </label>
+            <label class="we-process-bits">
+              sample rate
+              <select id="we-sample-rate">
+                <option value="0">keep source</option>
+                <option value="44100">44.1 kHz (CD)</option>
+                <option value="48000">48 kHz</option>
+                <option value="88200">88.2 kHz</option>
+                <option value="96000">96 kHz</option>
+              </select>
+            </label>
+          </div>
         </div>
-        <label class="we-process-toggle">
-          <input type="checkbox" id="we-normalize"> normalize
-        </label>
-        <label class="we-process-toggle"
-               title="Write ReplayGain track + album loudness tags (FLAC only). Players normalise volume on playback; the audio itself is untouched.">
-          <input type="checkbox" id="we-replaygain"> ReplayGain
-        </label>
-        <button class="btn-small" id="we-measure-btn" onclick="weMeasure()" title="Scan the album audio to compute peak, noise floor, dynamic range, and effective bits.">measure</button>
-      </div>
-      <div class="we-process-row">
-        <span class="we-process-group">output</span>
-        <label class="we-process-bits">
-          format
-          <select id="we-format" onchange="weOnFormatChange()">
-            <option value="flac" selected>FLAC (lossless, default)</option>
-            <option value="wav">WAV (PCM, lossless)</option>
-            <option value="mp3">MP3 (lossy, V0 ~245 kbps)</option>
-            <option value="ogg">Ogg Vorbis (lossy, q8 ~256 kbps)</option>
-            <option value="m4a-aac">AAC / m4a (lossy, 256 kbps)</option>
-            <option value="m4a-alac">ALAC / m4a (Apple Lossless)</option>
-          </select>
-        </label>
-        <label class="we-process-bits">
-          bit depth
-          <select id="we-bitdepth">
-            <option value="0">keep source</option>
-            <option value="16">16-bit</option>
-            <option value="24">24-bit</option>
-          </select>
-        </label>
-        <label class="we-process-bits"
-               title="Stereo keeps the capture as-is. Mono (L+R) suits genuine mono pressings — it cancels out-of-phase groove noise. Left / Right rescue a single good channel from a damaged or miswired side.">
-          channels
-          <select id="we-channels">
-            <option value="stereo" selected>stereo (keep)</option>
-            <option value="mono">mono (L+R sum)</option>
-            <option value="left">left only</option>
-            <option value="right">right only</option>
-          </select>
-        </label>
-        <label class="we-process-bits">
-          sample rate
-          <select id="we-sample-rate">
-            <option value="0">keep source</option>
-            <option value="44100">44.1 kHz (CD)</option>
-            <option value="48000">48 kHz</option>
-            <option value="88200">88.2 kHz</option>
-            <option value="96000">96 kHz</option>
-          </select>
-        </label>
-      </div>
-    </div>
 
-    <div class="action-row" style="margin-top:14px">
-      <button class="btn primary" id="we-go" onclick="weApplySplit()" disabled title="Apply split: render the cuts above into per-track files using the chosen output format and bit depth.">apply split</button>
-      <button class="btn" onclick="weAddCutAtPlayhead()" title="Insert a cut at the current playhead position. Same as pressing c, or shift+click on the waveform." aria-keyshortcuts="c">+ add cut at playhead (c)</button>
-      <button class="btn" onclick="weClearCuts()" title="Remove every cut. The waveform reverts to a single track.">clear cuts</button>
-      <button class="btn" onclick="closeWaveEditor()" title="Close the split editor (Esc).">cancel</button>
-    </div>
-    <div class="job-bar" id="we-split-bar" hidden style="margin-top:10px">
-      <div class="job-bar-text"><span class="job-bar-phase">working…</span><span class="job-bar-pct">0%</span></div>
-      <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
+        <div class="action-row we-actions">
+          <button class="btn primary" id="we-go" onclick="weApplySplit()" disabled title="Apply split: render the cuts above into per-track files using the chosen output format and bit depth.">apply split</button>
+          <button class="btn" onclick="weAddCutAtPlayhead()" title="Insert a cut at the current playhead position. Same as pressing c, or shift+click on the waveform." aria-keyshortcuts="c">+ add cut at playhead (c)</button>
+          <button class="btn" onclick="weClearCuts()" title="Remove every cut. The waveform reverts to a single track.">clear cuts</button>
+          <button class="btn" onclick="closeWaveEditor()" title="Close the split editor (Esc).">cancel</button>
+        </div>
+        <div class="job-bar" id="we-split-bar" hidden>
+          <div class="job-bar-text"><span class="job-bar-phase">working…</span><span class="job-bar-pct">0%</span></div>
+          <div class="job-bar-fill-wrap"><div class="job-bar-fill"></div></div>
+        </div>
+      </div>
     </div>
 
     <audio id="we-audio" preload="auto"></audio>

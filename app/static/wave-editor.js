@@ -465,6 +465,7 @@ function openWaveEditor(fname) {
   _weFocusReturn = document.activeElement;
   document.getElementById('we-modal').hidden = false;
   document.addEventListener('keydown', weKeyDown);
+  window.addEventListener('resize', _weOnResize);
   // Move focus into the modal so screen readers announce its content.
   const firstFocusable = document.querySelector('#we-modal button, #we-modal input, #we-modal select');
   if (firstFocusable) firstFocusable.focus();
@@ -554,6 +555,7 @@ function closeWaveEditor() {
   weAudio.release();
   document.getElementById('we-modal').hidden = true;
   document.removeEventListener('keydown', weKeyDown);
+  window.removeEventListener('resize', _weOnResize);
   _hidePeaksOverlay();
   // Stop the shared "saved Xs ago" interval and hide the pill so the next
   // open starts fresh — no stale "saved 12m ago" carrying over from a
@@ -567,6 +569,20 @@ function closeWaveEditor() {
     try { _weFocusReturn.focus(); } catch (e) { /* element gone */ }
   }
   _weFocusReturn = null;
+}
+
+// Redraw on viewport resize while the editor is open. The modal width
+// tracks the viewport (.we-modal-card) and drawPeaks sizes each canvas
+// bitmap from its CSS width at draw time, so without this a resize leaves
+// a stretched bitmap and a stale minimap viewport rect. rAF-coalesced —
+// the redraw itself is sub-millisecond (see peaks.js).
+let _weResizeRaf = null;
+function _weOnResize() {
+  if (_weResizeRaf) return;
+  _weResizeRaf = requestAnimationFrame(() => {
+    _weResizeRaf = null;
+    drawAll();
+  });
 }
 
 // Re-render everything that depends on viewStart/viewEnd or cuts.
